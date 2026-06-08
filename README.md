@@ -1,17 +1,20 @@
-# Nielsen MFTS Filter Comparison
+# Continuous-Discrete Nonlinear Filter Benchmarks
 
-Benchmark of continuous-discrete nonlinear filters on the **Modified Four-Tank
-System (MFTS)** from Nielsen et al. (2022), *State Estimation Methods for
-Continuous-Discrete Nonlinear Systems Involving Stochastic Differential
-Equations* ([arXiv:2205.02730](https://arxiv.org/abs/2205.02730), Sec. IV).
+Benchmarks of continuous-discrete nonlinear filters built around a differentiable
+**Wiener Cubature Recursive Filter (CRF)**. A shared filter/cubature library
+(`wiener_cubature.py`, `cd_dynamax_enkf.py`) backs two experiments:
 
-The experiment pits a differentiable **Wiener Cubature Recursive Filter (CRF)**
-against the standard continuous-discrete estimators used in the paper and
-reports tracking accuracy (MAPE) and runtime.
+1. **Modified Four-Tank System (MFTS)** — the benchmark from Nielsen et al.
+   (2022), *State Estimation Methods for Continuous-Discrete Nonlinear Systems
+   Involving Stochastic Differential Equations*
+   ([arXiv:2205.02730](https://arxiv.org/abs/2205.02730), Sec. IV).
+2. **Lorenz 63 (L63)** — chaotic-attractor tracking from a single noisy
+   observation channel (cd-dynamax `l63_mech_x1` style).
 
-*See EXPOSITION.md for an in-depth mathematical derivation and justistification of this filter structure*
+Both pit the CRF against the standard continuous-discrete estimators and report
+tracking accuracy (MAPE / RMSE) and runtime.
 
-## Model
+## Experiment 1 — Modified Four-Tank System (MFTS)
 
 State `x = [m1, m2, m3, m4, F3, F4]ᵀ`: four tank masses `mᵢ` [g] (ρ = 1) plus two
 Ornstein–Uhlenbeck disturbance flows `F3, F4` [cm³/s], driven by known pump
@@ -29,6 +32,23 @@ Truth simulation steps the OU mean `F̄` through 100 → 200 → 300 cm³/s over
 [`nielsen_mfts_filter_comparison.py`](nielsen_mfts_filter_comparison.py) for the
 full equations and parameter tables.
 
+Metrics: MAPE on tank masses (`MAPEx`) and disturbances (`MAPEd`), plus
+time-update (TU) and measurement-update (MU) wall-clock times.
+
+## Experiment 2 — Lorenz 63 (L63)
+
+The chaotic Lorenz 63 system as a Stratonovich SDE,
+
+```
+dx = f(x) dt + σ dW,   f(x) = [ σ(x₂−x₁),  ρx₁−x₂−x₁x₃,  −βx₃+x₁x₂ ]
+y_k = x₁ + v_k,        v_k ~ N(0, obs_noise_std²)
+```
+
+with only the first coordinate observed. A shared observation sequence is run
+through CD-EKF, CD-UKF, a bootstrap particle filter (CD-DPF), the cd-dynamax
+EnKF, and the Wiener CRF. See
+[`l63_filter_comparison.py`](l63_filter_comparison.py) for details.
+
 ## Methods compared
 
 - **CD-EKF** — continuous-discrete extended Kalman filter (Joseph form)
@@ -37,9 +57,6 @@ full equations and parameter tables.
 - **EnKF** — perturbed-observation ensemble Kalman filter (N = 250)
 - **PF** — bootstrap particle filter (N = 1000)
 - **Wiener CRF** — differentiable cubature-recursive filter (this work)
-
-Metrics: MAPE on tank masses (`MAPEx`) and on disturbances (`MAPEd`), plus
-time-update (TU) and measurement-update (MU) wall-clock times.
 
 ## Installation
 
@@ -55,6 +72,8 @@ JAX is configured for 64-bit precision inside the scripts. If you prefer to set
 it via the environment instead, export `JAX_ENABLE_X64=1`.
 
 ## Usage
+
+### MFTS
 
 ```bash
 # Full benchmark (30 min, 120 observations); writes nielsen_mfts_tracking.png
@@ -83,12 +102,32 @@ Useful flags (run with `-h` for the full list):
 | `--no-twin` | Initialize at steady state instead of the true `x₀` |
 | `--plot-path` / `--show-plot` / `--no-plot` | Figure output controls |
 
+### L63
+
+```bash
+# Default run; writes l63_tracking.png
+python l63_filter_comparison.py
+
+# Longer trajectory with custom ensemble / particle counts
+python l63_filter_comparison.py --T 80 --ensemble-size 50 --dpf-particles 300
+```
+
+Useful L63 flags (run with `-h` for the full list):
+
+| Flag | Description |
+| --- | --- |
+| `--T` | Number of observation steps |
+| `--dt-obs` | Time between observations |
+| `--ensemble-size` | EnKF ensemble size |
+| `--dpf-particles` | Bootstrap particle-filter count |
+| `--recombined-num-paths` | CRF recombined Wiener paths per predict |
+| `--diffusion-sigma` / `--obs-noise-std` | Process and observation noise scales |
+| `--plot-path` / `--show-plot` / `--no-plot` | Figure output controls |
+
+
 ## Outputs
 
-Running the script prints a metrics table to stdout and saves a tracking figure
-(default `nielsen_mfts_tracking.png`).
-
-**Example Output**:
+**MFTS** — state tracking across all filters (`nielsen_mfts_tracking.png`):
 
 | Method | TU [s] | MU [s] | MAPEx [%] | MAPEd [%] |
 | :--- | :---: | :---: | :---: | :---: |
@@ -102,12 +141,17 @@ Running the script prints a metrics table to stdout and saves a tracking figure
 
 ![Tracking comparison](examples/nielsen_mfts_tracking.png)
 
+**L63** — attractor tracking from a single noisy channel (`l63_tracking.png`):
+
+![L63 tracking comparison](examples/l63_tracking.png)
+
 
 ## Repository layout
 
 | File | Purpose |
 | --- | --- |
 | `nielsen_mfts_filter_comparison.py` | Main experiment: model, filters, plotting, CLI |
+| `l63_filter_comparison.py` | Lorenz 63 experiment: model, filters, plotting, CLI |
 | `wiener_cubature.py` | Wiener-space cubature + the JAX Cubature-Recursive Filter (CRF) |
 | `jax_crf.py` | Thin re-export shim over `wiener_cubature` |
 | `cd_dynamax_enkf.py` | Continuous-discrete EnKF and SDE predict/update helpers |
