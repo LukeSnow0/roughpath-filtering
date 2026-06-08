@@ -9,6 +9,8 @@ The experiment pits a differentiable **Wiener Cubature Recursive Filter (CRF)**
 against the standard continuous-discrete estimators used in the paper and
 reports tracking accuracy (MAPE) and runtime.
 
+*See EXPOSITION.md for an in-depth mathematical derivation and justistification of this filter structure*
+
 ## Model
 
 State `x = [m1, m2, m3, m4, F3, F4]ᵀ`: four tank masses `mᵢ` [g] (ρ = 1) plus two
@@ -88,16 +90,11 @@ Useful flags (run with `-h` for the full list):
 ## Outputs
 
 Running the script prints a metrics table to stdout and saves a tracking figure
-(default `nielsen_mfts_tracking.png`). The `--cubature-loop` mode writes
-`nielsen_mfts_cubature_loop.png`.
+(default `nielsen_mfts_tracking.png`).
 
 State tracking across all filters:
 
 ![Tracking comparison](examples/nielsen_mfts_tracking.png)
-
-CRF accuracy vs. recombined Wiener path budget:
-
-![Cubature path sweep](examples/nielsen_mfts_cubature_loop.png)
 
 ## Repository layout
 
