@@ -66,9 +66,6 @@ python nielsen_mfts_filter_comparison.py --fast
 # Harder regime: larger measurement noise + diffusion, no twin init
 python nielsen_mfts_filter_comparison.py --noisy --show-plot
 
-# Sweep CRF accuracy vs recombined Wiener path budget P
-python nielsen_mfts_filter_comparison.py --cubature-loop
-
 # Tune the Wiener cubature directly
 python nielsen_mfts_filter_comparison.py --cubature-paths 32 --cubature-order 2
 ```
