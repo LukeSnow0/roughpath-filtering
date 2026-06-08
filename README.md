@@ -56,7 +56,7 @@ $$
 w_1,\dots,w_n \in C_{0,bv}^0([0,T],\mathbb{R}^d)
 $$
 
-and weights $lambda_1,\dots,\lambda_n > 0$ define a *cubature formula on Wiener space of degree $m$ at time $T$*, if for all $(i_1,\dots,i_k) \in \mathcal{A}_m$,
+and weights $lambda_1,\dots,\lambda_n > 0$ define a *cubature formula on Wiener space* of degree $m$ at time $T$, if for all $(i_1,\dots,i_k) \in \mathcal{A}_m$,
 
 $$
 \mathbb{E} \biggl\[ \int_{0 < t_1 < \dots < t_k < t} \circ dB_{t_1}^{i_1} \cdots \circ d B_{t_k}^{i_k} \biggr\] = \sum_{j=1}^n \lambda_j \int_{0 < t_1 < \dots < t_k < t} dw_j^{i_1}(t_1) \cdots dw_j^{i_k}(t_k).
@@ -64,22 +64,23 @@ $$
 
 *Existence* of cubature paths and weights is given in the following
 
-**Theorem (Lyons, Victoir 2004)** Let $m$ be a natural number. Then, there exist $n$ paths $w_1,\dots,w_n \in C_{0,bv}^0([0,T]; \mathbb{R}^d)$ and $n$ positive weights $\lambda_1, \dots, \lambda_n$, with $n \leq card\\{\mathcal{A}_m\\}$, defining a cubature formula on Wiener space of degree $m$ at time $T$.
+**Theorem (Lyons, Victoir 2004)** Let $m$ be a natural number and $T$ be a positive real number. Then, there exist $n$ paths $w_1,\dots,w_n \in C_{0,bv}^0([0,T]; \mathbb{R}^d)$ and $n$ positive weights $\lambda_1, \dots, \lambda_n$, with $n \leq card\\{\mathcal{A}_m\\}$, defining a cubature formula on Wiener space of degree $m$ at time $T$.
 
 Furthermore, Lyons and Victoir provide *explicit* constructions of Wiener-space cubature paths and weights for orders $m=3,5$. 
 
 These paths and weights *replicate the statistics of the driving Brownian motion*, through expectations of iterated integrals up to a certain order. Practically, they allow us to accurately approximate the SDE solution by solving a *system of ODEs*. Specifically, let $(w_i,\lambda_i)_{i=1}^n$ define a cubature formula on Wiener space of degree $m$ at time $dt$,  and denote by $Phi_{dt,x_0}(w)$ the solution at time $dt$ of the ODE
 
 $$
-dy_t = \sum_{i=0}^d V_i(y_t)dw_i(t), \quad y_0 = x_0
+**dy_t = \sum_{i=0}^d V_i(y_t)dw_i(t), \quad y_0 = x_0**
 $$
 
 Then, we have the following approximation guarantee:
 
 $$ 
-\sup_{x\in\mathbb{R}^n}\biggl\|\mathbb{E}\biggl\(f(x_{dt} - \sum_{i=1}^n \lambda_i f(\Phi_{dt,x_0}(w_i))\biggr\)\biggr\| \leq C \sqrt{dt}^{m+1} \sup_{(i_1,\dots,i_k) \in \mathcal{A}_{m+2} / \mathcal{A}_m} |V_{i_1} \cdots V_{i_k} f|_{\infty}
+\sup_{x\in\mathbb{R}^n}\biggl\|\mathbb{E}\biggl\(f(x_{dt} - \sum_{i=1}^n \lambda_i f(\Phi_{dt,x_0}(w_i))\biggr\)\biggr\| \leq C dt^{(m+1)/2} \sup_{(i_1,\dots,i_k) \in \mathcal{A}_{m+2} / \mathcal{A}_m} |V_{i_1} \cdots V_{i_k} f|_{\infty}
 $$
 
+Thus, we may efficiently approximate the statistic \mathbb{E}\\[f(x_{dt}\\] by solving a system of deterministic ODEs along vector fields $\\{V_i\\}_{i=0}^d$, driven by these carefully chosen cubature paths. 
 
 
 
