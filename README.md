@@ -31,7 +31,7 @@ $$
 Here $V_i$ act as differential operators, i.e., $V_i f(x) = \sum_{l=1}^n V_i^l(x)\partial_{x_l}f(x)$. The remainder process $R_m$ satisfies, for $C$ depending only on $d$ and $m$, 
 
 $$
-\sup_{x\in\mathbb{R}^n} \sqrt{\mathbb{E}(R_m(t,x,f)^2)} \leq C t^{(m+1)/2} \sup_{(i_1,\dots,i_k) \in \mathcal{A}_{m+2} backslash \mathcal{A}_m} \||V_{i_1} \cdots V_{i_k} f\||_{\infty}
+\sup_{x\in\mathbb{R}^n} \sqrt{\mathbb{E}(R_m(t,x,f)^2)} \leq C t^{(m+1)/2} \sup_{(i_1,\dots,i_k) \in \mathcal{A}_{m+2} \\ \mathcal{A}_m} ||V_{i_1} \cdots V_{i_k} f||_{\infty}
 $$
 
 
