@@ -79,7 +79,6 @@ Useful flags (run with `-h` for the full list):
 | --- | --- |
 | `--fast` | Short horizon / fewer particles for a quick check |
 | `--noisy` | Higher `meas_std`, diffusion, and `P₀`; disables twin init |
-| `--cubature-loop` | Sweep CRF over `P` and plot metrics vs. path budget |
 | `--cubature-paths P` | Recombined Wiener paths per predict step |
 | `--cubature-order K` | Lyons macro-segment cubature order (default 2) |
 | `--enkf-particles` / `--pf-particles` | Ensemble / particle counts |
