@@ -77,7 +77,7 @@ $$
 define a cubature formula on Wiener space of degree $m$ at time $dt$, and denote by $\Phi_{dt,x_0}(w)$ the solution at time $dt$ of the ODE
 
 $$
-dy_t = \sum_{i=0}^d V_i(y_t)dw_i(t), \quad y_0 = x_0
+dy_t = V_0(y_t)dt + \sum_{i=1}^d V_i(y_t)dw_i(t), \quad y_0 = x_0
 $$
 
 Then, we have the following approximation guarantee:
