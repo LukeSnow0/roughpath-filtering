@@ -16,13 +16,13 @@ We let $\mathcal{F}(y,dt) = \mathbb{E}\[x_{dt} | x_0 = y\]$ be the Markov semigr
 
 ### Wiener Space Cubature
 
-Recall that the aim of Wiener-space cubature is to obtain an efficient deterministic approximation of the semigroup $\mathcal{F}(y,dt) = \mathbb{E}\[x_{dt} | x_0 = y\]$. To begin our derivation of such an approximation, let us fist consider the stochastic Taylor expansion. We begin by writing the following solution form of the Stratonovich SDE dynamics: for smooth bounded functions $f:\reals^n \to \reals$,
+Recall that the aim of Wiener-space cubature is to obtain an efficient deterministic approximation of the semigroup $\mathcal{F}(y,dt) = \mathbb{E}\[x_{dt} | x_0 = y\]$. To begin our derivation of such an approximation, let us fist consider the stochastic Taylor expansion. We begin by writing the following solution form of the Stratonovich SDE dynamics: for smooth bounded functions $f:\mathbb{R}^n \to \mathbb{R}$,
 
 $$
 f(x_t) = f(x_0) + \int_0^t \sum_{i=0}^d V_if(x_s)\circ dB_s^i
 $$
 
-Let us also define an index set $\mathcal{A}_m = \{(i_1,\dots,i_k)\in\{0,\dots,d\}^k, \, k + card\{j, i_j = 0\}\leq m\}, \, m\in\mathbb{N}$. Then, the solution above can be expanded in the following weak stochastic Taylor formula (see Kloeden \& Platen (1992))
+Let us also define an index set $\mathcal{A}_m = \\{(i_1,\dots,i_k)\in\\{0,\dots,d\\}^k, \, k + card\\{j, i_j = 0\\}\leq m\\}, \, m\in\mathbb{N}$. Then, the solution above can be expanded in the following weak stochastic Taylor formula (see Kloeden \& Platen (1992))
 
 $$
 f(x_t) = \sum_{(i_1,\dots,i_k)\in \mathcal{A}_m} V_{i_1}\cdots V_{i_k} f(x) \int_{0 < t_1 < \dots < t_k < t} \circ dB_{t_1}^{i_1} \cdots \circ d B_{t_k}^{i_k} \,+ \,R_m(t,x,f)
@@ -31,7 +31,7 @@ $$
 Here $V_i$ act as differential operators, i.e., $V_i f(x) = \sum_{l=1}^n V_i^l(x)\partial_{x_l}f(x)$. The remainder process $R_m$ satisfies, for $C$ depending only on $d$ and $m$, 
 
 $$
-\sup_{x\in\mathbb{R}^n} \sqrt{\mathbb{E}(R_m(t,x,f)^2)} \leq C t^{(m+1)/2} \sup_{(i_1,\dots,i_k) \in \mathcal{A}_{m+2}\backslash \mathcal{A}_m} \|V_{i_1} \cdots V_{i_k} f\|_{\infty}
+\sup_{x\in\mathbb{R}^n} \sqrt{\mathbb{E}(R_m(t,x,f)^2)} \leq C t^{(m+1)/2} \sup_{(i_1,\dots,i_k) \in \mathcal{A}_{m+2} backslash \mathcal{A}_m} \|V_{i_1} \cdots V_{i_k} f\|_{\infty}
 $$
 
 
