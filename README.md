@@ -88,9 +88,20 @@ Useful flags (run with `-h` for the full list):
 Running the script prints a metrics table to stdout and saves a tracking figure
 (default `nielsen_mfts_tracking.png`).
 
-State tracking across all filters:
+**Example Output**:
+
+| Method | TU [s] | MU [s] | MAPEx [%] | MAPEd [%] |
+| :--- | :---: | :---: | :---: | :---: |
+| CD-EKF (Joseph) | 2.525e+01 | 4.682e-01 | 9.083 | 10.455 |
+| CD-UKF (stable UT) | 2.747e+01 | 3.768e-01 | 9.807 | 10.275 |
+| EnKF (N=20) | 5.073e+01 | 4.398e-01 | 9.774 | 11.264 |
+| PF (N=1000) | 7.659e+01 | 7.489e-01 | 8.959 | 10.480 |
+| Cubature KF (2n=12, SDE) | 5.375e+01 | 2.814e-01 | 8.993 | 11.081 |
+| CRF cubature (P=12) | 9.067e+00 | 1.602e-01 | 9.402 | 11.464 |
+
 
 ![Tracking comparison](examples/nielsen_mfts_tracking.png)
+
 
 ## Repository layout
 
