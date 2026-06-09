@@ -66,7 +66,11 @@ $$
 
 **Theorem (Lyons, Victoir 2004)** Let $m$ be a natural number and $T$ be a positive real number. Then, there exist $n$ paths $w_1,\dots,w_n \in C_{0,bv}^0([0,T]; \mathbb{R}^d)$ and $n$ positive weights $\lambda_1, \dots, \lambda_n$, with $n \leq card\\{\mathcal{A}_m\\}$, defining a cubature formula on Wiener space of degree $m$ at time $T$.
 
-Furthermore, Lyons and Victoir provide *explicit* constructions of Wiener-space cubature paths and weights for orders $m=3,5$. 
+Furthermore, Lyons and Victoir provide *explicit* constructions of Wiener-space cubature paths and weights for orders $m=3,5$. These constructions rely on sophisticated mathematical approaches from Lie theory and abstract algebra - but for our purposes we can treat them as given.
+
+For example, explicit order $m=5$ cubature paths are displayed below; these consist of a base set of paths ($k=1, n=3$), which may be scaled and replicated from the endpoints to form higher resolution sets of paths ($k=2, n=9$), ($k=3,n=27$) which each satisfy a cubature formula on Wiener space of degree $m$ in their respective scaled timeframes. $n$ (total number of paths) is the variable under which we will measure the semigroup approximation accuracy - it is the deterministic analogue of the numer of Monte Carlo sample paths used in stochastic simulation. 
+
+![Explicit 1-D cubature paths](examples/cub_paths.png)
 
 ### Cubature-based Filtering Semigroup Approximation
 
@@ -85,11 +89,20 @@ $$
 Then, we have the following filtering semigroup approximation guarantee:
 
 $$ 
-\sup_{x\in\mathbb{R}^n}\biggl\|\mathbb{E}\biggl\(f(x_{\Delta_t} - \sum_{i=1}^n \lambda_i f(\Phi_{\Delta_t,x_0}(w_i))\biggr\)\biggr\| \leq C \Delta_t^{(m+1)/2} \sup_{(i_1,\dots,i_k) \in \mathcal{A}_{m+2} / \mathcal{A}_m} |V_{i_1} \cdots V_{i_k} f|_{\infty}
+\sup_{x\in\mathbb{R}^n}\biggl\|\mathbb{E}\biggl\(f(x_{\Delta_t}) - \sum_{i=1}^n \lambda_i f(\Phi_{\Delta_t,x_0}(w_i))\biggr\)\biggr\| \leq C \Delta_t^{(m+1)/2} \sup_{(i_1,\dots,i_k) \in \mathcal{A}_{m+2} / \mathcal{A}_m} |V_{i_1} \cdots V_{i_k} f|_{\infty}
 $$
 
 Thus, we may efficiently approximate the statistic $\mathbb{E}\[f(x_{\Delta_t})\]$ by solving a system of deterministic ODEs along vector fields $\\{V_i\\}_{i=0}^d$, driven by these carefully chosen cubature paths. 
 
+A more useful result which relates to standard Monte Carlo simulation is proved in (Snow \& Krishnamurthy, 2025), which states that under suitable structural conditions,
+
+$$
+\sup_{x\in\mathbb{R}^n}\biggl\|\mathbb{E}\biggl\(f(x_{\Delta_t}) - \sum_{i=1}^n \lambda_i f(\Phi_{\Delta_t,x_0}(w_i))\biggr\)\biggr\| = \mathcal{O}(n^{-1})
+$$
+
+*Observe that this is a sharp approximation efficiency increase*, as compared to the standard Monte Carlo rate of $\mathcal{O}(n^{-1/2})$ or quasi-Monte Carlo rate of $\mathcal{O}(\log n / n)$
+
+Furthermore, aside from improved $n$ sample complexity, the deterministic nature of these ODE solves enable time- and memory-efficient evaluation by circumventing Brownian motion algebra/storage, and exploiting $O(1)$-memory ODE adjoint techniques for inference.
 
 ## Cubature Filter
 
@@ -171,7 +184,7 @@ $$
 $$
 
 
-
+.... compare with other methods, analyze complexity, ....
 
 
 
