@@ -10,13 +10,13 @@ $$
 dx_{t} = V_0(x_t)dt + \sum_{i=1}^d V_i(x_{t})\circ dB_t^i, \quad x_0 \sim p_0 
 $$
 
-where $dB_t^0 = dt$ by convention, $x_{t} \in \mathbb{R}^n$, $V_0: \mathbb{R}^n \to \mathbb{R}^n$ is the drift vector field, and $\{V_i\}_{i=1}^d$ are vector fields specifying the diffusion matrix. Here $d$ is the dimension of the driving Brownian motion $B_t$. Note that time-dependent vector fields are naturally modeled here by simply augmenting the state space to $\hat{x}_t = (t,x_t)$.
+where $x_{t} \in \mathbb{R}^n$, $V_0: \mathbb{R}^n \to \mathbb{R}^n$ is the drift vector field, and $\{V_i\}_{i=1}^d$ are vector fields specifying the diffusion matrix. Here $d$ is the dimension of the driving Brownian motion $B_t$. Note that time-dependent vector fields are naturally modeled here by simply augmenting the state space to $\hat{x}_t = (t,x_t)$.
 
-We let $\mathcal{F}(y,dt) = \mathbb{E}\[x_{dt} | x_0 = y\]$ be the Markov semigroup defined by the SDE dynamics. Approximation of this semigroup through stochastic simulation of the SDE dynamics will form the basis for the time-update step in each filter implementation. The key advantage of the cubature filter is an alternative efficient computational approach for approximating this semigroup, through *deterministic* ODE evaluations along carefully specified Wiener-space cubature paths and weights which approximate the statistical behavior of the driving Brownian motion. We now present these details. 
+We let $\mathcal{F}(y,\Delta_t) = \mathbb{E}\[x_{\Delta_t} | x_0 = y\]$ be the Markov semigroup defined by the SDE dynamics. Approximation of this semigroup through stochastic simulation of the SDE dynamics will form the basis for the time-update step in each filter implementation. The key advantage of the cubature filter is an alternative efficient computational approach for approximating this semigroup, through *deterministic* ODE evaluations along carefully specified Wiener-space cubature paths and weights which approximate the statistical behavior of the driving Brownian motion. We now present these details. 
 
 ## Wiener Space Cubature
 
-Recall that the aim of Wiener-space cubature is to obtain an efficient deterministic approximation of the semigroup $\mathcal{F}(y,dt) = \mathbb{E}\[x_{dt} | x_0 = y\]$. To begin our derivation of such an approximation, let us fist consider the stochastic Taylor expansion. We begin by writing the following solution form of the Stratonovich SDE dynamics: for smooth bounded functions $f:\mathbb{R}^n \to \mathbb{R}$,
+Recall that the aim of Wiener-space cubature is to obtain an efficient deterministic approximation of the semigroup $\mathcal{F}(y,\Delta_t) = \mathbb{E}\[x_{\Delta_t} | x_0 = y\]$. To begin our derivation of such an approximation, let us fist consider the stochastic Taylor expansion. We begin by writing the following solution form of the Stratonovich SDE dynamics: for smooth bounded functions $f:\mathbb{R}^n \to \mathbb{R}$,
 
 $$
 f(x_t) = f(x_0) + \int_0^t \sum_{i=0}^d V_if(x_s)\circ dB_s^i
@@ -37,7 +37,7 @@ $$
 Thus, in order to get a high-order approximation of the expectation  
 
 $$
-\mathbb{E}[f(x_{dt})] = \sum_{(i_1,\dots,i_k)\in \mathcal{A}_m} V_{i_1}\cdots V_{i_k} f(x) \mathbb{E} \biggl\[ \int_{0 < t_1 < \dots < t_k < t} \circ dB_{t_1}^{i_1} \cdots \circ d B_{t_k}^{i_k} \biggr\] + \mathcal{O}({dt}^{(m+1)/2})
+\mathbb{E}[f(x_{\Delta_t})] = \sum_{(i_1,\dots,i_k)\in \mathcal{A}_m} V_{i_1}\cdots V_{i_k} f(x) \mathbb{E} \biggl\[ \int_{0 < t_1 < \dots < t_k < t} \circ dB_{t_1}^{i_1} \cdots \circ d B_{t_k}^{i_k} \biggr\] + \mathcal{O}({\Delta_t}^{(m+1)/2})
 $$
 
 we may approximate the "probabilistic core" of the solution, given by 
@@ -76,7 +76,7 @@ $$
 \\{w_i,\lambda_i\\}_{i=1}^n
 $$
 
-define a cubature formula on Wiener space of degree $m$ at time $dt$, and denote by $\Phi_{dt,x_0}(w)$ the solution at time $dt$ of the ODE
+define a cubature formula on Wiener space of degree $m$ at time $\Delta_t$, and denote by $\Phi_{\Delta_t,x_0}(w)$ the solution at time $\Delta_t$ of the ODE
 
 $$
 dy_t = V_0(y_t)dt + \sum_{i=1}^d V_i(y_t)dw_i(t), \quad y_0 = x_0
@@ -85,10 +85,10 @@ $$
 Then, we have the following filtering semigroup approximation guarantee:
 
 $$ 
-\sup_{x\in\mathbb{R}^n}\biggl\|\mathbb{E}\biggl\(f(x_{dt} - \sum_{i=1}^n \lambda_i f(\Phi_{dt,x_0}(w_i))\biggr\)\biggr\| \leq C dt^{(m+1)/2} \sup_{(i_1,\dots,i_k) \in \mathcal{A}_{m+2} / \mathcal{A}_m} |V_{i_1} \cdots V_{i_k} f|_{\infty}
+\sup_{x\in\mathbb{R}^n}\biggl\|\mathbb{E}\biggl\(f(x_{\Delta_t} - \sum_{i=1}^n \lambda_i f(\Phi_{\Delta_t,x_0}(w_i))\biggr\)\biggr\| \leq C \Delta_t^{(m+1)/2} \sup_{(i_1,\dots,i_k) \in \mathcal{A}_{m+2} / \mathcal{A}_m} |V_{i_1} \cdots V_{i_k} f|_{\infty}
 $$
 
-Thus, we may efficiently approximate the statistic $\mathbb{E}\[f(x_{dt})\]$ by solving a system of deterministic ODEs along vector fields $\\{V_i\\}_{i=0}^d$, driven by these carefully chosen cubature paths. 
+Thus, we may efficiently approximate the statistic $\mathbb{E}\[f(x_{\Delta_t})\]$ by solving a system of deterministic ODEs along vector fields $\\{V_i\\}_{i=0}^d$, driven by these carefully chosen cubature paths. 
 
 
 ## Cubature Filter
