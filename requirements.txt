@@ -1,6 +1,0 @@
-jax==0.10.1
-jaxlib==0.10.1
-numpy==2.4.6
-scipy==1.17.1
-diffrax==0.7.2
-matplotlib==3.10.9
