@@ -36,7 +36,7 @@ import numpy as np
 from jax import jit, random
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
+import matplotlib.pyplot as plt  
 
 jax.config.update("jax_enable_x64", True)
 

@@ -170,7 +170,7 @@ def time_call(fn, *args):
 
 
 # ---------------------------------------------------------------------------
-# cuthbert CRF
+#CRF
 # ---------------------------------------------------------------------------
 crf = cubature_filter.build_filter(
     get_init_params=lambda mi: (m0, chol_P0),
@@ -184,7 +184,7 @@ crf = cubature_filter.build_filter(
     integration_dt=dt_inner,
     cubature_order=2,
     multidim_paths="recombined",
-    num_paths=6,
+    num_paths=18,
 )
 jitted_filter = jit(run_filter, static_argnames=["filter_obj"])
 crf_states, crf_time = time_call(lambda: jitted_filter(crf, model_inputs))
@@ -199,6 +199,7 @@ crf_loglik = crf_states.log_normalizing_constant[1:]
 # interval) is used because the continuous moment-ODE variants are unstable on this
 # chaotic, sparsely observed, long-interval problem: the moment-ODE UKF diverges and
 # the moment-ODE EKF has no skill. See README for details.
+
 ekf_jit = jit(
     lambda: run_cd_ekf(
         f_drift, h_obs, L_fn, Qc_fn, R, m0, P0, ys, dt, dt_inner, state_order="flowmap"
@@ -304,10 +305,11 @@ fig, ax = plt.subplots(figsize=(10, 4))
 for name, r in RESULTS.items():
     ax.plot(times, r["loglik"], color=r["color"], linewidth=1.8, label=name)
 ax.set_xlabel("Time", fontsize=13)
-ax.set_ylabel("Cumulative log-likelihood", fontsize=13)
+ax.set_ylabel("Cumulative log-likelihood - log scale", fontsize=13)
 ax.set_title("Cumulative marginal log-likelihood (EnKF value is a Gaussian diagnostic)", fontsize=12)
 ax.legend(fontsize=10, ncol=5)
 ax.grid(True, alpha=0.2)
+ax.set_yscale("symlog")
 fig.tight_layout()
 fig.savefig(os.path.join(OUTPUT_DIR, "loglik.png"), dpi=150, bbox_inches="tight")
 plt.close()
