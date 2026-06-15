@@ -547,7 +547,7 @@ def build_cubature_driver(
 
 
 
-    def precompute_cubature_paths(
+def precompute_cubature_paths(
     horizon: float,
     noise_dim: int,
     integration_dt: float = 0.01,
