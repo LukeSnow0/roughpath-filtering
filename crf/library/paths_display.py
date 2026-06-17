@@ -26,6 +26,11 @@ N_GRID = 200
 def main() -> None:
     ts = np.linspace(0.0, 1.0, N_GRID)
     paths, weights = build_product_lyons_paths(ts, NOISE_DIM, k=ORDER, gamma=GAMMA)
+    # Drop the degenerate (omega_1, omega_2) = (0, 0) path; its weight dominates
+    # the colormap and line width, hiding variation among the remaining paths.
+    keep = ~np.all(paths == 0.0, axis=(1, 2))
+    paths = paths[keep]
+    weights = weights[keep]
     P = paths.shape[0]
     wnorm = weights / weights.max()
     norm = Normalize(vmin=weights.min(), vmax=weights.max())
