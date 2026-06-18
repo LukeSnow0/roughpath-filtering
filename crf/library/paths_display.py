@@ -70,9 +70,11 @@ def main() -> None:
                    camera=dict(eye=dict(x=1.6, y=1.6, z=0.9))),
         width=950, height=800,
     )
-    html_out = "plots/cubature_paths_3d.html"
-    fig.write_html(html_out)
-    print(f"saved {html_out}  (open in a browser and drag to rotate)")
+    
+    # uncomment to save an interactive HTML file (open in a browser and drag to rotate):
+    #html_out = "plots/cubature_paths_3d.html"
+    #fig.write_html(html_out)
+    #print(f"saved {html_out}  (open in a browser and drag to rotate)")
 
     # ---- Static Matplotlib snapshot (for inline viewing) ----
     figm = plt.figure(figsize=(10, 8))
