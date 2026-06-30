@@ -4,7 +4,6 @@ __version__ = version("cuthbertlib")
 del version
 
 from cuthbertlib import (
-    crf,
     discrete,
     enkf,
     kalman,

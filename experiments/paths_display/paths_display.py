@@ -9,13 +9,18 @@ Outputs:
   - plots/cubature_paths_3d.png   (static snapshot)
 """
 
+import os
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_DIR = os.path.join(HERE, "output")
+
 import matplotlib.pyplot as plt
 import numpy as np
 import plotly.graph_objects as go
 from matplotlib import cm
 from matplotlib.colors import Normalize, to_hex
 
-from cubature_paths import build_product_lyons_paths
+from crf.library.cubature_paths import build_product_lyons_paths
 
 NOISE_DIM = 2
 ORDER = 2  # k -> (3^k)^2 = 81 paths
@@ -24,6 +29,9 @@ N_GRID = 200
 
 
 def main() -> None:
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    
     ts = np.linspace(0.0, 1.0, N_GRID)
     paths, weights = build_product_lyons_paths(ts, NOISE_DIM, k=ORDER, gamma=GAMMA)
     # Drop the degenerate (omega_1, omega_2) = (0, 0) path; its weight dominates
@@ -72,7 +80,7 @@ def main() -> None:
     )
     
     # uncomment to save an interactive HTML file (open in a browser and drag to rotate):
-    #html_out = "plots/cubature_paths_3d.html"
+    #html_out = os.path.join(OUTPUT_DIR, "cubature_paths_3d.html")
     #fig.write_html(html_out)
     #print(f"saved {html_out}  (open in a browser and drag to rotate)")
 
@@ -90,7 +98,7 @@ def main() -> None:
     sm = cm.ScalarMappable(cmap="viridis", norm=norm)
     sm.set_array([])
     figm.colorbar(sm, ax=ax, fraction=0.03, pad=0.08, label="cubature weight")
-    png_out = "plots/cubature_paths_3d.png"
+    png_out = os.path.join(OUTPUT_DIR, "cubature_paths_3d.png")
     figm.savefig(png_out, dpi=150, bbox_inches="tight")
     plt.close(figm)
     print(f"saved {png_out}")
