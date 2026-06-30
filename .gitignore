@@ -176,6 +176,10 @@ dist/
 .vscode/
 .venv
 
+# Optional local symlinks to a sibling cuthbert checkout (dev only)
+cuthbert/
+cuthbertlib/
+
 # Test output directories
 .output/
 

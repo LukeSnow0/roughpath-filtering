@@ -42,7 +42,6 @@ jax.config.update("jax_enable_x64", True)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-sys.path.insert(0, os.path.join(HERE, "..", "crf_vs_dynamax"))
 
 from experiments.cd_dynamax_mirror.filters import (
     UKFParams,
@@ -52,8 +51,10 @@ from experiments.cd_dynamax_mirror.filters import (
     run_cd_ukf,
 )
 from cuthbert import filter as run_filter  
-from crf.filter import cubature_filter  
 from crf.library import default_recombined_num_paths  
+
+from crf import build_filter, CRFState
+
 
 from mfts_model import (
     MFTSParams,
@@ -184,7 +185,7 @@ crf_drift, crf_L, _, _, _ = make_mfts_dynamics(
     p, lambda_dist=LAMBDA_ENKF_PF, sigma_dist=SIGMA_EKF_ENKF_PF, bar_F3=bar_est, bar_F4=bar_est, F1=F1, F2=F2
 )
 
-crf = cubature_filter.build_filter(
+crf = build_filter(
     get_init_params=lambda mi: (m0, chol_P0),
     get_dynamics=lambda mi: (
         lambda t, x: crf_drift(t, x),

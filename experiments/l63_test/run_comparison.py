@@ -52,7 +52,8 @@ from cd_dynamax_mirror.filters import (
     run_cd_ukf,
 )
 from cuthbert import filter as run_filter  
-from crf.filter import cubature_filter  
+from crf import build_filter, CRFState
+  
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
