@@ -24,4 +24,4 @@ experiments = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["crf","experiments"]
+packages = ["crf"]

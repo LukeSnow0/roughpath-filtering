@@ -4,7 +4,7 @@ The CRF maintains a Gaussian filtering distribution (mean + Cholesky covariance)
 Its predict step propagates spatial cubature nodes along a small set of
 deterministic Wiener-space cubature paths through the nonlinear Stratonovich SDE
 (no Jacobian, no Monte-Carlo), and its update is a square-root sigma-point Kalman
-update. See `cuthbertlib.crf` for the underlying kernels.
+update. See `crf.library` for the underlying kernels.
 
 References:
     Lyons & Victoir (2004), *Cubature on Wiener space*.
@@ -20,7 +20,8 @@ from jax import numpy as jnp
 from crf.filter.types import GetCRFDynamics, GetCRFObservations, GetInitParams
 from cuthbert.inference import Filter
 from cuthbert.utils import dummy_tree_like
-from crf import library as crf_lib
+from crf.library import predict, update, precompute_cubature_paths
+from crf.library.conversions import wrap_ito_dynamics
 from cuthbertlib.types import Array, ArrayTree, ArrayTreeLike, KeyArray, ScalarArray
 
 
@@ -52,6 +53,7 @@ def build_filter(
     seed: int = 0,
     candidate_factor: float = 8.0,
     recombination_degree: int = 3,
+    sde_form: Literal["stratonovich", "ito"] = "stratonovich",
 ) -> Filter:
     """Builds a Cubature Recursive Filter object.
 
@@ -62,7 +64,10 @@ def build_filter(
 
     Args:
         get_init_params: Function to get ``(m0, chol_P0)`` from model inputs.
-        get_dynamics: Function to get ``(drift_fn, diffusion_fn)`` from model inputs.
+        get_dynamics: Function to get ``(drift_fn, diffusion_fn)`` from model
+            inputs. If ``sde_form="ito"``, the drift is interpreted in Ito form
+            and converted to Stratonovich automatically. If
+            ``sde_form="stratonovich"`` (default), the drift is used as-is.
         get_observations: Function to get ``(observation_fn, chol_R, y)`` from model inputs.
         noise_dim: Dimension of the Brownian driver.
         dt: Length of one assimilation interval.
@@ -78,19 +83,28 @@ def build_filter(
         seed: Seed for Rademacher candidate generation.
         candidate_factor: Candidate-pool scaling for recombination.
         recombination_degree: Target moment degree for recombination.
+        sde_form: Whether ``get_dynamics`` supplies Ito or Stratonovich drift.
+            The CRF always integrates in Stratonovich form; Ito drifts are
+            corrected internally. Constant diffusion needs no correction.
 
     Returns:
         Filter object for the CRF.
 
     Raises:
-        ValueError: If ``noise_dim`` or ``dt`` is not positive.
+        ValueError: If ``noise_dim`` or ``dt`` is not positive, or ``sde_form``
+            is not ``"stratonovich"`` or ``"ito"``.
     """
     if noise_dim < 1:
         raise ValueError("noise_dim must be at least 1.")
     if dt <= 0.0:
         raise ValueError("dt must be positive.")
+    if sde_form not in ("stratonovich", "ito"):
+        raise ValueError('sde_form must be "stratonovich" or "ito".')
 
-    ts, path_values, path_weights = crf_lib.precompute_cubature_paths(
+    if sde_form == "ito":
+        get_dynamics = wrap_ito_dynamics(get_dynamics)
+
+    ts, path_values, path_weights = precompute_cubature_paths(
         horizon=dt,
         noise_dim=noise_dim,
         integration_dt=integration_dt,
@@ -205,7 +219,7 @@ def filter_combine(
         Updated CRF state.
     """
     drift_fn, diffusion_fn = get_dynamics(state_2.model_inputs)
-    predicted_mean, predicted_chol_cov, samples, weights = crf_lib.predict(
+    predicted_mean, predicted_chol_cov, samples, weights = predict(
         state_1.mean,
         state_1.chol_cov,
         ts,
@@ -216,7 +230,7 @@ def filter_combine(
     )
 
     observation_fn, chol_R, y = get_observations(state_2.model_inputs)
-    updated_mean, updated_chol_cov, log_likelihood = crf_lib.update(
+    updated_mean, updated_chol_cov, log_likelihood = update(
         predicted_mean,
         samples,
         weights,

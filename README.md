@@ -173,32 +173,6 @@ Outputs: `experiments/l63_test/output/` (state trajectories, per-component RMSE,
 cumulative log-likelihood, runtime). Settings are fixed in the script; edit
 there to explore variants.
 
-### Scalable ring lattice
-
-Ring-coupled nonlinear lattice with independently configurable state, Brownian,
-and observation dimensions. The CRF uses **recombined** Wiener cubature paths;
-baselines are CD-EKF, CD-UKF, CD-EnKF, and a bootstrap PF.
-
-```bash
-python experiments/scalable_ring_test/run_comparison.py
-python experiments/scalable_ring_test/run_comparison.py --state-dim 24 --noise-dim 6 --obs-dim 8
-python experiments/scalable_ring_test/run_scaling_sweep.py
-python experiments/scalable_ring_test/run_scaling_sweep.py --noise-dims 1,2,3,4,5,6
-```
-
-Outputs: `experiments/scalable_ring_test/output/` and
-`experiments/scalable_ring_test/output/scaling/` (CSV/JSON sweeps).
-
-### Presentation plots
-
-Wiener-path and filtering cartoons for talks:
-
-```bash
-pip install plotly   # not a core dependency
-python experiments/paths_display/paths_display.py
-```
-
-Outputs: `experiments/paths_display/output/`.
 
 ## Methods compared
 
@@ -238,8 +212,6 @@ cubature-filtering/
 │   ├── l63_test/                # Lorenz-63 tracking benchmark
 │   ├── scalable_ring_test/      # Ring lattice + scaling sweeps
 │   └── paths_display/           # path figures
-├── cuthbert/                    # Optional symlink → local cuthbert checkout
-├── cuthbertlib/                 # Optional symlink → local cuthbertlib checkout
 ├── EXPOSITION.md                # Mathematical overview
 ├── pyproject.toml
 └── requirements.txt

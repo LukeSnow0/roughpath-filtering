@@ -53,7 +53,7 @@ from cd_dynamax_mirror.filters import (
 )
 from cuthbert import filter as run_filter  
 from crf import build_filter, CRFState
-  
+
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -173,7 +173,7 @@ def time_call(fn, *args):
 # ---------------------------------------------------------------------------
 #CRF
 # ---------------------------------------------------------------------------
-crf = cubature_filter.build_filter(
+crf = build_filter(
     get_init_params=lambda mi: (m0, chol_P0),
     get_dynamics=lambda mi: (
         lambda t, x: lorenz_drift(x),
