@@ -183,8 +183,7 @@ crf = build_filter(
     noise_dim=noise_dim,
     dt=dt,
     integration_dt=dt_inner,
-    cubature_order=2,
-    multidim_paths="recombined",
+    cubature_order=2, #    multidim_paths="recombined",
     num_paths=18,
 )
 jitted_filter = jit(run_filter, static_argnames=["filter_obj"])

@@ -39,11 +39,16 @@ uv sync --extra experiments
 **Dependencies:** [cuthbert](https://pypi.org/project/cuthbert/) and
 **cuthbertlib** provide the generic filtering interface (`cuthbert.inference.Filter`,
 `cuthbert.filter`); CRF predict/update kernels live in this repo under
-`crf.library`.
+`crf.library`. Both are installed automatically by `pip install -e .`.
 
-For local development against a sibling cuthbert checkout, optional symlinks at
-`cuthbert/` and `cuthbertlib/` may point to that source tree. They are not
-required for a normal install from PyPI or `pip install -e .`.
+To hack on cuthbert locally, you can create optional symlinks in the repo root
+(not tracked by git):
+
+```bash
+ln -s /path/to/cuthbert/cuthbert cuthbert
+ln -s /path/to/cuthbert/cuthbertlib cuthbertlib
+pip install -e /path/to/cuthbert   # editable install of the cuthbert project
+```
 
 JAX 64-bit precision is enabled inside the experiment scripts
 (`jax.config.update("jax_enable_x64", True)`). You can also set
@@ -82,7 +87,6 @@ filter_obj = build_filter(
     get_observations,
     noise_dim=2,
     dt=0.1,
-    multidim_paths="recombined",
 )
 
 states = run_filter(filter_obj, model_inputs)
@@ -98,19 +102,56 @@ print(final.mean, final.log_normalizing_constant)
 | `crf.CRFState` | Filter state: `mean`, `chol_cov`, `log_normalizing_constant`, … |
 | `crf.GetInitParams`, `GetCRFDynamics`, `GetCRFObservations` | Callback type contracts |
 | `crf.library.predict`, `update`, `precompute_cubature_paths`, … | Lower-level kernels (advanced) |
+| `crf.library.ito_to_stratonovich_dynamics`, `wrap_ito_dynamics` | Ito → Stratonovich drift conversion |
+| `crf.library.select_multidim_paths`, `product_path_count` | Path-method heuristics (advanced) |
+
+The CRF integrates a **Stratonovich** SDE internally. Pass ``sde_form="ito"`` if
+your ``get_dynamics`` callback is written in Ito form — the drift correction is
+applied automatically inside :func:`crf.build_filter`:
+
+```python
+filter_obj = build_filter(
+    get_init_params,
+    get_dynamics,       # Ito drift + diffusion, as you would write on paper
+    get_observations,
+    noise_dim=1,
+    dt=0.1,
+    sde_form="ito",
+)
+```
+
+For Stratonovich models (or constant diffusion, where Ito = Stratonovich), omit
+``sde_form`` or use the default ``sde_form="stratonovich"``.
+
+Low-level helpers ``ito_to_stratonovich_dynamics`` and ``wrap_ito_dynamics`` remain
+available in ``crf.library`` for advanced use. See
+[`examples/ito_ou_1d.py`](examples/ito_ou_1d.py) and
+[`examples/linear_gaussian_1d.py`](examples/linear_gaussian_1d.py).
 
 See [`crf/filter/README.md`](crf/filter/README.md) and
 [`crf/library/README.md`](crf/library/README.md) for detail.
 
+**Runnable example:** a self-contained 1D Ornstein–Uhlenbeck script lives in
+[`examples/linear_gaussian_1d.py`](examples/linear_gaussian_1d.py):
+
+```bash
+pip install -e .
+python examples/linear_gaussian_1d.py
+```
+
 The CRF maintains a Gaussian posterior (mean + Cholesky covariance). Its predict
 step propagates spatial cubature nodes along deterministic Wiener-space cubature
-paths; the update is a square-root sigma-point Kalman correction. Multidimensional
-path construction is selected via `multidim_paths`:
+paths; the update is a square-root sigma-point Kalman correction. Wiener path
+construction defaults to ``multidim_paths="auto"``:
 
+- **`auto`** (default) — ``product`` when ``(3^k)^d <= 256``, else ``recombined``
 - **`product`** — tensor-product Lyons paths (exact to degree 3)
-- **`rademacher`** — cheap, scalable candidate paths
 - **`recombined`** — recursive KLV expansion with high-order recombination
-  (Snow & Krishnamurthy, 2025)
+  (Snow & Krishnamurthy, 2025); path budget defaults via
+  ``default_recombined_num_paths`` when ``num_paths=None``
+
+Override explicitly when benchmarking, e.g.
+``from crf.library import select_multidim_paths, product_path_count``.
 
 ## Experiments
 
@@ -206,12 +247,14 @@ cubature-filtering/
 │   └── filter/                  # High-level CRF wired into cuthbert's Filter API
 │       ├── cubature_filter.py
 │       └── types.py
+├── examples/                    # Minimal usage scripts
+│   ├── linear_gaussian_1d.py
+│   └── ito_ou_1d.py
 ├── experiments/                 # Benchmarks (installed in editable dev mode)
 │   ├── cd_dynamax_mirror/       # CD-EKF, CD-UKF, CD-EnKF, bootstrap PF
 │   ├── mfts_test/               # Nielsen four-tank benchmark
 │   ├── l63_test/                # Lorenz-63 tracking benchmark
-│   ├── scalable_ring_test/      # Ring lattice + scaling sweeps
-│   └── paths_display/           # path figures
+│   └── paths_display/           # Presentation figures
 ├── EXPOSITION.md                # Mathematical overview
 ├── pyproject.toml
 └── requirements.txt

@@ -49,7 +49,7 @@ def build_filter(
     cubature_order: int = 2,
     cubature_gamma: float = 0.6,
     num_paths: Optional[int] = None,
-    multidim_paths: Literal["product", "rademacher", "recombined"] = "product",
+    multidim_paths: Literal["product", "recombined", "auto"] = "auto",
     seed: int = 0,
     candidate_factor: float = 8.0,
     recombination_degree: int = 3,
@@ -77,8 +77,9 @@ def build_filter(
         num_paths: Number of Wiener paths (meaning depends on ``multidim_paths``).
             If ``None``, a method-specific default is used.
         multidim_paths: Multidimensional path construction:
-            ``"product"`` (tensor-product Lyons, exact to degree 3),
-            ``"rademacher"`` (cheap, scalable), or
+            ``"auto"`` (default: ``product`` when ``(3^k)^d <= 256``, else
+            ``recombined``),
+            ``"product"`` (tensor-product Lyons, exact to degree 3), or
             ``"recombined"`` (moment-matched sparse measure).
         seed: Seed for Rademacher candidate generation.
         candidate_factor: Candidate-pool scaling for recombination.
@@ -103,6 +104,11 @@ def build_filter(
 
     if sde_form == "ito":
         get_dynamics = wrap_ito_dynamics(get_dynamics)
+
+    if multidim_paths not in ("auto", "product", "recombined"):
+        raise ValueError(
+            'multidim_paths must be "auto", "product", or "recombined".'
+        )
 
     ts, path_values, path_weights = precompute_cubature_paths(
         horizon=dt,

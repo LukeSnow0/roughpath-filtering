@@ -39,9 +39,17 @@ __all__ = [
     "default_num_paths",
     "default_recombined_num_paths",
     "precompute_cubature_paths",
+    "product_path_count",
+    "select_multidim_paths",
+    "resolve_multidim_method",
 ]
 
 MultidimMethod = Literal["product", "recombined"]
+MultidimMethodInput = Literal["product", "recombined", "auto"]
+
+# Product path counts above this threshold switch ``multidim_method="auto"`` to
+# ``"recombined"``.
+_AUTO_PRODUCT_PATH_THRESHOLD = 256
 
 # Upper bound on the auto-selected post-recombination support when the caller
 # does not specify ``recombined_num_paths`` but a high target degree is requested.
@@ -202,6 +210,47 @@ def build_product_lyons_paths(
 # ---------------------------------------------------------------------------
 
 
+def product_path_count(noise_dim: int, k: int) -> int:
+    """Number of paths in the tensor-product Lyons construction ``(3^k)^d``."""
+    d = max(1, int(noise_dim))
+    k = max(1, int(k))
+    return 3**k if d == 1 else 3 ** (k * d)
+
+
+def select_multidim_paths(
+    noise_dim: int,
+    k: int = 2,
+    *,
+    product_path_threshold: int = _AUTO_PRODUCT_PATH_THRESHOLD,
+) -> MultidimMethod:
+    """Choose ``product`` vs ``recombined`` from Brownian dimension and order.
+
+    Uses exact degree-3 product cubature when ``(3^k)^d`` is below
+    ``product_path_threshold``; otherwise recombined cubature with the default
+    path budget.
+    """
+    if product_path_count(noise_dim, k) <= product_path_threshold:
+        return "product"
+    return "recombined"
+
+
+def resolve_multidim_method(
+    multidim_method: MultidimMethodInput,
+    noise_dim: int,
+    k: int,
+    *,
+    product_path_threshold: int = _AUTO_PRODUCT_PATH_THRESHOLD,
+) -> MultidimMethod:
+    """Resolve ``"auto"`` to ``"product"`` or ``"recombined"``."""
+    if multidim_method == "auto":
+        return select_multidim_paths(
+            noise_dim, k, product_path_threshold=product_path_threshold
+        )
+    if multidim_method not in ("product", "recombined"):
+        raise ValueError('multidim_method must be "product", "recombined", or "auto".')
+    return multidim_method
+
+
 def default_recombined_num_paths(
     noise_dim: int, k: int = 2, *, cap: int = 256, floor: int = 16
 ) -> int:
@@ -217,7 +266,7 @@ def default_recombined_num_paths(
 def default_num_paths(
     noise_dim: int,
     k: int,
-    multidim_method: MultidimMethod = "product",
+    multidim_method: MultidimMethodInput = "product",
     num_paths: Optional[int] = None,
 ) -> int:
     """Default number of Wiener paths for a given method."""
@@ -228,7 +277,7 @@ def default_num_paths(
     if noise_dim == 1:
         return 3**k
     if multidim_method == "product":
-        return 3 ** (k * noise_dim)
+        return product_path_count(noise_dim, k)
     #return max(3**k, 2**noise_dim)
 
 
@@ -493,7 +542,7 @@ def build_cubature_driver(
     k: int = 3,
     gamma: float = 0.6,
     seed: int = 0,
-    multidim_method: MultidimMethod = "product",
+    multidim_method: MultidimMethodInput = "product",
     candidate_factor: float = 8.0,
     recombination_degree: int = 3,
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -506,7 +555,7 @@ def build_cubature_driver(
         k: Cubature order (number of macro segments).
         gamma: Macro-segment time-grid concentration exponent.
         seed: Seed for Rademacher candidate generation.
-        multidim_method: ``"product"`` | ``"rademacher"`` | ``"recombined"``.
+        multidim_method: ``"product"`` | ``"recombined"`` | ``"auto"``.
         candidate_factor: Candidate-pool scaling for recombination.
         recombination_degree: Target moment degree for recombination.
 
@@ -515,6 +564,7 @@ def build_cubature_driver(
         ``(P, len(ts), noise_dim)`` and ``weights`` of shape ``(P,)``.
     """
     ts = np.asarray(ts, dtype=np.float64)
+    multidim_method = resolve_multidim_method(multidim_method, noise_dim, k)
 
     if noise_dim == 1:
         paths_native, weights, t_native = build_cubature_paths_1d(k=k, gamma=gamma)
@@ -554,7 +604,7 @@ def precompute_cubature_paths(
     cubature_order: int = 2,
     cubature_gamma: float = 0.6,
     num_paths: Optional[int] = None,
-    multidim_method: MultidimMethod = "product",
+    multidim_method: MultidimMethodInput = "product",
     seed: int = 0,
     candidate_factor: float = 8.0,
     recombination_degree: int = 3,
@@ -571,7 +621,7 @@ def precompute_cubature_paths(
             cubature_order: Cubature order ``k``.
             cubature_gamma: Macro-segment time-grid concentration exponent.
             num_paths: Number of paths (method-dependent meaning).
-            multidim_method: ``"product"`` | ``"rademacher"`` | ``"recombined"``.
+            multidim_method: ``"product"`` | ``"recombined"`` | ``"auto"``.
             seed: Seed for Rademacher candidate generation.
             candidate_factor: Candidate-pool scaling for recombination.
             recombination_degree: Target moment degree for recombination.
@@ -583,6 +633,9 @@ def precompute_cubature_paths(
         horizon = max(float(horizon), 1e-15)
         num_steps = max(2, int(np.ceil(horizon / integration_dt)))
         ts = np.linspace(0.0, horizon, num_steps + 1)
+        multidim_method = resolve_multidim_method(
+            multidim_method, noise_dim, cubature_order
+        )
         path_values, path_weights = build_cubature_driver(
             ts,
             noise_dim,

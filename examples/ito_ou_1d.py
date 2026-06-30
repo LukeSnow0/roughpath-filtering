@@ -64,7 +64,6 @@ filter_obj = build_filter(
     dt=dt,
     integration_dt=0.02,
     cubature_order=2,
-    multidim_paths="product",
     sde_form="ito",  # write your model in Ito form; conversion is automatic
 )
 

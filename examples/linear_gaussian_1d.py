@@ -69,7 +69,6 @@ filter_obj = build_filter(
     dt=dt,
     integration_dt=0.02,
     cubature_order=2,
-    multidim_paths="product",
 )
 
 states = jit(run_filter, static_argnames=["filter_obj"])(filter_obj, model_inputs)
