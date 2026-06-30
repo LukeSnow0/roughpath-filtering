@@ -17,10 +17,10 @@ from typing import Literal, NamedTuple, Optional
 from jax import eval_shape, tree
 from jax import numpy as jnp
 
-from cuthbert.crf.types import GetCRFDynamics, GetCRFObservations, GetInitParams
+from crf.filter.types import GetCRFDynamics, GetCRFObservations, GetInitParams
 from cuthbert.inference import Filter
 from cuthbert.utils import dummy_tree_like
-from cuthbertlib import crf as crf_lib
+from crf import library as crf_lib
 from cuthbertlib.types import Array, ArrayTree, ArrayTreeLike, KeyArray, ScalarArray
 
 

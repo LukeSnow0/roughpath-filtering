@@ -125,8 +125,8 @@ cubature-filtering/
 │   │   └── run_comparison.py
 │   └── l63_test/            # Lorenz-63 tracking benchmark
 │       └── run_comparison.py
-├── cuthbert/             # Symlink → local cuthbert checkout (optional)
-├── cuthbertlib/          # Symlink → local cuthbertlib checkout (optional)
+├── cuthbert/             # Provides filter-build structure
+├── cuthbertlib/          # Cuthbert filter numerics
 ├── EXPOSITION.md         # Mathematical overview of cubature filtering
 ├── pyproject.toml
 └── requirements.txt
