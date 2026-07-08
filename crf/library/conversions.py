@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Tuple
 import jax
 from jax import numpy as jnp
 
-from crf.library.filtering import DiffusionFn, DriftFn
+from crf.filter.filtering import DiffusionFn, DriftFn
 
 if TYPE_CHECKING:
     from crf.filter.types import GetCRFDynamics

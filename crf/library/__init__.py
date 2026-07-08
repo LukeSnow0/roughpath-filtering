@@ -12,7 +12,7 @@ from crf.library.cubature_paths import (
     select_multidim_paths,
 )
 
-from crf.library.filtering import (
+from crf.filter.filtering import (
     integrate_stratonovich_cde,
     predict,
     spatial_cubature_nodes,

@@ -2,7 +2,7 @@
 
 from typing import Protocol
 
-from crf.library.filtering import DiffusionFn, DriftFn, ObservationFn
+from crf.filter.filtering import DiffusionFn, DriftFn, ObservationFn
 from cuthbertlib.types import Array, ArrayTreeLike
 
 
