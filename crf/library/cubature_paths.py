@@ -8,12 +8,10 @@ dimension and the cubature order -- never on the (traced) filter state. The
 resulting arrays are therefore treated as static constants and closed over by the
 JAX filtering kernels in crf.filtering.
 
-Three multidimensional constructions are provided:
+Two multidimensional constructions are provided:
 
 - ``"product"``: tensor product of degree-3 Lyons / Kusuoka-Lyons-Victoir 1D
   cubature paths. Exact to degree 3 but grows as (3^k)^d.
-- ``"rademacher"``: macro-segment paths with Rademacher signs. Cheap, scales to
-  high dimension, uniform weights.
 - ``"recombined"``: a large candidate pool reduced by moment-matching (RMP /
   recombination) to a sparse, low-cardinality measure with the same moments.
 
@@ -457,8 +455,7 @@ def build_recombined_cubature_paths(
 
     Note:
         Each macro-segment expansion costs a factor ``3**noise_dim``, so this
-        construction targets low-to-moderate ``noise_dim``. For very high noise
-        dimensions use ``multidim_method="rademacher"`` instead.
+        construction targets low-to-moderate ``noise_dim``. 
     """
     del candidate_paths, candidate_factor, seed  # deterministic; no candidate pool
 
@@ -554,7 +551,6 @@ def build_cubature_driver(
         num_paths: Number of paths. Meaning depends on ``multidim_method``.
         k: Cubature order (number of macro segments).
         gamma: Macro-segment time-grid concentration exponent.
-        seed: Seed for Rademacher candidate generation.
         multidim_method: ``"product"`` | ``"recombined"`` | ``"auto"``.
         candidate_factor: Candidate-pool scaling for recombination.
         recombination_degree: Target moment degree for recombination.
@@ -622,7 +618,6 @@ def precompute_cubature_paths(
             cubature_gamma: Macro-segment time-grid concentration exponent.
             num_paths: Number of paths (method-dependent meaning).
             multidim_method: ``"product"`` | ``"recombined"`` | ``"auto"``.
-            seed: Seed for Rademacher candidate generation.
             candidate_factor: Candidate-pool scaling for recombination.
             recombination_degree: Target moment degree for recombination.
 
