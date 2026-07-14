@@ -5,10 +5,12 @@ Filter (CRF).
 These mirror the algorithms in hd-UQ/cd_dynamax
 (``src/continuous_discrete_nonlinear_gaussian_ssm/inference_{ekf,ukf,enkf}.py``) but
 avoid that package's heavy dependencies (TensorFlow-Probability + the bundled dynamax
-tree), which do not install on this environment's Python. We keep the exact moment
-equations and use ``diffrax`` (already installed) for the continuous-time forecast,
-matching cd_dynamax's ``diffrax_utils.diffeqsolve`` (Heun + VirtualBrownianTree for
-SDEs, Dopri5 for the moment ODEs).
+tree), which do not install on this environment's Python. We keep the exact moment 
+equations and offer two continuous-time forecast backends via ``solver=``:
+* ``"diffrax"`` (default): matches cd_dynamax's ``diffrax_utils.diffeqsolve``
+  (Dopri5 for moment/flow ODEs; Heun + VirtualBrownianTree for SDEs).
+* ``"rk4"``: fixed-step classical RK4 (ODEs) / RK4 with frozen Wiener increment per
+  step (SDEs), matching the CRF's integrator for fair wall-clock comparisons.
 
 Model (continuous-discrete, additive observation noise):
     dx = f(t, x) dt + L(t, x) dW,   Cov(dW) = Qc dt
@@ -24,7 +26,8 @@ References:
 
 from __future__ import annotations
 
-from typing import Callable, NamedTuple, Optional
+import math
+from typing import Callable, Literal, NamedTuple, Optional
 
 import diffrax as dfx
 import jax
@@ -37,6 +40,7 @@ Matrix = jax.Array
 DriftFn = Callable[[jax.Array, jax.Array], jax.Array]  # (t, x) -> (x_dim,)
 ObsFn = Callable[[jax.Array], jax.Array]  # x -> (y_dim,)
 MatFn = Callable[[jax.Array, jax.Array], jax.Array]  # (t, x) -> matrix
+SolverKind = Literal["diffrax", "rk4"]
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +120,133 @@ def diffeqsolve(
     return sol.ys
 
 
+def _rk4_ode_step(y, t0, t1, drift, args):
+    """ One classical RK4 step for a (possibly pytree) ODE state."""
+    dt = t1-t0
+    half = 0.5*dt
+    t_mid = t0+half
+
+    def add_scaled(state, k, scale):
+        return jax.tree.map(lambda s, ks: s + scale * ks, state, k)
+    
+    k1 = drift(t0, y, args)
+    k2 = drift(t_mid, add_scaled(y, k1, half), args)
+    k3 = drift(t_mid, add_scaled(y, k2, half), args)
+    k4 = drift(t1, add_scaled(y, k3, dt), args)
+    return jax.tree.map(
+        lambda yi, a, b, c, d: yi + (dt / 6.0) * (a + 2.0 * b + 2.0 * c + d),
+        y,
+        k1,
+        k2,
+        k3,
+        k4,
+    )
+
+def _rk4_ode_solve(drift, t0, t1, y0, dt0, args=None, n_steps: Optional[int] = None):
+    """Fixed-step RK4 ODE integrate; return value matches ``diffeqsolve`` ``ys``.
+
+    ``n_steps`` should be a Python ``int`` (static under JIT) so the scan is
+    reverse-mode differentiable — required for flow-map EKF Jacobians.
+    """
+    if n_steps is None:
+        # Best-effort concrete count; prefer callers that pass a Python int.
+        n_steps = max(1, int(jnp.ceil((t1 - t0) / dt0)))
+    n_steps = int(n_steps)
+    dt = (t1 - t0) / n_steps
+
+    def body(y, i):
+        ti = t0 + i.astype(dt.dtype) * dt
+        return _rk4_ode_step(y, ti, ti + dt, drift, args), None
+
+    y1, _ = lax.scan(body, y0, jnp.arange(n_steps))
+    return jax.tree.map(lambda a: a[None, ...], y1)
+
+
+def _rk4_sde_step(x, t0, t1, dW, drift, diffusion, args):
+    """One RK4 step with Wiener increment frozen as ``omega_dot = dW / dt``."""
+    dt = t1 - t0
+    omega_dot = dW / dt
+    t_mid = 0.5 * (t0 + t1)
+    def rhs(t, state):
+        return drift(t, state, args) + diffusion(t, state, args) @ omega_dot
+    k1 = rhs(t0, x)
+    k2 = rhs(t_mid, x + 0.5 * dt * k1)
+    k3 = rhs(t_mid, x + 0.5 * dt * k2)
+    k4 = rhs(t1, x + dt * k3)
+    return x + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+
+
+def _rk4_sde_solve(
+    drift, diffusion, t0, t1, y0, key, noise_dim, dt0, args=None, n_steps: Optional[int] = None
+):
+    """Fixed-step RK4 SDE integrate; return value matches ``diffeqsolve`` ``ys``."""
+    if n_steps is None:
+        n_steps = max(1, int(jnp.ceil((t1 - t0) / dt0)))
+    n_steps = int(n_steps)
+    dt = (t1 - t0) / n_steps
+    keys = jr.split(key, n_steps)
+
+    def body(carry, rng):
+        x, ti = carry
+        dW = jnp.sqrt(dt) * jr.normal(rng, (noise_dim,))
+        x_next = _rk4_sde_step(x, ti, ti + dt, dW, drift, diffusion, args)
+        return (x_next, ti + dt), None
+
+    (y1, _), _ = lax.scan(body, (y0, t0), keys)
+    return y1[None, ...]
+
+
+def integrate(
+    drift: Callable,
+    t0: float,
+    t1: float,
+    y0,
+    *,
+    diffusion: Optional[Callable] = None,
+    key=None,
+    noise_dim: Optional[int] = None,
+    dt0: float = 0.01,
+    args=None,
+    max_steps: int = 100_000,
+    solver: SolverKind = "diffrax",
+    n_steps: Optional[int] = None,
+) -> object:
+    """Continuous-time forecast integrator used by all CD filters.
+    ``solver="diffrax"``: Dopri5 (ODE) / Heun+VBT (SDE), matching cd_dynamax.
+    ``solver="rk4"``: fixed-step RK4, matched to the CRF integrator for fair timing.
+    Returns a ``ys`` pytree with a leading length-1 time axis (``SaveAt(t1=True)``
+    convention). Treat ``solver`` as a static argument when JIT-compiling callers.
+    """
+    if solver == "diffrax":
+        return diffeqsolve(
+            drift,
+            t0,
+            t1,
+            y0,
+            diffusion=diffusion,
+            key=key,
+            noise_dim=noise_dim,
+            dt0=dt0,
+            args=args,
+            max_steps=max_steps,
+        )
+    if solver == "rk4":
+        if diffusion is None:
+            return _rk4_ode_solve(drift, t0, t1, y0, dt0, args=args)
+        if key is None:
+            key = jr.PRNGKey(0)
+        if noise_dim is None:
+             noise_dim = y0.shape[-1]
+        return _rk4_sde_solve(
+            drift, diffusion, t0, t1, y0, key, noise_dim, dt0, args=args
+        )
+    raise ValueError(f"Unknown solver={solver!r}; expected 'diffrax' or 'rk4'.")
+
+    
+def _rk4_n_steps(dt: float, dt0: float) -> int:
+    """Static inner-step count for one assimilation interval ``dt``."""
+    return max(1, int(math.ceil(float(dt) / float(dt0))))
+
 # ---------------------------------------------------------------------------
 # CD-EKF  (cd_dynamax inference_ekf.py, state_order="first")
 # ---------------------------------------------------------------------------
@@ -127,20 +258,20 @@ class FilterResult(NamedTuple):
     cum_loglik: jax.Array  # (T,) cumulative marginal log-likelihood (nan if N/A)
 
 
-def _flow_map(m, f, t0, t1, dt0):
+def _flow_map(m, f, t0, t1, dt0, solver: SolverKind = "diffrax"):
     """Deterministic flow ``x(t1)`` of ``dx/dt = f(t, x)`` from ``x(t0) = m``."""
-    ys = diffeqsolve(lambda t, y, a: f(t, y), t0, t1, m, dt0=dt0)
+    ys = integrate(lambda t, y, a: f(t, y), t0, t1, m, dt0=dt0, solver=solver)
     return ys[-1]
 
 
-def _ekf_predict(m, P, f, L_fn, Qc_fn, t0, t1, dt0, state_order="first"):
+def _ekf_predict(m, P, f, L_fn, Qc_fn, t0, t1, dt0, state_order="first", solver: SolverKind = "diffrax", n_steps: Optional[int] = None):
     if state_order == "flowmap":
         # Discrete EKF on the SDE flow map: linearize the flow via autodiff, add the
         # interval's process noise once. Bounded/stable on chaotic systems.
-        m_pred = _flow_map(m, f, t0, t1, dt0)
+        m_pred = _flow_map(m, f, t0, t1, dt0, solver=solver)
         # jacrev (reverse mode) is required: diffrax's default adjoint is a custom_vjp,
-        # which forward-mode autodiff (jacfwd) cannot traverse.
-        J = jacrev(lambda x: _flow_map(x, f, t0, t1, dt0))(m)
+        # which forward-mode autodiff (jacfwd) cannot traverse. RK4 is fine either way
+        J = jacrev(lambda x: _flow_map(x, f, t0, t1, dt0, solver=solver))(m)
         L_t = L_fn(t0, m)
         Qc_t = Qc_fn(t0, m)
         Q = (t1 - t0) * L_t @ Qc_t @ L_t.T
@@ -156,7 +287,7 @@ def _ekf_predict(m, P, f, L_fn, Qc_fn, t0, t1, dt0, state_order="first"):
         dP = F_t @ P_t + P_t @ F_t.T + L_t @ Qc_t @ L_t.T
         return (dm, dP)
 
-    ys = diffeqsolve(rhs, t0, t1, (m, P), dt0=dt0)
+    ys = integrate(rhs, t0, t1, (m, P), dt0=dt0, solver=solver)
     return ys[0][-1], psd(ys[1][-1])
 
 
@@ -187,19 +318,24 @@ def run_cd_ekf(
     dt0: float = 0.01,
     num_iter: int = 1,
     state_order: str = "first",
+    solver: SolverKind = "diffrax",
 ) -> FilterResult:
     """Continuous-discrete Extended Kalman Filter (predict-then-update).
 
     ``state_order="first"`` integrates the canonical CD-EKF mean/covariance ODEs;
     ``state_order="flowmap"`` linearizes the deterministic flow map and adds the
     interval process noise (a stable discrete-EKF variant).
+    ``solver`` selects the continuous-time integrator (``"diffrax"`` or ``"rk4"``).
     """
     n = ys.shape[0]
+    n_inner = _rk4_n_steps(dt, dt0) if solver == "rk4" else None
 
     def step(carry, k):
         m, P, ll = carry
         t0 = k * dt
-        m_pred, P_pred = _ekf_predict(m, P, f, L_fn, Qc_fn, t0, t0 + dt, dt0, state_order)
+        m_pred, P_pred = _ekf_predict(
+            m, P, f, L_fn, Qc_fn, t0, t0 + dt, dt0, state_order, solver=solver, n_steps=n_inner
+        )
         H_x = jacfwd(h)(m_pred)
         ll = ll + gaussian_logpdf(ys[k], h(m_pred), H_x @ P_pred @ H_x.T + R)
         m_filt, P_filt = _ekf_update(m_pred, P_pred, h, R, ys[k], num_iter)
@@ -236,13 +372,16 @@ def _ukf_weights(n, alpha, beta, lamb):
     return w_mean, w_cov, W_matrix
 
 
-def _ukf_predict(m, P, f, L_fn, Qc_fn, t0, t1, dt0, n, lamb, w_mean, w_cov, W_matrix, state_order="first"):
+def _ukf_predict(
+    m, P, f, L_fn, Qc_fn, t0, t1, dt0, n, lamb, w_mean, w_cov, W_matrix,
+    state_order="first", solver: SolverKind = "diffrax", n_steps: Optional[int] = None,
+):
     if state_order == "flowmap":
         # Push sigma points through the deterministic flow, rebuild moments by the
         # unscented transform, then add the interval process noise (cd_dynamax
         # "zeroth"/"discrete"). Bounded/stable on chaotic systems.
         X = _ukf_sigmas(m, P, n, lamb)
-        Xf = vmap(lambda x: _flow_map(x, f, t0, t1, dt0))(X)
+        Xf = vmap(lambda x: _flow_map(x, f, t0, t1, dt0, solver=solver, n_steps=n_steps))(X)
         m_pred = w_mean @ Xf
         L_t = L_fn(t0, m)
         Qc_t = Qc_fn(t0, m)
@@ -262,7 +401,7 @@ def _ukf_predict(m, P, f, L_fn, Qc_fn, t0, t1, dt0, n, lamb, w_mean, w_cov, W_ma
         dP = foo + foo.T + L_t @ Qc_t @ L_t.T
         return (dm, dP)
 
-    ys = diffeqsolve(rhs, t0, t1, (m, P), dt0=dt0)
+    ys = integrate(rhs, t0, t1, (m, P), dt0=dt0, solver=solver, n_steps=n_steps)
     return ys[0][-1], psd(ys[1][-1])
 
 
@@ -292,24 +431,27 @@ def run_cd_ukf(
     dt0: float = 0.01,
     ukf_params: UKFParams = UKFParams(),
     state_order: str = "first",
+    solver: SolverKind = "diffrax",
 ) -> FilterResult:
     """Continuous-discrete additive Unscented Kalman Filter (predict-then-update).
 
     ``state_order="first"`` integrates the CD-UKF sigma-point moment ODEs;
     ``state_order="flowmap"`` propagates sigma points through the deterministic flow
     and adds the interval process noise (a stable discrete-UKF variant).
+    ``solver`` selects the continuous-time integrator (``"diffrax"`` or ``"rk4"``).
     """
     n_steps = ys.shape[0]
     n = m0.shape[0]
     alpha, beta, kappa = ukf_params.alpha, ukf_params.beta, ukf_params.kappa
     lamb = alpha**2 * (n + kappa) - n
     w_mean, w_cov, W_matrix = _ukf_weights(n, alpha, beta, lamb)
+    n_inner = _rk4_n_steps(dt, dt0) if solver == "rk4" else None
 
     def step(carry, k):
         m, P, ll = carry
         t0 = k * dt
         m_pred, P_pred = _ukf_predict(
-            m, P, f, L_fn, Qc_fn, t0, t0 + dt, dt0, n, lamb, w_mean, w_cov, W_matrix, state_order
+            m, P, f, L_fn, Qc_fn, t0, t0 + dt, dt0, n, lamb, w_mean, w_cov, W_matrix, state_order, solver=solver, n_steps=n_inner
         )
         ll_inc, m_filt, P_filt = _ukf_update(m_pred, P_pred, h, R, ys[k], n, lamb, w_mean, w_cov)
         ll = ll + ll_inc
@@ -322,7 +464,8 @@ def run_cd_ukf(
 # ---------------------------------------------------------------------------
 # CD-EnKF  (cd_dynamax inference_enkf.py, state_order="first")
 # ---------------------------------------------------------------------------
-def _enkf_forecast(key, particles, f, L_fn, Qc_fn, t0, t1, dt0, noise_dim, cov_rescaling):
+def _enkf_forecast(key, particles, f, L_fn, Qc_fn, t0, t1, dt0, noise_dim, cov_rescaling, solver: SolverKind = "diffrax", 
+                   n_steps: Optional[int] = None):
     def drift(t, y, args):
         return f(t, y)
 
@@ -331,8 +474,8 @@ def _enkf_forecast(key, particles, f, L_fn, Qc_fn, t0, t1, dt0, noise_dim, cov_r
         return L_t @ jnp.linalg.cholesky(psd(Qc_fn(t, y)))
 
     def one(y0, k):
-        ys = diffeqsolve(
-            drift, t0, t1, y0, diffusion=diffusion, key=k, noise_dim=noise_dim, dt0=dt0
+        ys = integrate(
+            drift, t0, t1, y0, diffusion=diffusion, key=k, noise_dim=noise_dim, dt0=dt0, solver=solver, n_steps=n_steps
         )
         return ys[0]
 
@@ -379,26 +522,29 @@ def run_cd_enkf(
     cov_rescaling: float = 1.0,
     inflation_delta: float = 0.0,
     perturb_obs: bool = True,
+    solver: SolverKind = "diffrax",
 ) -> FilterResult:
     """Continuous-discrete Ensemble Kalman Filter (perturbed-obs, predict-then-update).
 
-    Forecast uses per-particle Heun + VirtualBrownianTree SDE integration, matching
-    cd_dynamax ``state_order="first"``. A Gaussian marginal log-likelihood is
-    accumulated from the ensemble innovation statistics (diagnostic only; the EnKF is
-    not a likelihood-exact filter).
+    Forecast uses per-particle SDE integration (``solver="diffrax"``: Heun + VBT;
+    ``solver="rk4"``: RK4 with frozen Wiener increments). A Gaussian marginal
+    log-likelihood is accumulated from the ensemble innovation statistics
+    (diagnostic only; the EnKF is not a likelihood-exact filter).
     """
     n_steps = ys.shape[0]
     if noise_dim is None:
         noise_dim = m0.shape[0]
     key, init_key = jr.split(key)
     particles = jr.multivariate_normal(init_key, mean=m0, cov=psd(P0), shape=(n_particles,))
+    n_inner = _rk4_n_steps(dt, dt0) if solver == "rk4" else None
+
 
     def step(carry, k):
         parts, ll, key = carry
         key, k_pred, k_filt = jr.split(key, 3)
         t0 = k * dt
         x_pred = _enkf_forecast(
-            k_pred, parts, f, L_fn, Qc_fn, t0, t0 + dt, dt0, noise_dim, cov_rescaling
+            k_pred, parts, f, L_fn, Qc_fn, t0, t0 + dt, dt0, noise_dim, cov_rescaling, solver=solver, n_steps=n_inner
         )
         x_filt, y_mean, S = _enkf_analysis(
             k_filt, x_pred, h, R, ys[k], perturb_obs, inflation_delta
@@ -437,23 +583,29 @@ def run_bootstrap_pf(
     n_particles: int = 200,
     noise_dim: Optional[int] = None,
     dt0: float = 0.01,
+    solver: SolverKind = "diffrax",
 ) -> FilterResult:
-    """Bootstrap particle filter with an SDE (Heun + VBT) proposal, resampling each step.
+    """Bootstrap particle filter with an SDE proposal, resampling each step.
 
-    The transition prior is the SDE forecast; weights are the Gaussian observation
-    likelihood. Accumulates the standard particle-filter log-evidence estimate.
+    The transition prior is the SDE forecast (``solver="diffrax"``: Heun + VBT;
+    ``solver="rk4"``: RK4 with frozen Wiener increments); weights are the Gaussian
+    observation likelihood. Accumulates the standard particle-filter log-evidence
+    estimate.
     """
     n_steps = ys.shape[0]
     if noise_dim is None:
         noise_dim = m0.shape[0]
     key, init_key = jr.split(key)
     particles = jr.multivariate_normal(init_key, mean=m0, cov=psd(P0), shape=(n_particles,))
+    n_inner = _rk4_n_steps(dt, dt0) if solver == "rk4" else None
 
     def step(carry, k):
         parts, ll, key = carry
         key, k_pred, k_res = jr.split(key, 3)
         t0 = k * dt
-        x_pred = _enkf_forecast(k_pred, parts, f, L_fn, Qc_fn, t0, t0 + dt, dt0, noise_dim, 1.0)
+        x_pred = _enkf_forecast(
+            k_pred, parts, f, L_fn, Qc_fn, t0, t0 + dt, dt0, noise_dim, 1.0, solver=solver, n_steps=n_inner,
+        )
         log_w = vmap(lambda x: gaussian_logpdf(ys[k], h(x), R))(x_pred)
         ll_inc = jax.scipy.special.logsumexp(log_w) - jnp.log(n_particles)
         ll = ll + ll_inc

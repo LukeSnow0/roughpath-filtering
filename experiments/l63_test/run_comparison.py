@@ -4,8 +4,9 @@ on a stochastic Lorenz-63 tracking problem.
 
 - The CRF is built with the filter structure
   (``crf.filter.cubature_filter.build_filter``)
-- The competing filters are faithful diffrax reimplementations of the cd_dynamax
-  continuous-discrete nonlinear-Gaussian filters (see ``cd_dynamax_filters.py``).
+- The competing filters are cd_dynamax-style continuous-discrete nonlinear-Gaussian
+  filters (see ``experiments/cd_dynamax_mirror/filters.py``), run with
+  ``solver="rk4"`` so wall-clock comparisons share the CRF's integrator.
 
 Run:  python3 experiments/l63_test/run_comparison.py
 Outputs (plots + metrics) are written to ``experiments/l63_test/output/``.
@@ -202,7 +203,7 @@ crf_loglik = crf_states.log_normalizing_constant[1:]
 
 ekf_jit = jit(
     lambda: run_cd_ekf(
-        f_drift, h_obs, L_fn, Qc_fn, R, m0, P0, ys, dt, dt_inner, state_order="flowmap"
+        f_drift, h_obs, L_fn, Qc_fn, R, m0, P0, ys, dt, dt_inner, state_order="flowmap", solver="rk4"
     )
 )
 ekf_res, ekf_time = time_call(ekf_jit)
@@ -211,6 +212,7 @@ ukf_jit = jit(
     lambda: run_cd_ukf(
         f_drift, h_obs, L_fn, Qc_fn, R, m0, P0, ys, dt, dt_inner, UKFParams(),
         state_order="flowmap",
+        solver="rk4"
     )
 )
 ukf_res, ukf_time = time_call(ukf_jit)
@@ -220,6 +222,7 @@ enkf_jit = jit(
     lambda k: run_cd_enkf(
         f_drift, h_obs, L_fn, Qc_fn, R, m0, P0, ys, dt, k,
         n_particles=50, noise_dim=noise_dim, dt0=dt_inner, inflation_delta=0.02,
+        solver="rk4"
     )
 )
 enkf_res, enkf_time = time_call(enkf_jit, enkf_key)
@@ -228,7 +231,7 @@ key, pf_key = random.split(key)
 pf_jit = jit(
     lambda k: run_bootstrap_pf(
         f_drift, h_obs, L_fn, Qc_fn, R, m0, P0, ys, dt, k,
-        n_particles=200, noise_dim=noise_dim, dt0=dt_inner,
+        n_particles=200, noise_dim=noise_dim, dt0=dt_inner, solver="rk4"
     )
 )
 pf_res, pf_time = time_call(pf_jit, pf_key)
@@ -321,7 +324,10 @@ plt.close()
 fig, ax = plt.subplots(figsize=(7, 4))
 ax.bar(names, [RESULTS[n]["time"] for n in names], color=[RESULTS[n]["color"] for n in names])
 ax.set_ylabel("Wall-clock time (s) - log scale", fontsize=13)
-ax.set_title(f"Filter runtime (median of {N_TIMING}, excl. JIT)", fontsize=13)
+ax.set_title(
+    f"Filter runtime (median of {N_TIMING}, excl. JIT; CD filters use matched RK4)",
+    fontsize=12,
+)
 ax.grid(True, axis="y", alpha=0.3)
 ax.set_yscale("log")
 fig.tight_layout()
