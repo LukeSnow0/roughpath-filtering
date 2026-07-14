@@ -4,6 +4,8 @@ Mirrors ``crf_vs_dynamax/run_comparison.py`` but uses the modified four-tank sys
 Nielsen et al. (2022), Sec. IV (Azam 2015 geometry).
 
 Run:  python experiments/mfts_test/run_comparison.py
+      python experiments/mfts_test/run_comparison.py --solver rk4
+      python experiments/mfts_test/run_comparison.py --solver diffrax
 Outputs: ``experiments/mfts_test/output/``
 """
 
@@ -86,9 +88,16 @@ _parser.add_argument(
     dest="cubature_order",
     help="CRF Lyons macro-segment count k (Wiener cubature order)",
 )
+_parser.add_argument(
+    "--solver",
+    choices=("rk4", "diffrax"),
+    default="rk4",
+    help="Continuous-time integrator for CD filters (default: rk4, matched to CRF)",
+)
 _args = _parser.parse_args()
 SEED = _args.seed
 CUBATURE_ORDER = _args.cubature_order
+SOLVER = _args.solver
 
 
 HORIZON_MIN = 30.0
@@ -208,9 +217,11 @@ crf_loglik = crf_states.log_normalizing_constant[1:]
 # cd_dynamax-style filters
 # ---------------------------------------------------------------------------
 # Moment-ODE predict (state_order="first") is stable on this plant benchmark.
+# Default ``--solver rk4`` matches the CRF integrator for fair wall-clock timing.
 ekf_jit = jit(
     lambda: run_cd_ekf(
-        drift_ekf, obs_fn, L_ekf, Qc, R, m0, P0_j, ys, dt, dt0, state_order="first"
+        drift_ekf, obs_fn, L_ekf, Qc, R, m0, P0_j, ys, dt, dt0,
+        state_order="first", solver=SOLVER,
     )
 )
 ekf_res, ekf_time = time_call(ekf_jit)
@@ -218,7 +229,8 @@ ekf_est = stack_estimates(m0, ekf_res.means)
 
 ukf_jit = jit(
     lambda: run_cd_ukf(
-        drift_ukf, obs_fn, L_ukf, Qc, R, m0, P0_j, ys, dt, dt0, UKFParams(), state_order="first"
+        drift_ukf, obs_fn, L_ukf, Qc, R, m0, P0_j, ys, dt, dt0, UKFParams(),
+        state_order="first", solver=SOLVER,
     )
 )
 ukf_res, ukf_time = time_call(ukf_jit)
@@ -228,7 +240,7 @@ key = random.key(SEED)
 enkf_jit = jit(
     lambda k: run_cd_enkf(
         drift_enkf, obs_fn, L_enkf, Qc, R, m0, P0_j, ys, dt, k,
-        n_particles=ENKF_PARTICLES, noise_dim=2, dt0=dt0,
+        n_particles=ENKF_PARTICLES, noise_dim=2, dt0=dt0, solver=SOLVER,
     )
 )
 enkf_res, enkf_time = time_call(enkf_jit, key)
@@ -238,7 +250,7 @@ key, pf_key = random.split(key)
 pf_jit = jit(
     lambda k: run_bootstrap_pf(
         drift_enkf, obs_fn, L_enkf, Qc, R, m0, P0_j, ys, dt, k,
-        n_particles=PF_PARTICLES, noise_dim=2, dt0=dt0,
+        n_particles=PF_PARTICLES, noise_dim=2, dt0=dt0, solver=SOLVER,
     )
 )
 pf_res, pf_time = time_call(pf_jit, pf_key)
@@ -346,7 +358,7 @@ fig, ax = plt.subplots(figsize=(7, 4))
 ax.bar(names, [RESULTS[n]["time"] for n in names], color=[RESULTS[n]["color"] for n in names])
 ax.set_yscale("log")
 ax.set_ylabel("Wall-clock time (s, log scale)")
-ax.set_title(f"Filter runtime (median of {N_TIMING}, excl. JIT)")
+ax.set_title(f"Filter runtime (median of {N_TIMING}, excl. JIT; CD solver={SOLVER})")
 ax.grid(True, axis="y", which="both", alpha=0.3)
 fig.tight_layout()
 fig.savefig(os.path.join(OUTPUT_DIR, "timing.png"), dpi=150, bbox_inches="tight")
