@@ -86,7 +86,6 @@ def _cubature_path_3(t: np.ndarray) -> np.ndarray:
 
 
 
-
 def build_cubature_paths_1d(
     k: int = 3,
     gamma: float = 0.6,
