@@ -232,13 +232,13 @@ def integrate(
         )
     if solver == "rk4":
         if diffusion is None:
-            return _rk4_ode_solve(drift, t0, t1, y0, dt0, args=args)
+            return _rk4_ode_solve(drift, t0, t1, y0, dt0, args=args, n_steps=n_steps)
         if key is None:
             key = jr.PRNGKey(0)
         if noise_dim is None:
-             noise_dim = y0.shape[-1]
+            noise_dim = y0.shape[-1]
         return _rk4_sde_solve(
-            drift, diffusion, t0, t1, y0, key, noise_dim, dt0, args=args
+            drift, diffusion, t0, t1, y0, key, noise_dim, dt0, args=args, n_steps=n_steps
         )
     raise ValueError(f"Unknown solver={solver!r}; expected 'diffrax' or 'rk4'.")
 
@@ -258,9 +258,11 @@ class FilterResult(NamedTuple):
     cum_loglik: jax.Array  # (T,) cumulative marginal log-likelihood (nan if N/A)
 
 
-def _flow_map(m, f, t0, t1, dt0, solver: SolverKind = "diffrax"):
+def _flow_map(m, f, t0, t1, dt0, solver: SolverKind = "diffrax", n_steps: Optional[int] = None):
     """Deterministic flow ``x(t1)`` of ``dx/dt = f(t, x)`` from ``x(t0) = m``."""
-    ys = integrate(lambda t, y, a: f(t, y), t0, t1, m, dt0=dt0, solver=solver)
+    ys = integrate(
+        lambda t, y, a: f(t, y), t0, t1, m, dt0=dt0, solver=solver, n_steps=n_steps
+    )
     return ys[-1]
 
 
@@ -268,10 +270,10 @@ def _ekf_predict(m, P, f, L_fn, Qc_fn, t0, t1, dt0, state_order="first", solver:
     if state_order == "flowmap":
         # Discrete EKF on the SDE flow map: linearize the flow via autodiff, add the
         # interval's process noise once. Bounded/stable on chaotic systems.
-        m_pred = _flow_map(m, f, t0, t1, dt0, solver=solver)
+        m_pred = _flow_map(m, f, t0, t1, dt0, solver=solver, n_steps=n_steps)
         # jacrev (reverse mode) is required: diffrax's default adjoint is a custom_vjp,
         # which forward-mode autodiff (jacfwd) cannot traverse. RK4 is fine either way
-        J = jacrev(lambda x: _flow_map(x, f, t0, t1, dt0, solver=solver))(m)
+        J = jacrev(lambda x: _flow_map(x, f, t0, t1, dt0, solver=solver, n_steps=n_steps))(m)
         L_t = L_fn(t0, m)
         Qc_t = Qc_fn(t0, m)
         Q = (t1 - t0) * L_t @ Qc_t @ L_t.T
@@ -287,7 +289,7 @@ def _ekf_predict(m, P, f, L_fn, Qc_fn, t0, t1, dt0, state_order="first", solver:
         dP = F_t @ P_t + P_t @ F_t.T + L_t @ Qc_t @ L_t.T
         return (dm, dP)
 
-    ys = integrate(rhs, t0, t1, (m, P), dt0=dt0, solver=solver)
+    ys = integrate(rhs, t0, t1, (m, P), dt0=dt0, solver=solver, n_steps=n_steps)
     return ys[0][-1], psd(ys[1][-1])
 
 

@@ -5,15 +5,19 @@ on a stochastic Lorenz-63 tracking problem.
 - The CRF is built with the filter structure
   (``crf.filter.cubature_filter.build_filter``)
 - The competing filters are cd_dynamax-style continuous-discrete nonlinear-Gaussian
-  filters (see ``experiments/cd_dynamax_mirror/filters.py``), run with
-  ``solver="rk4"`` so wall-clock comparisons share the CRF's integrator.
+  filters (see ``experiments/cd_dynamax_mirror/filters.py``). Default ``--solver rk4``
+  matches the CRF integrator for fair wall-clock timing; use ``--solver diffrax``
+  for Dopri5 / Heun+VBT.
 
 Run:  python3 experiments/l63_test/run_comparison.py
+      python3 experiments/l63_test/run_comparison.py --solver rk4
+      python3 experiments/l63_test/run_comparison.py --solver diffrax
 Outputs (plots + metrics) are written to ``experiments/l63_test/output/``.
 """
 
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 import time
@@ -58,6 +62,18 @@ from crf import build_filter, CRFState
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+_parser = argparse.ArgumentParser(
+    description="CRF vs cd_dynamax filters on stochastic Lorenz-63"
+)
+_parser.add_argument(
+    "--solver",
+    choices=("rk4", "diffrax"),
+    default="rk4",
+    help="Continuous-time integrator for CD filters (default: rk4, matched to CRF)",
+)
+_args = _parser.parse_args()
+SOLVER = _args.solver
 
 # ---------------------------------------------------------------------------
 # Lorenz-63 stochastic model (matching Cuthbert_CRF.py)
@@ -203,7 +219,8 @@ crf_loglik = crf_states.log_normalizing_constant[1:]
 
 ekf_jit = jit(
     lambda: run_cd_ekf(
-        f_drift, h_obs, L_fn, Qc_fn, R, m0, P0, ys, dt, dt_inner, state_order="flowmap", solver="rk4"
+        f_drift, h_obs, L_fn, Qc_fn, R, m0, P0, ys, dt, dt_inner,
+        state_order="flowmap", solver=SOLVER,
     )
 )
 ekf_res, ekf_time = time_call(ekf_jit)
@@ -212,7 +229,7 @@ ukf_jit = jit(
     lambda: run_cd_ukf(
         f_drift, h_obs, L_fn, Qc_fn, R, m0, P0, ys, dt, dt_inner, UKFParams(),
         state_order="flowmap",
-        solver="rk4"
+        solver=SOLVER,
     )
 )
 ukf_res, ukf_time = time_call(ukf_jit)
@@ -222,7 +239,7 @@ enkf_jit = jit(
     lambda k: run_cd_enkf(
         f_drift, h_obs, L_fn, Qc_fn, R, m0, P0, ys, dt, k,
         n_particles=50, noise_dim=noise_dim, dt0=dt_inner, inflation_delta=0.02,
-        solver="rk4"
+        solver=SOLVER,
     )
 )
 enkf_res, enkf_time = time_call(enkf_jit, enkf_key)
@@ -231,7 +248,7 @@ key, pf_key = random.split(key)
 pf_jit = jit(
     lambda k: run_bootstrap_pf(
         f_drift, h_obs, L_fn, Qc_fn, R, m0, P0, ys, dt, k,
-        n_particles=200, noise_dim=noise_dim, dt0=dt_inner, solver="rk4"
+        n_particles=200, noise_dim=noise_dim, dt0=dt_inner, solver=SOLVER,
     )
 )
 pf_res, pf_time = time_call(pf_jit, pf_key)
@@ -325,7 +342,7 @@ fig, ax = plt.subplots(figsize=(7, 4))
 ax.bar(names, [RESULTS[n]["time"] for n in names], color=[RESULTS[n]["color"] for n in names])
 ax.set_ylabel("Wall-clock time (s) - log scale", fontsize=13)
 ax.set_title(
-    f"Filter runtime (median of {N_TIMING}, excl. JIT; CD filters use matched RK4)",
+    f"Filter runtime (median of {N_TIMING}, excl. JIT; CD solver={SOLVER})",
     fontsize=12,
 )
 ax.grid(True, axis="y", alpha=0.3)
