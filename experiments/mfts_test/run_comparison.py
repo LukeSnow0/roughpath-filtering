@@ -288,7 +288,7 @@ for i, ax in enumerate(axes.ravel()):
 axes[0, 0].legend(loc="upper right", fontsize=8, ncol=3)
 axes[1, 0].set_xlabel("Time [min]")
 axes[1, 1].set_xlabel("Time [min]")
-fig.suptitle("MFTS tank heights — CRF vs cd_dynamax filters", fontsize=13)
+fig.suptitle("Tracked MFTS tank heights", fontsize=13)
 fig.tight_layout()
 fig.savefig(os.path.join(OUTPUT_DIR, "heights.png"), dpi=150, bbox_inches="tight")
 plt.close()

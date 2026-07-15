@@ -8,7 +8,8 @@ interval ``Delta_t``:
 3. Reconstructs each filter's mean on the **same fine time grid** by integrating
    the filter drift between updates (filtered mean at observation times)
 4. Scores MAPEx / MAPEd on that fine grid
-5. Times each filter (median wall-clock, excl. JIT; default CD solver=rk4)
+5. Records predictive NLL (total and per observation) from each filter's cum. loglik
+6. Times each filter (median wall-clock, excl. JIT; default CD solver=rk4)
 
 Run:
   python experiments/mfts_test/run_mape_vs_interval.py
@@ -18,6 +19,7 @@ Run:
 
 Outputs:
   ``experiments/mfts_test/output/mape_vs_interval.png``
+  ``experiments/mfts_test/output/nll_vs_interval.png``
   ``experiments/mfts_test/output/timing_vs_interval.png``
   ``experiments/mfts_test/output/mape_vs_interval.csv``
 """
@@ -390,6 +392,9 @@ def run_filters_at_interval(
     estimates_obs = {
         "CRF": stack_estimates(m0, crf_states.mean[1:]),
     }
+    final_ll: dict[str, float] = {
+        "CRF": float(crf_states.log_normalizing_constant[-1]),
+    }
 
     ekf_jit = jit(
         lambda: run_cd_ekf(
@@ -409,6 +414,7 @@ def run_filters_at_interval(
     )
     ekf_res, times["CD-EKF"] = time_call(ekf_jit)
     estimates_obs["CD-EKF"] = stack_estimates(m0, ekf_res.means)
+    final_ll["CD-EKF"] = float(ekf_res.cum_loglik[-1])
 
     ukf_jit = jit(
         lambda: run_cd_ukf(
@@ -429,6 +435,7 @@ def run_filters_at_interval(
     )
     ukf_res, times["CD-UKF"] = time_call(ukf_jit)
     estimates_obs["CD-UKF"] = stack_estimates(m0, ukf_res.means)
+    final_ll["CD-UKF"] = float(ukf_res.cum_loglik[-1])
 
     key = random.key(SEED)
     enkf_jit = jit(
@@ -451,6 +458,7 @@ def run_filters_at_interval(
     )
     enkf_res, times["CD-EnKF"] = time_call(enkf_jit, key)
     estimates_obs["CD-EnKF"] = stack_estimates(m0, enkf_res.means)
+    final_ll["CD-EnKF"] = float(enkf_res.cum_loglik[-1])
 
     key, pf_key = random.split(key)
     pf_jit = jit(
@@ -473,6 +481,7 @@ def run_filters_at_interval(
     )
     pf_res, times["PF"] = time_call(pf_jit, pf_key)
     estimates_obs["PF"] = stack_estimates(m0, pf_res.means)
+    final_ll["PF"] = float(pf_res.cum_loglik[-1])
 
     mapes = {}
     for name, m_filt in estimates_obs.items():
@@ -482,6 +491,8 @@ def run_filters_at_interval(
         mapes[name] = {
             "mapex": mape_pct(est_fine, true_fine, slice(0, 4)),
             "maped": mape_pct(est_fine, true_fine, slice(4, 6)),
+            "nll": -final_ll[name],
+            "nll_per_obs": -final_ll[name] / n_obs,
         }
     return dt_min, n_obs, mapes, times
 
@@ -492,7 +503,10 @@ def run_filters_at_interval(
 
 delta_t_eff: list[float] = []
 n_obs_list: list[int] = []
-series = {name: {"mapex": [], "maped": [], "time": []} for name in FILTER_NAMES}
+series = {
+    name: {"mapex": [], "maped": [], "nll": [], "nll_per_obs": [], "time": []}
+    for name in FILTER_NAMES
+}
 
 print(f"Horizon={HORIZON_MIN:g} min | solver={SOLVER} | seed={SEED}")
 print(f"Requested Delta_t [min]: {DELTA_T_MIN_REQ}")
@@ -510,10 +524,13 @@ for dt_req in DELTA_T_MIN_REQ:
     for name in FILTER_NAMES:
         series[name]["mapex"].append(mapes[name]["mapex"])
         series[name]["maped"].append(mapes[name]["maped"])
+        series[name]["nll"].append(mapes[name]["nll"])
+        series[name]["nll_per_obs"].append(mapes[name]["nll_per_obs"])
         series[name]["time"].append(times[name])
         print(
             f"  {name:8s}  MAPEx={mapes[name]['mapex']:8.2f}%  "
             f"MAPEd={mapes[name]['maped']:8.2f}%  "
+            f"NLL/obs={mapes[name]['nll_per_obs']:8.2f}  "
             f"time={times[name] * 1e3:8.2f} ms"
         )
 
@@ -539,17 +556,40 @@ for ax, metric, title in zip(
     ax.set_xlabel(r"Observation interval $\Delta t$ [min]")
     ax.set_ylabel("MAPE [%]")
     ax.set_title(title)
-    ax.grid(True, alpha=0.3)
+    ax.grid(True, which="both", alpha=0.3)
     ax.set_xscale("log")
+    ax.set_yscale("log")
 axes[0].legend(fontsize=9, loc="best")
-fig.suptitle(
-    f"Nielsen MFTS fine-grid MAPE vs $\\Delta t$ "
-    f"(eval_dt={DT_FINE_MIN:g} min, solver={SOLVER})",
-    fontsize=12,
-)
+fig.suptitle("MFTS MAPE vs Delta_t", fontsize=12)
 fig.tight_layout()
 plot_path = os.path.join(OUTPUT_DIR, "mape_vs_interval.png")
 fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+plt.close()
+
+# ---------------------------------------------------------------------------
+# Plot NLL/obs vs Delta_t
+# ---------------------------------------------------------------------------
+
+fig, ax = plt.subplots(figsize=(7, 4.5))
+for name in FILTER_NAMES:
+    ax.plot(
+        delta_t_eff,
+        series[name]["nll_per_obs"],
+        color=COLORS[name],
+        marker="o",
+        lw=1.8,
+        label=name,
+    )
+ax.set_xlabel(r"Observation interval $\Delta t$ [min]")
+ax.set_ylabel("Mean NLL per observation")
+ax.set_title(r"MFTS NLL / obs vs $\Delta t$")
+ax.set_xscale("log")
+ax.set_yscale("log")
+ax.grid(True, which="both", alpha=0.3)
+ax.legend(fontsize=9, loc="best")
+fig.tight_layout()
+nll_path = os.path.join(OUTPUT_DIR, "nll_vs_interval.png")
+fig.savefig(nll_path, dpi=150, bbox_inches="tight")
 plt.close()
 
 # ---------------------------------------------------------------------------
@@ -598,8 +638,7 @@ ax.set_yscale("log")
 ax.grid(True, which="both", alpha=0.3)
 
 fig.suptitle(
-    f"MFTS filter compute time vs $\\Delta t$ "
-    f"(median of {N_TIMING}, excl. JIT; CD solver={SOLVER})",
+    r"MFTS filter compute time vs $\Delta t$",
     fontsize=12,
 )
 fig.tight_layout()
@@ -616,7 +655,15 @@ with open(csv_path, "w", newline="") as f:
     writer = csv.writer(f)
     header = ["delta_t_min", "n_obs", "eval_dt_min", "solver"]
     for name in FILTER_NAMES:
-        header.extend([f"{name}_mapex", f"{name}_maped", f"{name}_time_s"])
+        header.extend(
+            [
+                f"{name}_mapex",
+                f"{name}_maped",
+                f"{name}_nll",
+                f"{name}_nll_per_obs",
+                f"{name}_time_s",
+            ]
+        )
     writer.writerow(header)
     for i, dt_eff in enumerate(delta_t_eff):
         row = [dt_eff, n_obs_list[i], DT_FINE_MIN, SOLVER]
@@ -625,6 +672,8 @@ with open(csv_path, "w", newline="") as f:
                 [
                     series[name]["mapex"][i],
                     series[name]["maped"][i],
+                    series[name]["nll"][i],
+                    series[name]["nll_per_obs"][i],
                     series[name]["time"][i],
                 ]
             )
@@ -632,5 +681,6 @@ with open(csv_path, "w", newline="") as f:
 
 print("-" * 72)
 print(f"Wrote {plot_path}")
+print(f"Wrote {nll_path}")
 print(f"Wrote {timing_path}")
 print(f"Wrote {csv_path}")
