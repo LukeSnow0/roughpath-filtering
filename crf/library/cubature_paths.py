@@ -23,6 +23,7 @@ References:
 
 from __future__ import annotations
 
+import math
 from itertools import combinations_with_replacement, product
 from typing import List, Literal, Optional, Tuple
 
@@ -251,13 +252,26 @@ def resolve_multidim_method(
 def default_recombined_num_paths(
     noise_dim: int, k: int = 2, *, cap: int = 256, floor: int = 16
 ) -> int:
-    """Dimension-aware default for the post-recombination Wiener path budget."""
+    """Dimension-aware default for the post-recombination Wiener path budget.
+
+    Sized to fit the degree-3 monomial system on the ``k * noise_dim``
+    terminal-increment features used by recombination. A smaller budget forces
+    the matcher to drop moment degree and can collapse to a handful of paths
+    with grossly wrong Brownian second moments (e.g. ``k=3, d=2, n=27`` → 2
+    perfectly correlated paths).
+    """
     d = max(1, int(noise_dim))
     k = max(1, int(k))
     by_order = 3**k
     by_dim = 4 * d * k
     hypercube = 2 ** min(d, 8)
-    return int(min(cap, max(floor, by_order, by_dim, min(hypercube, cap))))
+    # combinations_with_replacement count for monomials up to degree 3 in k*d.
+    feat_dim = k * d
+    by_moments = sum(
+        math.comb(feat_dim + total - 1, total) if feat_dim > 0 else 1
+        for total in range(4)
+    )
+    return int(min(cap, max(floor, by_order, by_dim, by_moments, min(hypercube, cap))))
 
 
 def default_num_paths(
@@ -641,6 +655,10 @@ def precompute_cubature_paths(
             candidate_factor=candidate_factor,
             recombination_degree=recombination_degree,
         )
+        # Paths are constructed as unit-time Wiener cubature (E[ω(1)ω(1)^T] = I)
+        # and resampled onto [0, horizon] in normalized time. Brownian scaling
+        # ω_horizon(t) = √horizon · ω_1(t/horizon) restores E[ω(T)ω(T)^T] = T I.
+        path_values = path_values * np.sqrt(horizon)
         return (
             jnp.asarray(ts, dtype=jnp.float64),
             jnp.asarray(path_values, dtype=jnp.float64),

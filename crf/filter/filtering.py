@@ -19,7 +19,7 @@ References:
 
 from typing import Callable, Tuple
 
-from jax import lax, vmap
+from jax import checkpoint, lax, vmap
 from jax import numpy as jnp
 
 from cuthbertlib.linalg import tria
@@ -80,6 +80,8 @@ def integrate_stratonovich_cde(
     omega_path: Array,
     drift_fn: DriftFn,
     diffusion_fn: DiffusionFn,
+    *,
+    checkpoint_steps: bool = False,
 ) -> Array:
     """Integrate the Stratonovich SDE along a fixed cubature path ``omega(t)``.
 
@@ -89,6 +91,11 @@ def integrate_stratonovich_cde(
         omega_path: Driver path values on ``ts``, shape ``(num_steps + 1, noise_dim)``.
         drift_fn: Drift function ``(t, x) -> (x_dim,)``.
         diffusion_fn: Diffusion function ``(t, x) -> (x_dim, noise_dim)``.
+        checkpoint_steps: If ``True``, rematerialize each RK4 step under reverse-mode
+            AD (``jax.checkpoint``). Because the Wiener driver is a frozen ODE path,
+            this yields an ``O(1)``-memory (in the number of inner steps) adjoint
+            through the Stratonovich CDE, at the cost of recomputing the forward
+            pass during the backward pass.
 
     Returns:
         Terminal state, shape ``(x_dim,)``.
@@ -103,6 +110,9 @@ def integrate_stratonovich_cde(
         t0, t1, od = inputs
         return _rk4_stratonovich_step(x, t0, t1, od, drift_fn, diffusion_fn), None
 
+    if checkpoint_steps:
+        step = checkpoint(step)
+
     x_final, _ = lax.scan(step, x0, (ts[:-1], ts[1:], omega_dot))
     return x_final
 
@@ -113,6 +123,8 @@ def _propagate(
     ts: Array,
     drift_fn: DriftFn,
     diffusion_fn: DiffusionFn,
+    *,
+    checkpoint_steps: bool = False,
 ) -> Array:
     """Propagate every (spatial node, Wiener path) pair to its terminal state.
 
@@ -120,7 +132,14 @@ def _propagate(
     """
 
     def one(node, path):
-        return integrate_stratonovich_cde(node, ts, path, drift_fn, diffusion_fn)
+        return integrate_stratonovich_cde(
+            node,
+            ts,
+            path,
+            drift_fn,
+            diffusion_fn,
+            checkpoint_steps=checkpoint_steps,
+        )
 
     return vmap(vmap(one, in_axes=(None, 0)), in_axes=(0, None))(nodes, path_values)
 
@@ -133,6 +152,8 @@ def predict(
     path_weights: Array,
     drift_fn: DriftFn,
     diffusion_fn: DiffusionFn,
+    *,
+    checkpoint_steps: bool = False,
 ) -> Tuple[Array, Array, Array, Array]:
     """CRF predict: propagate cubature nodes along Wiener paths, collapse to moments.
 
@@ -144,6 +165,8 @@ def predict(
         path_weights: Wiener cubature weights, shape ``(num_paths,)``.
         drift_fn: Drift function ``(t, x) -> (x_dim,)``.
         diffusion_fn: Diffusion function ``(t, x) -> (x_dim, noise_dim)``.
+        checkpoint_steps: Rematerialize each inner RK4 step under reverse-mode AD
+            (see :func:`integrate_stratonovich_cde`).
 
     Returns:
         Tuple ``(predicted_mean, predicted_chol_cov, samples, weights)`` where
@@ -154,7 +177,14 @@ def predict(
     x_dim = mean.shape[0]
     nodes, node_weights = spatial_cubature_nodes(mean, chol_cov)
 
-    terminals = _propagate(nodes, path_values, ts, drift_fn, diffusion_fn)
+    terminals = _propagate(
+        nodes,
+        path_values,
+        ts,
+        drift_fn,
+        diffusion_fn,
+        checkpoint_steps=checkpoint_steps,
+    )
     samples = terminals.reshape(-1, x_dim)
     weights = (node_weights[:, None] * path_weights[None, :]).reshape(-1)
     weights = weights / jnp.sum(weights)

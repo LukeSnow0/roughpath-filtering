@@ -85,6 +85,8 @@ def test_linear_gaussian_1d_regression():
     final_var = float((states.chol_cov[-1] @ states.chol_cov[-1].T)[0, 0])
     final_loglik = float(states.log_normalizing_constant[-1])
 
-    assert final_mean == pytest.approx(-0.08144899, rel=1e-5, abs=1e-5)
-    assert final_var == pytest.approx(0.017155, rel=1e-4, abs=1e-5)
-    assert final_loglik == pytest.approx(-0.0522, rel=1e-3, abs=1e-3)
+    # References recomputed after fixing Wiener-path Brownian scaling
+    # (ω_T = √T · ω_1) in ``precompute_cubature_paths``.
+    assert final_mean == pytest.approx(-0.0257306255, rel=1e-5, abs=1e-5)
+    assert final_var == pytest.approx(0.0082392945, rel=1e-4, abs=1e-5)
+    assert final_loglik == pytest.approx(1.4505350276, rel=1e-3, abs=1e-3)

@@ -59,6 +59,11 @@ def bar_F_schedule(t_min: float, p: MFTSParams) -> float:
     return 300.0
 
 
+def bar_F_schedule_jax(t_min):
+    """Piecewise Nielsen F-bar schedule, JAX-traceable (t in minutes)."""
+    return jnp.where(t_min < 10.0, 100.0, jnp.where(t_min < 20.0, 200.0, 300.0))
+
+
 def make_mfts_dynamics(
     p: MFTSParams,
     *,
@@ -69,7 +74,11 @@ def make_mfts_dynamics(
     F1: float = 5.0,
     F2: float = 5.0,
 ):
-    """Return drift, diffusion L, Qc, observation map, and R for continuous-discrete filters."""
+    """Return drift, diffusion L, Qc, observation map, and R for continuous-discrete filters.
+
+    ``lambda_dist`` / ``sigma_dist`` may be Python floats or JAX scalars (tracers),
+    so the returned drift is differentiable w.r.t. those parameters.
+    """
     alpha = jnp.array(alphas(p))
     beta = jnp.array(betas(p))
     g1, g2 = p.gamma1, p.gamma2

@@ -54,6 +54,7 @@ def build_filter(
     candidate_factor: float = 8.0,
     recombination_degree: int = 3,
     sde_form: Literal["stratonovich", "ito"] = "stratonovich",
+    checkpoint_steps: bool = False,
 ) -> Filter:
     """Builds a Cubature Recursive Filter object.
 
@@ -87,6 +88,10 @@ def build_filter(
         sde_form: Whether ``get_dynamics`` supplies Ito or Stratonovich drift.
             The CRF always integrates in Stratonovich form; Ito drifts are
             corrected internally. Constant diffusion needs no correction.
+        checkpoint_steps: If ``True``, rematerialize each inner RK4 step under
+            reverse-mode AD. Frozen cubature Wiener paths make the predict step a
+            pure ODE, so this enables memory-efficient ODE adjoints through the
+            filter likelihood (see :func:`crf.library.integrate_stratonovich_cde`).
 
     Returns:
         Filter object for the CRF.
@@ -133,6 +138,7 @@ def build_filter(
             ts=ts,
             path_values=path_values,
             path_weights=path_weights,
+            checkpoint_steps=checkpoint_steps,
         ),
         associative=False,
     )
@@ -206,6 +212,7 @@ def filter_combine(
     ts: Array,
     path_values: Array,
     path_weights: Array,
+    checkpoint_steps: bool = False,
 ) -> CRFState:
     """Combine the previous CRF state with the prepared state for the current step.
 
@@ -220,6 +227,7 @@ def filter_combine(
         ts: Integration time grid for one assimilation interval.
         path_values: Wiener cubature paths.
         path_weights: Wiener cubature weights.
+        checkpoint_steps: Rematerialize each inner RK4 step under reverse-mode AD.
 
     Returns:
         Updated CRF state.
@@ -233,6 +241,7 @@ def filter_combine(
         path_weights,
         drift_fn,
         diffusion_fn,
+        checkpoint_steps=checkpoint_steps,
     )
 
     observation_fn, chol_R, y = get_observations(state_2.model_inputs)
