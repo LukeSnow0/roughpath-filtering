@@ -27,7 +27,7 @@ Run:
   python experiments/mfts_test/run_em_lambda.py --only-memory
 
 Outputs under ``experiments/mfts_test/output/``:
-  em_lambda_sensitivity.png, em_lambda_trace.png, em_lambda_adjoint.png,
+  em_lambda_sensitivity.png, em_lambda_trace.png, em_lambda_timing.png,
   em_lambda_memory.png, em_lambda_summary.csv
 """
 
@@ -918,7 +918,7 @@ if not SKIP_ADJOINT_SCALING:
         )
         fig.tight_layout()
         fig.savefig(
-            os.path.join(OUTPUT_DIR, "em_lambda_adjoint.png"), dpi=150, bbox_inches="tight"
+            os.path.join(OUTPUT_DIR, "em_lambda_timing.png"), dpi=150, bbox_inches="tight"
         )
         plt.close()
 
