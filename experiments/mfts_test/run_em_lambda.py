@@ -1,19 +1,19 @@
-"""Filter-EM / MLE for MFTS ``λ``, compared apples-to-apples across filters.
+"""Gradient filter-MLE for MFTS ``λ``, compared apples-to-apples across filters.
 
 Shared setup for CRF / CD-EKF / CD-UKF / CD-EnKF / bootstrap PF:
   same truth, matched F̄ schedule, same ``dt``/``dt0``, ``m0,P0,R``, ``λ₀``,
-  same outer EM budget.
+  same outer MLE budget.
 
 Gradients
 ---------
-* CRF / EKF / UKF — pathwise ``jax.value_and_grad`` (CRF: checkpointed ODE adjoint)
-* EnKF / PF — central finite differences with a **fixed** RNG key (no pathwise
-  ODE adjoint through the stochastic forecast)
+* CRF-AD / EKF / UKF — pathwise ``jax.value_and_grad`` (CRF: checkpointed ODE adjoint)
+* CRF-FD / EnKF / PF — central finite differences (CRF-FD: 2× deterministic forward;
+  EnKF/PF: fixed RNG key)
 
 Panels
 ------
-1. ``L(λ)`` for all five (EnKF/PF: mean ± std over seeds)
-2. EM ``λ̂`` traces (AD vs FD M-steps)
+1. ``L(λ)`` (CRF once; EnKF/PF: mean ± std over seeds)
+2. MLE ``λ̂`` traces (CRF-AD vs CRF-FD vs others)
 3. VJP / FD cost vs series length ``N_obs``
 4. Peak RSS of one grad vs inner RK4 steps (fixed ``Δt``, ``N_obs``):
    CRF ckpt ODE adjoint vs CD-EKF / CD-UKF pathwise VJP
@@ -27,8 +27,8 @@ Run:
   python experiments/mfts_test/run_em_lambda.py --only-memory
 
 Outputs under ``experiments/mfts_test/output/``:
-  em_lambda_sensitivity.png, em_lambda_trace.png, em_lambda_timing.png,
-  em_lambda_memory.png, em_lambda_summary.csv
+  mle_lambda_sensitivity.png, mle_lambda_trace.png, mle_lambda_timing.png,
+  mle_lambda_memory.png, mle_lambda_summary.csv
 """
 
 from __future__ import annotations
@@ -97,7 +97,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # ---------------------------------------------------------------------------
 
 _parser = argparse.ArgumentParser(
-    description="Filter-EM / adjoint sensitivity for MFTS λ (CRF vs EKF/UKF/EnKF/PF)"
+    description="Filter MLE / sensitivity for MFTS λ (CRF vs EKF/UKF/EnKF/PF)"
 )
 _parser.add_argument("--seed", type=int, default=100)
 _parser.add_argument(
@@ -108,7 +108,7 @@ _parser.add_argument("--em-iters", type=int, default=30, dest="em_iters")
 _parser.add_argument("--lambda0", type=float, default=2.0e-3)
 _parser.add_argument(
     "--lr", type=float, default=0.05,
-    help="Step size on log(λ) in the M-step",
+    help="Step size on log(λ) in the MLE update",
 )
 _parser.add_argument("--n-timing", type=int, default=3, dest="n_timing")
 _parser.add_argument(
@@ -125,7 +125,7 @@ _parser.add_argument(
     "--skip-stochastic",
     action="store_true",
     dest="skip_stochastic",
-    help="Skip EnKF/PF (faster; AD methods only)",
+    help="Skip EnKF/PF (faster; keeps CRF-AD / CRF-FD / EKF / UKF)",
 )
 _parser.add_argument(
     "--skip-adjoint-scaling",
@@ -181,15 +181,18 @@ ALPHA_MAX = float(np.log(5.0))
 CRF_NUM_PATHS = default_recombined_num_paths(2, CUBATURE_ORDER)
 
 COLORS = {
+    "CRF-AD": "#6A4C93",
+    "CRF-FD": "#9B5DE5",
     "CD-EKF": "#2E86AB",
     "CD-UKF": "#3DA35D",
     "CD-EnKF": "#F6AE2D",
     "PF": "#F24236",
-    "CRF": "#6A4C93",
+    "CRF": "#6A4C93",  # alias for memory-probe labels
 }
-AD_METHODS = ("CRF", "CD-EKF", "CD-UKF")
+AD_METHODS = ("CRF-AD", "CD-EKF", "CD-UKF")
+FD_METHODS = ("CRF-FD", "CD-EnKF", "PF")
 STOCH_METHODS = ("CD-EnKF", "PF")
-ALL_METHODS = AD_METHODS + STOCH_METHODS
+ALL_METHODS = AD_METHODS + FD_METHODS
 
 
 class StepInputs(NamedTuple):
@@ -313,7 +316,7 @@ def run_memory_scaling() -> list[dict]:
         fontsize=11,
     )
     fig.tight_layout()
-    mem_path = os.path.join(OUTPUT_DIR, "em_lambda_memory.png")
+    mem_path = os.path.join(OUTPUT_DIR, "mle_lambda_memory.png")
     fig.savefig(mem_path, dpi=150, bbox_inches="tight")
     plt.close()
     print(f"Wrote {mem_path}")
@@ -322,7 +325,7 @@ def run_memory_scaling() -> list[dict]:
 
 if ONLY_MEMORY:
     memory_rows = run_memory_scaling()
-    summary_path = os.path.join(OUTPUT_DIR, "em_lambda_summary.csv")
+    summary_path = os.path.join(OUTPUT_DIR, "mle_lambda_summary.csv")
     with open(summary_path, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["section", "key", "value"])
@@ -535,7 +538,7 @@ def fd_value_and_grad_alpha(
 
 
 def ad_value_and_grad(name: str, alpha: jnp.ndarray):
-    if name == "CRF":
+    if name == "CRF-AD":
         return crf_vg(alpha)
     if name == "CD-EKF":
         return ekf_vg(alpha)
@@ -544,7 +547,9 @@ def ad_value_and_grad(name: str, alpha: jnp.ndarray):
     raise KeyError(name)
 
 
-def stoch_ll_fn(name: str, key):
+def fd_ll_fn(name: str, key=None):
+    if name == "CRF-FD":
+        return lambda lam: crf_loglik(lam)
     if name == "CD-EnKF":
         return lambda lam: _enkf_ll_jit(lam, key)
     if name == "PF":
@@ -554,7 +559,7 @@ def stoch_ll_fn(name: str, key):
 
 def loglik_scalar(name: str, lam: float, key=None) -> float:
     lam_j = jnp.asarray(lam, dtype=jnp.float64)
-    if name == "CRF":
+    if name in ("CRF-AD", "CRF-FD", "CRF"):
         return float(crf_loglik(lam_j))
     if name == "CD-EKF":
         return float(ekf_loglik(lam_j))
@@ -598,6 +603,9 @@ for name in AD_METHODS:
     star = float(lam_grid[int(np.argmax(vals))])
     print(f"  {name:8s}  grid-argmax λ≈{star:.4f}  L∈[{min(vals):.1f},{max(vals):.1f}]")
 
+# CRF-FD uses the same filter likelihood as CRF-AD (only the grad estimator differs).
+L_by_method["CRF-FD"] = L_by_method["CRF-AD"]
+
 if not SKIP_STOCHASTIC:
     # Warmup stochastic
     jax.block_until_ready(_enkf_ll_jit(jnp.asarray(0.05), stoch_keys[0]))
@@ -628,9 +636,12 @@ for lam in (1e-3, 0.05, 0.1, 1.0):
     print(f"    λ={lam:6.3f}  AD={g_ad:10.2f}  FD={g_fd:10.2f}")
 
 methods_plot = [m for m in ALL_METHODS if m in L_by_method]
+# Sensitivity: one CRF curve (AD/FD share L); skip duplicate CRF-FD line.
+sens_plot = [m for m in methods_plot if m != "CRF-FD"]
 fig, ax = plt.subplots(figsize=(8, 4.5))
-for name in methods_plot:
-    ax.plot(lam_grid, L_by_method[name], color=COLORS[name], lw=2.0, label=name)
+for name in sens_plot:
+    label = "CRF" if name == "CRF-AD" else name
+    ax.plot(lam_grid, L_by_method[name], color=COLORS[name], lw=2.0, label=label)
     if name in L_stoch_std:
         mu, sd = L_by_method[name], L_stoch_std[name]
         ax.fill_between(lam_grid, mu - sd, mu + sd, color=COLORS[name], alpha=0.2)
@@ -640,25 +651,25 @@ ax.set_xlabel(r"$\lambda$")
 ax.set_ylabel("Filter log-likelihood")
 ax.legend(fontsize=9, ncol=3)
 ax.grid(True, alpha=0.25)
-ax.set_title("Shared-objective sensitivity (matched F̄, same data)")
+ax.set_title(r"Filter $L(\lambda)$ (matched $\bar F$, same data)")
 fig.tight_layout()
-fig.savefig(os.path.join(OUTPUT_DIR, "em_lambda_sensitivity.png"), dpi=150, bbox_inches="tight")
+fig.savefig(os.path.join(OUTPUT_DIR, "mle_lambda_sensitivity.png"), dpi=150, bbox_inches="tight")
 plt.close()
 
-lam_star_crf = float(lam_grid[int(np.argmax(L_by_method["CRF"]))])
+lam_star_crf = float(lam_grid[int(np.argmax(L_by_method["CRF-AD"]))])
 
 
 # ---------------------------------------------------------------------------
-# 2. Filter-EM for every method
+# 2. Gradient filter-MLE for every method
 # ---------------------------------------------------------------------------
 
-print("\n=== Filter-EM / gradient MLE (shared outer loop) ===")
+print("\n=== Gradient filter-MLE (shared outer loop) ===")
 em_traces: dict[str, list[dict]] = {m: [] for m in methods_plot}
 rss_before_em = peak_rss_mb()
 
 for name in methods_plot:
     alpha = jnp.log(jnp.asarray(LAMBDA0, dtype=jnp.float64))
-    # Fixed key for stochastic FD path (reproducible common-RNG EM)
+    # Fixed key for stochastic FD path (reproducible common-RNG MLE)
     if name == "CD-EnKF":
         em_key = key_enkf_em
     elif name == "PF":
@@ -676,11 +687,12 @@ for name in methods_plot:
             mode = "AD"
         else:
             eps = FD_EPS_ALPHA_PF if name == "PF" else FD_EPS_ALPHA
+            clip = None if name == "CRF-FD" else GRAD_CLIP_ALPHA
             L, g_alpha = fd_value_and_grad_alpha(
-                stoch_ll_fn(name, em_key),
+                fd_ll_fn(name, em_key),
                 alpha,
                 eps=eps,
-                clip=GRAD_CLIP_ALPHA,
+                clip=clip,
             )
             jax.block_until_ready((L, g_alpha))
             mode = "FD"
@@ -708,7 +720,7 @@ for name in methods_plot:
     lam_hat = float(jnp.exp(alpha))
     print(f"    λ̂={lam_hat:.5f}  |err|={abs(lam_hat - LAMBDA_TRUE):.5f}")
 
-# Moment M-step reference from CRF filtered means at λ0 (diagnostic)
+# Moment diagnostic from CRF filtered means at λ0
 crf_means = np.asarray(crf_states(jnp.asarray(LAMBDA0, dtype=jnp.float64)).mean)
 times_min = np.arange(crf_means.shape[0]) * (HORIZON_MIN / N_OBS)
 F = crf_means[:, 4:6]
@@ -741,23 +753,23 @@ for name in methods_plot:
         label=name,
     )
 axes[0].axhline(LAMBDA_TRUE, color="k", ls="--", lw=1.2, label=r"$\lambda_{\mathrm{true}}$")
-axes[0].set_xlabel("EM iteration")
+axes[0].set_xlabel("MLE iteration")
 axes[0].set_ylabel(r"$\lambda$")
 axes[0].legend(fontsize=7, ncol=2)
 axes[0].grid(True, alpha=0.25)
 axes[0].set_title(r"Parameter recovery (AD solid, FD dashed)")
 
-axes[1].set_xlabel("EM iteration")
+axes[1].set_xlabel("MLE iteration")
 axes[1].set_ylabel("Filter log-likelihood")
 axes[1].legend(fontsize=8, ncol=3)
 axes[1].grid(True, alpha=0.25)
-axes[1].set_title("E-step objective")
+axes[1].set_title(r"Objective $L(\lambda)$")
 fig.tight_layout()
-fig.savefig(os.path.join(OUTPUT_DIR, "em_lambda_trace.png"), dpi=150, bbox_inches="tight")
+fig.savefig(os.path.join(OUTPUT_DIR, "mle_lambda_trace.png"), dpi=150, bbox_inches="tight")
 plt.close()
 
-lam_final = em_traces["CRF"][-1]["lambda_after"]
-L_final = em_traces["CRF"][-1]["loglik"]
+lam_final = em_traces["CRF-AD"][-1]["lambda_after"]
+L_final = em_traces["CRF-AD"][-1]["loglik"]
 
 
 # ---------------------------------------------------------------------------
@@ -782,33 +794,37 @@ ukf_t = median_time(lambda: ukf_vg(alpha_bench))
 _, g_ekf = ekf_vg(alpha_bench)
 _, g_ukf = ukf_vg(alpha_bench)
 
+crf_fd_t = median_time(
+    lambda: fd_value_and_grad_alpha(fd_ll_fn("CRF-FD"), alpha_bench, eps=FD_EPS_ALPHA)
+)
+
 print(f"  Forward CRF:                  {fwd_t:.4f}s")
-print(f"  CRF VJP (scan AD):            {scan_t:.4f}s  (∂α={float(g_scan):+.4f})")
-print(f"  CRF VJP (checkpoint ODE adj): {ckpt_t:.4f}s  (∂α={float(g_ckpt):+.4f})")
+print(f"  CRF-AD VJP (scan):            {scan_t:.4f}s  (∂α={float(g_scan):+.4f})")
+print(f"  CRF-AD VJP (ckpt):            {ckpt_t:.4f}s  (∂α={float(g_ckpt):+.4f})")
+print(f"  CRF-FD (2× forward):          {crf_fd_t:.4f}s")
 print(f"  CD-EKF VJP:                   {ekf_t:.4f}s  (∂α={float(g_ekf):+.4f})")
 print(f"  CD-UKF VJP:                   {ukf_t:.4f}s  (∂α={float(g_ukf):+.4f})")
 
 enkf_fd_t = pf_fd_t = float("nan")
 if not SKIP_STOCHASTIC:
     enkf_fd_t = median_time(
-        lambda: fd_value_and_grad_alpha(stoch_ll_fn("CD-EnKF", key_enkf_em), alpha_bench)
+        lambda: fd_value_and_grad_alpha(fd_ll_fn("CD-EnKF", key_enkf_em), alpha_bench)
     )
     pf_fd_t = median_time(
-        lambda: fd_value_and_grad_alpha(stoch_ll_fn("PF", key_pf_em), alpha_bench)
+        lambda: fd_value_and_grad_alpha(fd_ll_fn("PF", key_pf_em), alpha_bench)
     )
     print(f"  CD-EnKF FD (2× forward):      {enkf_fd_t:.4f}s")
     print(f"  PF FD (2× forward):           {pf_fd_t:.4f}s")
 print(
-    "  EnKF/PF have no pathwise ODE adjoint through the Brownian forecast; "
-    "FD (fixed key) is the fair gradient baseline."
+    "  CRF-FD uses the same likelihood as CRF-AD; EnKF/PF FD use a fixed RNG key."
 )
 
 adjoint_scale_rows: list[dict] = []
 if not SKIP_ADJOINT_SCALING:
     # Scale with series length at a fixed practical integrator setting — closer
-    # to EM cost than refining RK4 within a fixed interval (all methods ∝ steps).
+    # to MLE cost than refining RK4 within a fixed interval (all methods ∝ steps).
     print("  Grad cost vs N_obs (fixed Δt, dt0)...")
-    dt_s = dt  # same assimilation interval as the main EM run
+    dt_s = dt  # same assimilation interval as the main MLE run
     dt0_s = dt0
     n_sub = max(2, int(round(dt_s / dt0_s)))
     n_obs_grid = (20, 40, 60, 80, 120)
@@ -853,11 +869,21 @@ if not SKIP_ADJOINT_SCALING:
         t_ekf = median_time(lambda: vg_ekf_s(alpha_bench), n=max(2, N_TIMING))
         t_ukf = median_time(lambda: vg_ukf_s(alpha_bench), n=max(2, N_TIMING))
 
+        def crf_ll_fixed(lam, _n=n_obs_s, _fc=filt_c, _rc=run_c):
+            st = _rc(_fc, model_inputs_for(lam, _n))
+            return st.log_normalizing_constant[-1]
+
+        t_crf_fd = median_time(
+            lambda: fd_value_and_grad_alpha(crf_ll_fixed, alpha_bench, eps=FD_EPS_ALPHA),
+            n=max(2, N_TIMING),
+        )
+
         row = dict(
             n_obs=n_obs_s,
             n_sub=n_sub,
             horizon_min=horizon_min_s,
             t_crf_ckpt=t_crf_c,
+            t_crf_fd=t_crf_fd,
             t_ekf=t_ekf,
             t_ukf=t_ukf,
         )
@@ -886,17 +912,20 @@ if not SKIP_ADJOINT_SCALING:
         adjoint_scale_rows.append(row)
         extra = ""
         if not SKIP_STOCHASTIC:
-            extra = f"  |  EnKF-FD {row['t_enkf_fd']:.3f}s  PF-FD {row['t_pf_fd']:.3f}s"
+            extra = f"  EnKF-FD {row['t_enkf_fd']:.3f}s  PF-FD {row['t_pf_fd']:.3f}s"
         print(
             f"    N_obs={n_obs_s:3d}  (T={horizon_min_s:.1f} min):  "
-            f"CRF-ckpt {t_crf_c:.3f}s  EKF {t_ekf:.3f}s  UKF {t_ukf:.3f}s{extra}"
+            f"CRF-AD {t_crf_c:.3f}s  CRF-FD {t_crf_fd:.3f}s  "
+            f"EKF {t_ekf:.3f}s  UKF {t_ukf:.3f}s{extra}"
         )
 
     if adjoint_scale_rows:
-        fig, ax = plt.subplots(figsize=(7.2, 4.4))
+        fig, ax = plt.subplots(figsize=(7.6, 4.4))
         ns = [r["n_obs"] for r in adjoint_scale_rows]
         ax.plot(ns, [r["t_crf_ckpt"] for r in adjoint_scale_rows], "s-",
-                color=COLORS["CRF"], label="CRF ckpt ODE adjoint")
+                color=COLORS["CRF-AD"], label="CRF-AD (ckpt VJP)")
+        ax.plot(ns, [r["t_crf_fd"] for r in adjoint_scale_rows], "D--",
+                color=COLORS["CRF-FD"], label="CRF-FD (2×fwd)")
         ax.plot(ns, [r["t_ekf"] for r in adjoint_scale_rows], "^-",
                 color=COLORS["CD-EKF"], label="CD-EKF VJP")
         ax.plot(ns, [r["t_ukf"] for r in adjoint_scale_rows], "v-",
@@ -909,16 +938,15 @@ if not SKIP_ADJOINT_SCALING:
         ax.set_xlabel(r"Number of observations $N_{\mathrm{obs}}$")
         ax.set_ylabel("Median grad wall time [s]")
         ax.set_yscale("log")
-        ax.legend(fontsize=8, ncol=2)
+        ax.legend(fontsize=7, ncol=2)
         ax.grid(True, alpha=0.25, which="both")
         ax.set_title(
             f"Grad cost vs series length "
-            f"(Δt={dt_s:g}s, dt0={dt0_s:g}s, {n_sub} RK4 steps/Δt)\n"
-            "AD for CRF/EKF/UKF; FD for EnKF/PF"
+            f"(Δt={dt_s:g}s, dt0={dt0_s:g}s, {n_sub} RK4 steps/Δt)"
         )
         fig.tight_layout()
         fig.savefig(
-            os.path.join(OUTPUT_DIR, "em_lambda_timing.png"), dpi=150, bbox_inches="tight"
+            os.path.join(OUTPUT_DIR, "mle_lambda_timing.png"), dpi=150, bbox_inches="tight"
         )
         plt.close()
 
@@ -936,7 +964,7 @@ if not SKIP_MEMORY_SCALING:
 # Summary CSV
 # ---------------------------------------------------------------------------
 
-summary_path = os.path.join(OUTPUT_DIR, "em_lambda_summary.csv")
+summary_path = os.path.join(OUTPUT_DIR, "mle_lambda_summary.csv")
 with open(summary_path, "w", newline="") as f:
     w = csv.writer(f)
     w.writerow(["section", "key", "value"])
@@ -955,20 +983,21 @@ with open(summary_path, "w", newline="") as f:
     w.writerow(["timing", "crf_forward_s", fwd_t])
     w.writerow(["timing", "crf_vjp_scan_s", scan_t])
     w.writerow(["timing", "crf_vjp_ckpt_s", ckpt_t])
+    w.writerow(["timing", "crf_fd_s", crf_fd_t])
     w.writerow(["timing", "ekf_vjp_s", ekf_t])
     w.writerow(["timing", "ukf_vjp_s", ukf_t])
     w.writerow(["timing", "enkf_fd_s", enkf_fd_t])
     w.writerow(["timing", "pf_fd_s", pf_fd_t])
-    w.writerow(["timing", "rss_before_em_mib", rss_before_em])
+    w.writerow(["timing", "rss_before_mle_mib", rss_before_em])
     w.writerow(["timing", "rss_peak_mib", peak_rss_mb()])
     for name, rows in em_traces.items():
         hat = rows[-1]["lambda_after"]
-        w.writerow(["em", f"{name}_lambda_hat", hat])
-        w.writerow(["em", f"{name}_abs_err", abs(hat - LAMBDA_TRUE)])
-        w.writerow(["em", f"{name}_mode", rows[0]["mode"]])
+        w.writerow(["mle", f"{name}_lambda_hat", hat])
+        w.writerow(["mle", f"{name}_abs_err", abs(hat - LAMBDA_TRUE)])
+        w.writerow(["mle", f"{name}_mode", rows[0]["mode"]])
         for r in rows:
-            w.writerow(["em", f"{name}_iter_{r['iter']}_lambda", r["lambda_"]])
-            w.writerow(["em", f"{name}_iter_{r['iter']}_loglik", r["loglik"]])
+            w.writerow(["mle", f"{name}_iter_{r['iter']}_lambda", r["lambda_"]])
+            w.writerow(["mle", f"{name}_iter_{r['iter']}_loglik", r["loglik"]])
     for name, arr in L_by_method.items():
         for lam, L in zip(lam_grid, arr):
             w.writerow(["sensitivity", f"{name}_lam_{lam:.6g}", L])
