@@ -98,9 +98,17 @@ _parser.add_argument(
 _parser.add_argument(
     "--cubature-order",
     type=int,
-    default=3,
+    default=2,
     dest="cubature_order",
-    help="CRF Lyons macro-segment count k",
+    help="CRF Lyons macro-segment count k (default 2; recombined)",
+)
+_parser.add_argument(
+    "--num-paths",
+    type=int,
+    default=None,
+    dest="num_paths",
+    help="Post-recombination Wiener path budget (default: "
+    "default_recombined_num_paths(2, k))",
 )
 _parser.add_argument(
     "--solver",
@@ -157,7 +165,13 @@ SIGMA_UKF = 1.0
 
 ENKF_PARTICLES = 250
 PF_PARTICLES = 1000
-CRF_NUM_PATHS = default_recombined_num_paths(2, CUBATURE_ORDER)
+# Force recombined KLV (auto would pick product for small k, e.g. k=2 → 81 paths).
+CRF_NUM_PATHS = (
+    int(_args.num_paths)
+    if _args.num_paths is not None
+    else default_recombined_num_paths(2, CUBATURE_ORDER)
+)
+CRF_MULTIDIM_PATHS = "recombined"
 
 F1, F2 = 5.0, 5.0
 
@@ -386,6 +400,7 @@ def run_filters_at_interval(
         integration_dt=dt0,
         cubature_order=CUBATURE_ORDER,
         num_paths=CRF_NUM_PATHS,
+        multidim_paths=CRF_MULTIDIM_PATHS,
     )
     jitted_crf = jit(run_filter, static_argnames=["filter_obj"])
     crf_states, times["CRF"] = time_call(lambda: jitted_crf(crf, model_inputs))
@@ -509,6 +524,10 @@ series = {
 }
 
 print(f"Horizon={HORIZON_MIN:g} min | solver={SOLVER} | seed={SEED}")
+print(
+    f"CRF: multidim={CRF_MULTIDIM_PATHS} | k={CUBATURE_ORDER} | "
+    f"num_paths budget={CRF_NUM_PATHS}"
+)
 print(f"Requested Delta_t [min]: {DELTA_T_MIN_REQ}")
 print(f"Timing: median of {N_TIMING} runs after JIT warmup")
 print("-" * 72)

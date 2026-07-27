@@ -14,6 +14,10 @@ Run:
   python experiments/l63_test/run_rmse_vs_interval.py
   python experiments/l63_test/run_rmse_vs_interval.py --solver rk4
   python experiments/l63_test/run_rmse_vs_interval.py --deltas 0.05,0.1,0.35,0.7,1.4,3.5
+  python experiments/l63_test/run_rmse_vs_interval.py --crf-paths 2,84 --lv-degrees 3,5
+
+Compares library recombined KLV (1D-product expand + RMP) against explicit
+multi-D Lyons–Victoir paths from ``lyons_victoir_paths.py``.
 
 Outputs:
   ``experiments/l63_test/output/rmse_vs_interval.png``
@@ -62,6 +66,9 @@ from cd_dynamax_mirror.filters import (
 )
 from cuthbert import filter as run_filter
 from crf import build_filter
+from crf.library import default_recombined_num_paths
+from lyons_victoir_paths import describe as lv_describe
+from lyons_victoir_paths import precompute_lv_paths
 
 OUTPUT_DIR = os.path.join(HERE, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -78,6 +85,30 @@ _parser.add_argument(
     type=int,
     default=0,
     help="RNG seed for truth simulation and stochastic filters",
+)
+_parser.add_argument(
+    "--cubature-order",
+    type=int,
+    default=2,
+    dest="cubature_order",
+    help="CRF Lyons macro-segment count k for recombined KLV (default 2)",
+)
+_parser.add_argument(
+    "--crf-paths",
+    type=str,
+    default="2,84",
+    dest="crf_paths",
+    help="Comma-separated recombined path budgets (default 2,84). "
+    "Empty string skips recombined CRF. "
+    "Use 'default' to insert default_recombined_num_paths(noise_dim, k).",
+)
+_parser.add_argument(
+    "--lv-degrees",
+    type=str,
+    default="3,5",
+    dest="lv_degrees",
+    help="Comma-separated explicit multi-D Lyons–Victoir degrees m "
+    "(default 3,5). Empty string skips LV CRF.",
 )
 _parser.add_argument(
     "--solver",
@@ -116,6 +147,7 @@ _args = _parser.parse_args()
 
 SEED = _args.seed
 SOLVER = _args.solver
+CUBATURE_ORDER = _args.cubature_order
 DELTA_T_REQ = [float(x) for x in _args.deltas.split(",") if x.strip()]
 EVAL_DT = float(_args.eval_dt)
 HORIZON = float(_args.horizon)
@@ -139,18 +171,63 @@ noise_dim = x_dim
 
 ENKF_PARTICLES = 50
 PF_PARTICLES = 200
-CRF_CUBATURE_ORDER = 2
-CRF_NUM_PATHS = 18
+CRF_MULTIDIM_PATHS = "recombined"
 SPINUP_STEPS = 35_000  # ~1000 assimilation intervals of length 0.35
 
-FILTER_NAMES = ("CD-EKF", "CD-UKF", "CD-EnKF", "PF", "CRF")
+_DEFAULT_CRF_PATHS = default_recombined_num_paths(noise_dim, CUBATURE_ORDER)
+CRF_PATH_BUDGETS: list[int] = []
+for _tok in _args.crf_paths.split(","):
+    _tok = _tok.strip()
+    if not _tok:
+        continue
+    if _tok.lower() == "default":
+        CRF_PATH_BUDGETS.append(_DEFAULT_CRF_PATHS)
+    else:
+        CRF_PATH_BUDGETS.append(int(_tok))
+_seen_paths: set[int] = set()
+CRF_PATH_BUDGETS = [
+    n for n in CRF_PATH_BUDGETS if not (n in _seen_paths or _seen_paths.add(n))
+]
+
+LV_DEGREES: list[int] = []
+for _tok in _args.lv_degrees.split(","):
+    _tok = _tok.strip()
+    if not _tok:
+        continue
+    m = int(_tok)
+    if m not in (3, 5):
+        raise ValueError(f"--lv-degrees entries must be 3 or 5, got {m}")
+    LV_DEGREES.append(m)
+_seen_lv: set[int] = set()
+LV_DEGREES = [m for m in LV_DEGREES if not (m in _seen_lv or _seen_lv.add(m))]
+
+
+def rec_label(n_paths: int) -> str:
+    return f"CRF-rec-P{n_paths}"
+
+
+def lv_label(m: int) -> str:
+    return f"CRF-LV-m{m}"
+
+
+BASE_FILTER_NAMES = ("CD-EKF", "CD-UKF", "CD-EnKF", "PF")
+REC_FILTER_NAMES = tuple(rec_label(n) for n in CRF_PATH_BUDGETS)
+LV_FILTER_NAMES = tuple(lv_label(m) for m in LV_DEGREES)
+FILTER_NAMES = BASE_FILTER_NAMES + REC_FILTER_NAMES + LV_FILTER_NAMES
+
+# Purple gradient: recombined path budgets. Teal/cyan: explicit multi-D LV.
+_CRF_PURPLES = ("#C4B0E0", "#9B7EBD", "#7A5CA3", "#6A4C93", "#4A2F6E", "#2F1A4A")
+_LV_COLORS = {3: "#0D9488", 5: "#134E4A"}
 COLORS = {
     "CD-EKF": "#2E86AB",
     "CD-UKF": "#3DA35D",
     "CD-EnKF": "#F6AE2D",
     "PF": "#F24236",
-    "CRF": "#6A4C93",
 }
+for _i, _name in enumerate(REC_FILTER_NAMES):
+    COLORS[_name] = _CRF_PURPLES[min(_i, len(_CRF_PURPLES) - 1)]
+for _m, _name in zip(LV_DEGREES, LV_FILTER_NAMES):
+    COLORS[_name] = _LV_COLORS[_m]
 
 
 def lorenz_drift(x):
@@ -364,23 +441,54 @@ def run_filters_at_interval(
     assert ys.shape[0] == n_obs
     model_inputs = jnp.arange(n_obs + 1)
     times: dict[str, float] = {}
+    estimates_obs: dict[str, np.ndarray] = {}
 
-    crf = build_filter(
-        get_init_params=lambda mi: (m0, chol_P0),
-        get_dynamics=lambda mi: (
-            lambda t, x: lorenz_drift(x),
-            lambda t, x: diff_std * jnp.eye(x_dim),
-        ),
-        get_observations=lambda mi: (lambda x: H @ x + d_obs, chol_R, ys[mi - 1]),
-        noise_dim=noise_dim,
-        dt=dt,
-        integration_dt=dt0,
-        cubature_order=CRF_CUBATURE_ORDER,
-        num_paths=CRF_NUM_PATHS,
-    )
-    jitted_crf = jit(run_filter, static_argnames=["filter_obj"])
-    crf_states, times["CRF"] = time_call(lambda: jitted_crf(crf, model_inputs))
-    estimates_obs = {"CRF": stack_estimates(m0, crf_states.mean[1:])}
+    def _run_crf(name: str, **build_kwargs):
+        crf = build_filter(
+            get_init_params=lambda mi: (m0, chol_P0),
+            get_dynamics=lambda mi: (
+                lambda t, x: lorenz_drift(x),
+                lambda t, x: diff_std * jnp.eye(x_dim),
+            ),
+            get_observations=lambda mi: (
+                lambda x: H @ x + d_obs,
+                chol_R,
+                ys[mi - 1],
+            ),
+            noise_dim=noise_dim,
+            dt=dt,
+            integration_dt=dt0,
+            **build_kwargs,
+        )
+        jitted_crf = jit(run_filter, static_argnames=["filter_obj"])
+        crf_states, times[name] = time_call(
+            lambda f=jitted_crf, filt=crf: f(filt, model_inputs)
+        )
+        estimates_obs[name] = stack_estimates(m0, crf_states.mean[1:])
+
+    for n_paths in CRF_PATH_BUDGETS:
+        _run_crf(
+            rec_label(n_paths),
+            cubature_order=CUBATURE_ORDER,
+            num_paths=n_paths,
+            multidim_paths=CRF_MULTIDIM_PATHS,
+        )
+
+    for m in LV_DEGREES:
+        ts_lv, pv_lv, pw_lv = precompute_lv_paths(
+            horizon=dt,
+            noise_dim=noise_dim,
+            integration_dt=dt0,
+            lyons_degree=m,  # type: ignore[arg-type]
+        )
+        _run_crf(
+            lv_label(m),
+            wiener_paths=(
+                jnp.asarray(ts_lv),
+                jnp.asarray(pv_lv),
+                jnp.asarray(pw_lv),
+            ),
+        )
 
     ekf_jit = jit(
         lambda: run_cd_ekf(
@@ -492,6 +600,11 @@ series = {
 }
 
 print(f"Horizon={HORIZON:g} | solver={SOLVER} | seed={SEED}")
+print(
+    f"CRF recombined: k={CUBATURE_ORDER} | path budgets={CRF_PATH_BUDGETS} "
+    f"(moment-safe default={_DEFAULT_CRF_PATHS})"
+)
+print(f"CRF LV multi-D: degrees={LV_DEGREES} | {lv_describe(noise_dim)}")
 print(f"Requested Delta_t: {DELTA_T_REQ}")
 print(f"Timing: median of {N_TIMING} runs after JIT warmup")
 print("-" * 78)

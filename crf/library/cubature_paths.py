@@ -10,10 +10,12 @@ JAX filtering kernels in crf.filtering.
 
 Two multidimensional constructions are provided:
 
-- ``"product"``: tensor product of degree-3 Lyons / Kusuoka-Lyons-Victoir 1D
-  cubature paths. Exact to degree 3 but grows as (3^k)^d.
-- ``"recombined"``: a large candidate pool reduced by moment-matching (RMP /
-  recombination) to a sparse, low-cardinality measure with the same moments.
+- ``"product"``: tensor product of Lyons–Victoir 1D cubature paths. Default is
+  the explicit **degree m = 5** formula (3 paths / segment); ``lyons_degree=3``
+  selects the explicit degree-3 two-path formula. Grows as ``(b^k)^d`` with
+  ``b = 3`` (m=5) or ``b = 2`` (m=3).
+- ``"recombined"``: recursive KLV expansion (always the m=5 3-branch) reduced by
+  moment-matching (RMP) to a sparse measure.
 
 References:
     Lyons & Victoir (2004), *Cubature on Wiener space*.
@@ -56,7 +58,15 @@ _RECOMBINE_BUDGET_CAP = 4096
 
 
 # ---------------------------------------------------------------------------
-# Degree-3 Lyons 1D cubature
+# Lyons–Victoir 1D cubature paths (Proc. R. Soc. A 2004)
+#
+# The three-path formula with weights (1/6, 2/3, 1/6) and the √22 piecewise
+# linear drivers is the explicit **degree m = 5** construction.  The library
+# historically labelled it "degree-3" (confusing the branch count with m);
+# callers should treat it as m = 5.
+#
+# Degree m = 3 is the two-path straight-line formula ω±(t) = ±t on [0, 1]
+# with equal weights 1/2 (Gaussian cubature nodes ±1, lifted to paths).
 # ---------------------------------------------------------------------------
 
 
@@ -93,7 +103,11 @@ def build_cubature_paths_1d(
     steps_per_unit: int = 200,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     
-    """Build degree-3 Wiener-space cubature paths on [0, 1] for a scalar driver.
+    """Build Lyons–Victoir **degree m = 5** Wiener-space cubature paths on [0, 1].
+
+    The base (k = 1) support has three paths with weights ``(1/6, 2/3, 1/6)``.
+    Macro-segment count ``k`` composes the formula, giving ``3^k`` paths that
+    remain degree-5 cubature on each scaled timeframe.
 
     Args:
         k: Number of macro segments.
@@ -161,6 +175,72 @@ def build_cubature_paths_1d(
     return p, w, t_native
 
 
+def build_cubature_paths_1d_m3(
+    k: int = 3,
+    gamma: float = 0.6,
+    steps_per_unit: int = 200,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Build Lyons–Victoir **degree m = 3** Wiener-space cubature paths on [0, 1].
+
+    Base (k = 1) support: two straight-line paths ``ω±(t) = ±t`` with weights
+    ``1/2`` (Gaussian nodes ±1 lifted to paths). Composing ``k`` macro segments
+    yields ``2^k`` paths that remain degree-3 cubature on each scaled timeframe.
+    """
+    t_d = np.array(
+        [1.0 - (1.0 - i / k) ** gamma for i in range(k + 1)], dtype=np.float64
+    )
+    p = np.zeros((2, 0), dtype=np.float64)
+    w = np.zeros(2, dtype=np.float64)
+    t_native = np.zeros(0, dtype=np.float64)
+    dtt = 0
+
+    for segment in range(k):
+        dt = t_d[segment + 1] - t_d[segment]
+        dtn = max(2, int(np.ceil(dt * steps_per_unit)))
+        if segment == 0:
+            x_loc = np.linspace(0.0, dt, dtn)
+            # ω±(s) = ±s on [0, 1] scaled to segment length dt → ±sqrt(dt)*(x/dt)*sqrt(dt)
+            # wait: on [0,1], ω±(t)=±t has ω(1)=±1. For time dt, ω_dt(t)=√dt · ω(t/dt)
+            # so ω_dt(t) = ±√dt · (t/dt) = ± t/√dt ... terminal = ±√dt. Correct for Var=dt.
+            s = x_loc / dt  # in [0, 1]
+            p = np.stack(
+                [
+                    np.sqrt(dt) * s,
+                    -np.sqrt(dt) * s,
+                ],
+                axis=0,
+            )
+            w[:] = np.array([0.5, 0.5], dtype=np.float64)
+            t_native = np.linspace(0.0, dt, dtn)
+            dtt = dtn
+        else:
+            x_loc = np.linspace(dt / dtn, dt, dtn)
+            s = x_loc / dt
+            q = p
+            p = np.empty((q.shape[0] * 2, q.shape[1] + dtn), dtype=np.float64)
+            w_old = w
+            w = np.empty(q.shape[0] * 2, dtype=np.float64)
+
+            for n in range(p.shape[0]):
+                parent = n // 2
+                if n % 2 == 0:
+                    p[n, : q.shape[1]] = q[parent]
+                else:
+                    p[n, : q.shape[1]] = p[n - 1, : q.shape[1]]
+
+                x0 = p[n, dtt - 1]
+                sign = 1.0 if n % 2 == 0 else -1.0
+                p[n, dtt:] = x0 + sign * np.sqrt(dt) * s
+                w[n] = w_old[parent] * 0.5
+
+            t_native = np.concatenate(
+                [t_native, t_native[-1] + np.linspace(dt / dtn, dt, dtn)]
+            )
+            dtt += dtn
+
+    return p, w, t_native
+
+
 def _resample_paths_1d(
         paths: np.ndarray, t_native: np.ndarray, t_target: np.ndarray
 ) -> np.ndarray:
@@ -177,9 +257,20 @@ def build_product_lyons_paths(
     noise_dim: int,
     k: int = 3,
     gamma: float = 0.6,
+    lyons_degree: int = 5,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Tensor product of 1D Lyons paths; ``P = (3^k)^d`` paths."""
-    paths_1d, weights_1d, t_native = build_cubature_paths_1d(k=k, gamma=gamma)
+    """Tensor product of 1D Lyons–Victoir paths.
+
+    ``lyons_degree=5`` (default): ``P = (3^k)^d`` from the explicit m=5 formula.
+    ``lyons_degree=3``: ``P = (2^k)^d`` from the explicit m=3 straight-line formula.
+    """
+    lyons_degree = int(lyons_degree)
+    if lyons_degree == 5:
+        paths_1d, weights_1d, t_native = build_cubature_paths_1d(k=k, gamma=gamma)
+    elif lyons_degree == 3:
+        paths_1d, weights_1d, t_native = build_cubature_paths_1d_m3(k=k, gamma=gamma)
+    else:
+        raise ValueError("lyons_degree must be 3 or 5 (Lyons–Victoir explicit formulae)")
     ts = np.asarray(ts, dtype=np.float64)
     t_target = (ts - ts[0]) / max(ts[-1] - ts[0], 1e-15)
     paths_1d = _resample_paths_1d(paths_1d, t_native, t_target)
@@ -208,11 +299,12 @@ def build_product_lyons_paths(
 # ---------------------------------------------------------------------------
 
 
-def product_path_count(noise_dim: int, k: int) -> int:
-    """Number of paths in the tensor-product Lyons construction ``(3^k)^d``."""
+def product_path_count(noise_dim: int, k: int, lyons_degree: int = 5) -> int:
+    """Number of paths in the tensor-product Lyons construction."""
     d = max(1, int(noise_dim))
     k = max(1, int(k))
-    return 3**k if d == 1 else 3 ** (k * d)
+    base = 3 if int(lyons_degree) == 5 else 2
+    return base**k if d == 1 else base ** (k * d)
 
 
 def select_multidim_paths(
@@ -555,6 +647,7 @@ def build_cubature_driver(
     multidim_method: MultidimMethodInput = "product",
     candidate_factor: float = 8.0,
     recombination_degree: int = 3,
+    lyons_degree: int = 5,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Build Wiener cubature driver paths ``omega(t)`` and weights on grid ``ts``.
 
@@ -566,23 +659,40 @@ def build_cubature_driver(
         gamma: Macro-segment time-grid concentration exponent.
         multidim_method: ``"product"`` | ``"recombined"`` | ``"auto"``.
         candidate_factor: Candidate-pool scaling for recombination.
-        recombination_degree: Target moment degree for recombination.
+        recombination_degree: Target moment degree for recombination (only for
+            ``"recombined"``; not the Lyons–Victoir degree ``m``).
+        lyons_degree: Explicit Lyons–Victoir degree ``m ∈ {3, 5}``. Default
+            ``5`` is the three-path 1D construction used throughout this repo.
+            Degree ``3`` uses the two-path straight-line formula (product only).
 
     Returns:
         Tuple ``(path_values, weights)`` with ``path_values`` of shape
         ``(P, len(ts), noise_dim)`` and ``weights`` of shape ``(P,)``.
     """
     ts = np.asarray(ts, dtype=np.float64)
-    multidim_method = resolve_multidim_method(multidim_method, noise_dim, k)
+    lyons_degree = int(lyons_degree)
+    if lyons_degree not in (3, 5):
+        raise ValueError("lyons_degree must be 3 or 5")
+
+    # Explicit m=3 formula is product-only (recombined expands with the m=5 3-branch).
+    if lyons_degree == 3:
+        multidim_method = "product"
+    else:
+        multidim_method = resolve_multidim_method(multidim_method, noise_dim, k)
 
     if noise_dim == 1:
-        paths_native, weights, t_native = build_cubature_paths_1d(k=k, gamma=gamma)
+        if lyons_degree == 5:
+            paths_native, weights, t_native = build_cubature_paths_1d(k=k, gamma=gamma)
+        else:
+            paths_native, weights, t_native = build_cubature_paths_1d_m3(k=k, gamma=gamma)
         t_target = (ts - ts[0]) / max(ts[-1] - ts[0], 1e-15)
         paths = _resample_paths_1d(paths_native, t_native, t_target)
         return paths[:, :, np.newaxis], weights
 
     if multidim_method == "product":
-        return build_product_lyons_paths(ts - ts[0], noise_dim, k=k, gamma=gamma)
+        return build_product_lyons_paths(
+            ts - ts[0], noise_dim, k=k, gamma=gamma, lyons_degree=lyons_degree
+        )
 
     if multidim_method == "recombined":
         return build_recombined_cubature_paths(
@@ -596,13 +706,7 @@ def build_cubature_driver(
             seed=seed,
         )
 
-    # rademacher
-   # if num_paths is None:
-   #     num_paths = default_num_paths(noise_dim, k, multidim_method="rademacher")
-   # paths = build_multidim_cubature_paths(
-   #     ts - ts[0], num_paths, noise_dim, k=k, gamma=gamma, seed=seed
-   # )
-    return paths, np.full(num_paths, 1.0 / num_paths)
+    raise ValueError(f"Unknown multidim_method {multidim_method!r}")
 
 
 
@@ -617,6 +721,7 @@ def precompute_cubature_paths(
     seed: int = 0,
     candidate_factor: float = 8.0,
     recombination_degree: int = 3,
+    lyons_degree: int = 5,
 ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         """Precompute the integration grid, cubature paths, and weights as JAX arrays.
 
@@ -633,6 +738,7 @@ def precompute_cubature_paths(
             multidim_method: ``"product"`` | ``"recombined"`` | ``"auto"``.
             candidate_factor: Candidate-pool scaling for recombination.
             recombination_degree: Target moment degree for recombination.
+            lyons_degree: Explicit Lyons–Victoir degree ``m ∈ {3, 5}`` (default 5).
 
         Returns:
             Tuple ``(ts, path_values, path_weights)`` as ``float64`` JAX arrays, with
@@ -641,9 +747,6 @@ def precompute_cubature_paths(
         horizon = max(float(horizon), 1e-15)
         num_steps = max(2, int(np.ceil(horizon / integration_dt)))
         ts = np.linspace(0.0, horizon, num_steps + 1)
-        multidim_method = resolve_multidim_method(
-            multidim_method, noise_dim, cubature_order
-        )
         path_values, path_weights = build_cubature_driver(
             ts,
             noise_dim,
@@ -654,6 +757,7 @@ def precompute_cubature_paths(
             multidim_method=multidim_method,
             candidate_factor=candidate_factor,
             recombination_degree=recombination_degree,
+            lyons_degree=lyons_degree,
         )
         # Paths are constructed as unit-time Wiener cubature (E[ω(1)ω(1)^T] = I)
         # and resampled onto [0, horizon] in normalized time. Brownian scaling

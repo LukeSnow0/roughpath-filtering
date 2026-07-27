@@ -1,0 +1,10 @@
+kind,method,seconds,solver,n_obs,n_timing,mle_iters
+per_eval,CRF fwd,0.057938457997806836,rk4,600,3,
+per_eval,CRF-AD,0.3092869999964023,rk4,600,3,
+per_eval,EKF fwd,0.009478332998696715,rk4,600,3,
+per_eval,EKF-AD,0.09531804200378247,rk4,600,3,
+per_eval,EnKF fwd (200p),0.12658666700008325,rk4,600,3,
+per_eval,EnKF-AD,0.28746291599964024,rk4,600,3,
+mle_wall,CRF-AD,12.559810416998516,rk4,600,,40
+mle_wall,EKF-AD,3.575297875002434,rk4,600,,40
+mle_wall,EnKF-AD,11.53046304199961,rk4,600,,40

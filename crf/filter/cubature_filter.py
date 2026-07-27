@@ -12,7 +12,7 @@ References:
 """
 
 from functools import partial
-from typing import Literal, NamedTuple, Optional
+from typing import Literal, NamedTuple, Optional, Tuple
 
 from jax import eval_shape, tree
 from jax import numpy as jnp
@@ -55,6 +55,8 @@ def build_filter(
     recombination_degree: int = 3,
     sde_form: Literal["stratonovich", "ito"] = "stratonovich",
     checkpoint_steps: bool = False,
+    lyons_degree: int = 5,
+    wiener_paths: Optional[Tuple[Array, Array, Array]] = None,
 ) -> Filter:
     """Builds a Cubature Recursive Filter object.
 
@@ -80,11 +82,11 @@ def build_filter(
         multidim_paths: Multidimensional path construction:
             ``"auto"`` (default: ``product`` when ``(3^k)^d <= 256``, else
             ``recombined``),
-            ``"product"`` (tensor-product Lyons, exact to degree 3), or
+            ``"product"`` (tensor-product Lyons), or
             ``"recombined"`` (moment-matched sparse measure).
         seed: Seed for Rademacher candidate generation.
         candidate_factor: Candidate-pool scaling for recombination.
-        recombination_degree: Target moment degree for recombination.
+        recombination_degree: Target moment degree for recombination (not Lyons ``m``).
         sde_form: Whether ``get_dynamics`` supplies Ito or Stratonovich drift.
             The CRF always integrates in Stratonovich form; Ito drifts are
             corrected internally. Constant diffusion needs no correction.
@@ -92,6 +94,11 @@ def build_filter(
             reverse-mode AD. Frozen cubature Wiener paths make the predict step a
             pure ODE, so this enables memory-efficient ODE adjoints through the
             filter likelihood (see :func:`crf.library.integrate_stratonovich_cde`).
+        lyons_degree: Explicit Lyons–Victoir degree ``m ∈ {3, 5}``. Default
+            ``5`` matches the repo's standard three-path 1D formula.
+        wiener_paths: Optional precomputed ``(ts, path_values, path_weights)``
+            arrays. When set, library cubature construction is skipped (used for
+            experiment-side path builders such as explicit multi-D LV).
 
     Returns:
         Filter object for the CRF.
@@ -110,23 +117,30 @@ def build_filter(
     if sde_form == "ito":
         get_dynamics = wrap_ito_dynamics(get_dynamics)
 
-    if multidim_paths not in ("auto", "product", "recombined"):
-        raise ValueError(
-            'multidim_paths must be "auto", "product", or "recombined".'
-        )
+    if wiener_paths is not None:
+        ts, path_values, path_weights = wiener_paths
+        ts = jnp.asarray(ts)
+        path_values = jnp.asarray(path_values)
+        path_weights = jnp.asarray(path_weights)
+    else:
+        if multidim_paths not in ("auto", "product", "recombined"):
+            raise ValueError(
+                'multidim_paths must be "auto", "product", or "recombined".'
+            )
 
-    ts, path_values, path_weights = precompute_cubature_paths(
-        horizon=dt,
-        noise_dim=noise_dim,
-        integration_dt=integration_dt,
-        cubature_order=cubature_order,
-        cubature_gamma=cubature_gamma,
-        num_paths=num_paths,
-        multidim_method=multidim_paths,
-        seed=seed,
-        candidate_factor=candidate_factor,
-        recombination_degree=recombination_degree,
-    )
+        ts, path_values, path_weights = precompute_cubature_paths(
+            horizon=dt,
+            noise_dim=noise_dim,
+            integration_dt=integration_dt,
+            cubature_order=cubature_order,
+            cubature_gamma=cubature_gamma,
+            num_paths=num_paths,
+            multidim_method=multidim_paths,
+            seed=seed,
+            candidate_factor=candidate_factor,
+            recombination_degree=recombination_degree,
+            lyons_degree=lyons_degree,
+        )
 
     return Filter(
         init_prepare=partial(init_prepare, get_init_params=get_init_params),

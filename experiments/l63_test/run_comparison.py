@@ -58,6 +58,7 @@ from cd_dynamax_mirror.filters import (
 )
 from cuthbert import filter as run_filter  
 from crf import build_filter, CRFState
+from crf.library import default_recombined_num_paths
 
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
@@ -72,8 +73,24 @@ _parser.add_argument(
     default="rk4",
     help="Continuous-time integrator for CD filters (default: rk4, matched to CRF)",
 )
+_parser.add_argument(
+    "--cubature-order",
+    type=int,
+    default=2,
+    dest="cubature_order",
+    help="CRF Lyons macro-segment count k (default 2; recombined)",
+)
+_parser.add_argument(
+    "--num-paths",
+    type=int,
+    default=None,
+    dest="num_paths",
+    help="Post-recombination Wiener path budget "
+    "(default: default_recombined_num_paths(noise_dim, k))",
+)
 _args = _parser.parse_args()
 SOLVER = _args.solver
+CUBATURE_ORDER = _args.cubature_order
 
 # ---------------------------------------------------------------------------
 # Lorenz-63 stochastic model (matching Cuthbert_CRF.py)
@@ -91,6 +108,12 @@ obs_std = 0.3
 x_dim = 3
 y_dim = 1
 noise_dim = x_dim
+CRF_NUM_PATHS = (
+    int(_args.num_paths)
+    if _args.num_paths is not None
+    else default_recombined_num_paths(noise_dim, CUBATURE_ORDER)
+)
+CRF_MULTIDIM_PATHS = "recombined"
 
 
 def lorenz_drift(x):
@@ -200,8 +223,9 @@ crf = build_filter(
     noise_dim=noise_dim,
     dt=dt,
     integration_dt=dt_inner,
-    cubature_order=2, #    multidim_paths="recombined",
-    num_paths=18,
+    cubature_order=CUBATURE_ORDER,
+    num_paths=CRF_NUM_PATHS,
+    multidim_paths=CRF_MULTIDIM_PATHS,
 )
 jitted_filter = jit(run_filter, static_argnames=["filter_obj"])
 crf_states, crf_time = time_call(lambda: jitted_filter(crf, model_inputs))
@@ -364,4 +388,8 @@ for name, r in RESULTS.items():
         f"{float(r['loglik'][-1]):>12.2f} {r['time'] * 1e3:>12.2f}"
     )
 print("=" * 64)
+print(
+    f"CRF: multidim={CRF_MULTIDIM_PATHS} | k={CUBATURE_ORDER} | "
+    f"num_paths budget={CRF_NUM_PATHS}"
+)
 print(f"Plots written to {OUTPUT_DIR}")

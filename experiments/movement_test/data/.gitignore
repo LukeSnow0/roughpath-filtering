@@ -1,0 +1,3 @@
+# Large raw telemetry CSVs are downloaded on first use (see README.md), not committed.
+*.csv
+dryad_bundle.zip
