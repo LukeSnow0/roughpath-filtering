@@ -14,13 +14,14 @@ References:
 from functools import partial
 from typing import Literal, NamedTuple, Optional, Tuple
 
-from jax import eval_shape, tree
+from jax import eval_shape, lax, tree
 from jax import numpy as jnp
 
 from crf.filter.types import GetCRFDynamics, GetCRFObservations, GetInitParams
 from cuthbert.inference import Filter
 from cuthbert.utils import dummy_tree_like
 from crf.library import predict, update, precompute_cubature_paths
+from crf.filter.filtering import spatial_cubature_nodes
 from crf.library.conversions import wrap_ito_dynamics
 from cuthbertlib.types import Array, ArrayTree, ArrayTreeLike, KeyArray, ScalarArray
 
@@ -57,6 +58,7 @@ def build_filter(
     checkpoint_steps: bool = False,
     lyons_degree: int = 5,
     wiener_paths: Optional[Tuple[Array, Array, Array]] = None,
+    num_iter: int = 1,
 ) -> Filter:
     """Builds a Cubature Recursive Filter object.
 
@@ -99,6 +101,9 @@ def build_filter(
         wiener_paths: Optional precomputed ``(ts, path_values, path_weights)``
             arrays. When set, library cubature construction is skipped (used for
             experiment-side path builders such as explicit multi-D LV).
+        num_iter: Number of measurement-update iterations (iterated CRF).
+            ``1`` is the standard single update; ``>1`` re-linearizes with
+            spatial cubature about the current estimate.
 
     Returns:
         Filter object for the CRF.
@@ -153,6 +158,7 @@ def build_filter(
             path_values=path_values,
             path_weights=path_weights,
             checkpoint_steps=checkpoint_steps,
+            num_iter=num_iter,
         ),
         associative=False,
     )
@@ -227,24 +233,14 @@ def filter_combine(
     path_values: Array,
     path_weights: Array,
     checkpoint_steps: bool = False,
+    num_iter: int = 1,
 ) -> CRFState:
     """Combine the previous CRF state with the prepared state for the current step.
 
     Implements the CRF predict (cubature propagation) + update (square-root
-    sigma-point Kalman) cycle.
-
-    Args:
-        state_1: CRF state from the previous time step.
-        state_2: CRF state prepared for the current step (only ``model_inputs`` used).
-        get_dynamics: Function to get ``(drift_fn, diffusion_fn)`` from model inputs.
-        get_observations: Function to get ``(observation_fn, chol_R, y)`` from model inputs.
-        ts: Integration time grid for one assimilation interval.
-        path_values: Wiener cubature paths.
-        path_weights: Wiener cubature weights.
-        checkpoint_steps: Rematerialize each inner RK4 step under reverse-mode AD.
-
-    Returns:
-        Updated CRF state.
+    sigma-point Kalman) cycle. ``num_iter>1`` repeats the measurement update
+    with spatial cubature re-linearization about the current estimate (iterated
+    CRF), matching the IEKF/IUKF pattern used by the CD baselines.
     """
     drift_fn, diffusion_fn = get_dynamics(state_2.model_inputs)
     predicted_mean, predicted_chol_cov, samples, weights = predict(
@@ -259,6 +255,8 @@ def filter_combine(
     )
 
     observation_fn, chol_R, y = get_observations(state_2.model_inputs)
+
+    # First update uses the Wiener-path propagated cloud.
     updated_mean, updated_chol_cov, log_likelihood = update(
         predicted_mean,
         samples,
@@ -266,6 +264,19 @@ def filter_combine(
         observation_fn,
         chol_R,
         y,
+    )
+
+    def _extra_iter(carry, _):
+        m, chol = carry
+        nodes, node_w = spatial_cubature_nodes(m, chol)
+        m2, c2, _ = update(m, nodes, node_w, observation_fn, chol_R, y)
+        return (m2, c2), None
+
+    num_extra = max(0, int(num_iter) - 1)
+    (updated_mean, updated_chol_cov), _ = lax.scan(
+        _extra_iter,
+        (updated_mean, updated_chol_cov),
+        jnp.arange(num_extra),
     )
 
     return CRFState(

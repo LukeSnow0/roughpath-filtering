@@ -329,15 +329,18 @@ def fit_slope(deltas, errs, dmax=0.4, floor=1e-13):
     return float(np.polyfit(np.log(d[mask]), np.log(e[mask]), 1)[0])
 
 
-def guide(ax, deltas, anchor_err, anchor_d, slope, label, color="k"):
+def guide(ax, deltas, anchor_err, anchor_d, slope, label, color="k", ls="--"):
     d = np.asarray(deltas)
     c = anchor_err / (anchor_d**slope)
-    ax.loglog(d, c * d**slope, "--", color=color, alpha=0.6, label=label)
+    (line,) = ax.loglog(
+        d, c * d**slope, ls, color=color, alpha=0.75, lw=1.6, label=label
+    )
+    return line
 
 
 # ---------------------------------------------------------------------------
 def main():
-    deltas = np.logspace(np.log10(0.03), np.log10(10.0), 16)
+    deltas = np.logspace(np.log10(0.03), np.log10(3.5), 14)
     rng_floor = 1e-15
 
     # ---- Panel 1: CRF mean weak-error, k sweep (1D) ----
@@ -393,68 +396,154 @@ def main():
     csv_path = os.path.join(OUTPUT_DIR, "weak_error_delta_scaling.csv")
     with open(csv_path, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["delta"]
-                   + [f"crf_mean_err_k{k}" for k in ks]
-                   + ["crf2d_cov_err_m3", "crf2d_cov_err_m5", "crf2d_cov_err_m7",
-                      "ekf2d_cov_err", "ukf2d_cov_err", "ckf2d_cov_err"])
+        w.writerow(
+            ["delta"]
+            + [f"crf_mean_err_k{k}" for k in ks]
+            + [
+                "crf2d_cov_err_m3",
+                "crf2d_cov_err_m5",
+                "crf2d_cov_err_m7",
+                "ekf2d_cov_err",
+                "ukf2d_cov_err",
+                "ckf2d_cov_err",
+            ]
+        )
         for i, d in enumerate(deltas):
-            w.writerow([d]
-                       + [mean_err_by_k[k][i] for k in ks]
-                       + [crf_cov_err_2d[3][i], crf_cov_err_2d[5][i], crf_cov_err_2d[7][i],
-                          ekf_cov_err[i], ukf_cov_err[i], ckf_cov_err[i]])
+            w.writerow(
+                [d]
+                + [mean_err_by_k[k][i] for k in ks]
+                + [
+                    crf_cov_err_2d[3][i],
+                    crf_cov_err_2d[5][i],
+                    crf_cov_err_2d[7][i],
+                    ekf_cov_err[i],
+                    ukf_cov_err[i],
+                    ckf_cov_err[i],
+                ]
+            )
 
-    # ----- plot -----
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12.5, 5.2))
-
-    for k, c in zip(ks, ["C0", "C1", "C2", "C4"]):
-        ax1.loglog(deltas, np.maximum(mean_err_by_k[k], rng_floor),
-                   marker="o", color=c, label=f"CRF  k={k}")
-    # Anchor guide near mid-range of the densest (largest-k) series.
+    # ----- plot (two separate figures) -----
     mid = min(6, len(deltas) - 1)
-    guide(ax1, deltas, mean_err_by_k[ks[-1]][mid], deltas[mid], 3.0, r"$\propto\delta^{3}$")
-    ax1.set_title("(1) Semigroup error vs $\\delta$: rate set by degree, not $k$")
-    ax1.set_xlabel(r"assimilation interval $\delta$")
-    ax1.set_ylabel("abs. error in predicted mean $E[x_\\delta|x_0]$")
-    ax1.grid(True, which="both", alpha=0.3)
-    ax1.legend()
-
     crf_colors = {3: "#6A4C93", 5: "#9B5DE5", 7: "#F15BB5"}
+    AXIS_FS = 13
+    LEGEND_FS = 11
+    TICK_FS = 11
+
+    fig1, ax1 = plt.subplots(figsize=(6.2, 4.8))
+    h_ws = []
+    for k, c in zip(ks, ["C0", "C1", "C2", "C4"]):
+        (ln,) = ax1.loglog(
+            deltas,
+            np.maximum(mean_err_by_k[k], rng_floor),
+            marker="o",
+            color=c,
+            label=rf"WS-CKF  $k$={k}",
+        )
+        h_ws.append(ln)
+    h_g3 = guide(
+        ax1,
+        deltas,
+        mean_err_by_k[ks[-1]][mid],
+        deltas[mid],
+        3.0,
+        r"$\propto\delta^{3}$",
+        color="0.35",
+        ls="--",
+    )
+    ax1.set_xlabel(r"assimilation interval $\delta$", fontsize=AXIS_FS)
+    ax1.set_ylabel("abs. error in predicted mean $E[x_\\delta|x_0]$", fontsize=AXIS_FS)
+    ax1.set_xlim(deltas[0], deltas[-1])
+    ax1.tick_params(axis="both", which="major", labelsize=TICK_FS)
+    ax1.grid(True, which="both", alpha=0.3)
+    # Methods in left column; ∝δ guide beside the last method (ncol=2, column-major).
+    ax1.legend(
+        handles=[*h_ws, h_g3],
+        labels=[h.get_label() for h in h_ws] + [h_g3.get_label()],
+        fontsize=LEGEND_FS,
+        ncol=2,
+        columnspacing=1.0,
+        handletextpad=0.5,
+        loc="lower left",
+        bbox_to_anchor=(0.0, 1.02),
+        borderaxespad=0.0,
+    )
+    fig1.tight_layout()
+    png_mean = os.path.join(OUTPUT_DIR, "weak_error_delta_scaling_mean.png")
+    fig1.savefig(png_mean, dpi=150, bbox_inches="tight")
+    plt.close(fig1)
+
+    fig2, ax2 = plt.subplots(figsize=(6.2, 4.8))
+    h_ws = []
     for m in crf_degrees:
-        ax2.loglog(
+        (ln,) = ax2.loglog(
             deltas,
             np.maximum(crf_cov_err_2d[m], rng_floor),
             "o-",
             color=crf_colors[m],
-            label=rf"CRF $m$={m} (fit={fit_slope(deltas, crf_cov_err_2d[m]):.2f})",
+            label=rf"WS-CKF $m$={m} (fit={fit_slope(deltas, crf_cov_err_2d[m]):.2f})",
         )
-    ax2.loglog(deltas, np.maximum(ekf_cov_err, rng_floor), "s-", color="C3", label="CD-EKF")
-    ax2.loglog(deltas, np.maximum(ukf_cov_err, rng_floor), "^-", color="C0", label="CD-UKF")
-    ax2.loglog(deltas, np.maximum(ckf_cov_err, rng_floor), "D-", color="#2E86AB", label="CD-CKF")
-    guide(ax2, deltas, ekf_cov_err[6], deltas[6], 2.0, r"$\propto\delta^{2}$", color="0.45")
-    guide(ax2, deltas, crf_cov_err_2d[5][6], deltas[6], 3.0, r"$\propto\delta^{3}$", color="0.55")
-    guide(
+        h_ws.append(ln)
+    (h_ekf,) = ax2.loglog(
+        deltas, np.maximum(ekf_cov_err, rng_floor), "s-", color="C3", label="CD-EKF"
+    )
+    (h_ukf,) = ax2.loglog(
+        deltas, np.maximum(ukf_cov_err, rng_floor), "^-", color="C0", label="CD-UKF"
+    )
+    (h_ckf,) = ax2.loglog(
+        deltas, np.maximum(ckf_cov_err, rng_floor), "D-", color="#2E86AB", label="CD-CKF"
+    )
+    h_g2 = guide(
+        ax2, deltas, ekf_cov_err[mid], deltas[mid], 2.0, r"$\propto\delta^{2}$",
+        color="0.35", ls="--",
+    )
+    h_g3 = guide(
+        ax2, deltas, crf_cov_err_2d[5][mid], deltas[mid], 3.0, r"$\propto\delta^{3}$",
+        color="0.35", ls=":",
+    )
+    h_g4 = guide(
         ax2,
         deltas,
-        max(crf_cov_err_2d[7][6], rng_floor),
-        deltas[6],
+        max(crf_cov_err_2d[7][mid], rng_floor),
+        deltas[mid],
         4.0,
         r"$\propto\delta^{4}$",
-        color="0.65",
+        color="0.35",
+        ls="-.",
     )
-    ax2.set_title("(2) 2D cov weak-error: CRF $m$=3,5,7 vs CD closure")
-    ax2.set_xlabel(r"assimilation interval $\delta$")
-    ax2.set_ylabel(r"$\|\hat P - P\|_F$")
+    ax2.set_xlabel(r"assimilation interval $\delta$", fontsize=AXIS_FS)
+    ax2.set_ylabel(r"$\|\hat P - P\|_F$", fontsize=AXIS_FS)
+    ax2.set_xlim(deltas[0], deltas[-1])
+    ax2.tick_params(axis="both", which="major", labelsize=TICK_FS)
     ax2.grid(True, which="both", alpha=0.3)
-    ax2.legend(fontsize=7.5)
-
-    fig.suptitle(
-        "Temporal Wiener-cubature (Lyons-Victoir) $\\delta$-scaling of the CRF predict step",
-        fontsize=13,
+    # One box, 3 columns (column-major): WS-CKF | CD | ∝δ guides; above axes.
+    ax2.legend(
+        handles=[h_ws[0], h_ws[1], h_ws[2], h_ekf, h_ukf, h_ckf, h_g2, h_g3, h_g4],
+        labels=[
+            h_ws[0].get_label(),
+            h_ws[1].get_label(),
+            h_ws[2].get_label(),
+            h_ekf.get_label(),
+            h_ukf.get_label(),
+            h_ckf.get_label(),
+            h_g2.get_label(),
+            h_g3.get_label(),
+            h_g4.get_label(),
+        ],
+        fontsize=LEGEND_FS,
+        ncol=3,
+        columnspacing=1.0,
+        handletextpad=0.4,
+        loc="lower left",
+        bbox_to_anchor=(0.0, 1.02),
+        borderaxespad=0.0,
     )
-    fig.tight_layout()
-    png_path = os.path.join(OUTPUT_DIR, "weak_error_delta_scaling.png")
-    fig.savefig(png_path, dpi=150)
-    print(f"\nSaved plot -> {png_path}")
+    fig2.tight_layout()
+    png_cov = os.path.join(OUTPUT_DIR, "weak_error_delta_scaling_cov.png")
+    fig2.savefig(png_cov, dpi=150, bbox_inches="tight")
+    plt.close(fig2)
+
+    print(f"\nSaved plot -> {png_mean}")
+    print(f"Saved plot -> {png_cov}")
     print(f"Saved data -> {csv_path}")
 
 

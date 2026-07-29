@@ -1,0 +1,300 @@
+"""Smoke test: iterated EKF / UKF / CRF Pareto (wall-clock vs MAPE).
+
+Sweeps measurement-update iterations at fixed Δt with one seed and a small
+product CRF (9 paths). Intentionally cheap vs ``run_pareto_budget.py``.
+
+Run:
+  uv run --extra experiments python experiments/mfts_test/run_pareto_iters_smoke.py
+
+Outputs:
+  ``experiments/mfts_test/output/pareto_iters_smoke.png``
+  ``experiments/mfts_test/output/pareto_iters_smoke.csv``
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import os
+import sys
+import time
+
+os.environ.setdefault(
+    "MPLCONFIGDIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), ".mplcache")
+)
+
+EXPERIMENTS_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+)
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.abspath(os.path.join(HERE, "..", ".."))
+sys.path.insert(0, EXPERIMENTS_DIR)
+sys.path.insert(0, ROOT_DIR)
+sys.path.insert(0, HERE)
+
+import jax
+import jax.numpy as jnp
+import matplotlib
+import numpy as np
+from jax import jit
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+jax.config.update("jax_enable_x64", True)
+
+from experiments.cd_dynamax_mirror.filters import UKFParams, run_cd_ekf, run_cd_ukf
+from cuthbert import filter as run_filter
+from crf import build_filter
+
+from mfts_model import (
+    MFTSParams,
+    init_estimate,
+    make_mfts_dynamics,
+    mape_pct,
+    simulate_mfts,
+)
+
+OUTPUT_DIR = os.path.join(HERE, "output")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+_parser = argparse.ArgumentParser(description="Smoke Pareto: iterated EKF/UKF/CRF")
+_parser.add_argument("--seed", type=int, default=100)
+_parser.add_argument("--delta", type=float, default=1.0)
+_parser.add_argument("--iters", type=str, default="1,2,3,5")
+_parser.add_argument("--n-timing", type=int, default=2, dest="n_timing")
+_args = _parser.parse_args()
+
+SEED = _args.seed
+DELTA_T_MIN = float(_args.delta)
+ITERS = [int(x) for x in _args.iters.split(",") if x.strip()]
+N_TIMING = _args.n_timing
+
+HORIZON_MIN = 30.0
+EVAL_DT_MIN = 0.05
+DT_TRUTH = 0.015
+DT_FILTER = 0.15
+LAMBDA_SIM, SIGMA_SIM = 0.1, 5.0
+LAMBDA_EKF_UKF, SIGMA_EKF = 0.0, 5.0
+LAMBDA_CRF, SIGMA_CRF = 2.0e-3, 5.0
+SIGMA_UKF = 1.0
+F1, F2 = 5.0, 5.0
+
+COLORS = {"EKF": "#2E86AB", "UKF": "#3DA35D", "CRF": "#6A4C93"}
+
+
+def time_call(fn, *args):
+    out = fn(*args)
+    jax.block_until_ready(out)
+    samples = []
+    for _ in range(N_TIMING):
+        t0 = time.perf_counter()
+        jax.block_until_ready(fn(*args))
+        samples.append(time.perf_counter() - t0)
+    return out, float(np.median(samples))
+
+
+def stack_estimates(m0_arr, means):
+    return np.vstack([np.asarray(m0_arr), np.asarray(means)])
+
+
+def _as_numpy_drift(drift_fn):
+    def drift_np(t_sec: float, x: np.ndarray) -> np.ndarray:
+        return np.asarray(drift_fn(t_sec, jnp.asarray(x)), dtype=np.float64)
+
+    return drift_np
+
+
+def rk4_step(drift_np, t, y, h):
+    k1 = drift_np(t, y)
+    k2 = drift_np(t + 0.5 * h, y + 0.5 * h * k1)
+    k3 = drift_np(t + 0.5 * h, y + 0.5 * h * k2)
+    k4 = drift_np(t + h, y + h * k3)
+    return y + (h / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+
+
+def rk4_to(drift_np, y, t0, t1, dt0):
+    span = t1 - t0
+    if span <= 0:
+        return y.copy()
+    n_steps = max(1, int(np.ceil(span / dt0)))
+    h = span / n_steps
+    t = t0
+    for _ in range(n_steps):
+        y = rk4_step(drift_np, t, y, h)
+        t += h
+    return y
+
+
+def estimates_on_fine_grid(m_filt, dt_obs_sec, times_fine_sec, drift_fn, dt_integrate):
+    drift_np = _as_numpy_drift(drift_fn)
+    n_fine = times_fine_sec.shape[0]
+    est = np.zeros((n_fine, m_filt.shape[1]), dtype=np.float64)
+    est[0] = m_filt[0]
+    n_obs = m_filt.shape[0] - 1
+    for k in range(n_obs):
+        t0 = k * dt_obs_sec
+        t1 = (k + 1) * dt_obs_sec
+        js = np.where((times_fine_sec > t0 + 1e-12) & (times_fine_sec <= t1 + 1e-9))[0]
+        m = m_filt[k].copy()
+        t = t0
+        for j in js:
+            t_target = float(times_fine_sec[j])
+            m = rk4_to(drift_np, m, t, t_target, dt_integrate)
+            t = t_target
+            if abs(t_target - t1) <= 1e-9:
+                est[j] = m_filt[k + 1]
+                m = m_filt[k + 1].copy()
+            else:
+                est[j] = m
+    return est
+
+
+N_FINE = int(round(HORIZON_MIN / EVAL_DT_MIN))
+DT_FINE_MIN = HORIZON_MIN / N_FINE
+DT_FINE_SEC = DT_FINE_MIN * 60.0
+stride = int(round(DELTA_T_MIN / DT_FINE_MIN))
+assert np.isclose(stride * DT_FINE_MIN, DELTA_T_MIN)
+n_obs = N_FINE // stride
+dt = stride * DT_FINE_MIN * 60.0
+dt0 = dt / max(1, int(round(dt / DT_FILTER)))
+times_fine_sec = np.arange(N_FINE + 1) * DT_FINE_SEC
+model_inputs = jnp.arange(n_obs + 1)
+
+p = MFTSParams()
+print(f"Smoke iterated Pareto: Δt={DELTA_T_MIN:g} min, n_obs={n_obs}, iters={ITERS}, seed={SEED}")
+true_fine, ys_fine_np, R = simulate_mfts(
+    horizon_min=HORIZON_MIN,
+    n_obs=N_FINE,
+    n_substeps_truth=max(1, int(round(DT_FINE_SEC / DT_TRUTH))),
+    p=p,
+    lambda_sim=LAMBDA_SIM,
+    sigma_sim=SIGMA_SIM,
+    F1=F1,
+    F2=F2,
+    seed=SEED,
+)
+ys = jnp.asarray(ys_fine_np)[stride - 1 :: stride]
+x0, P0 = init_estimate(p, F1, F2, true_state=true_fine[0], cov_scale=1.0)
+m0 = jnp.asarray(x0)
+P0_j = jnp.asarray(P0)
+chol_P0 = jnp.linalg.cholesky(P0_j)
+chol_R = jnp.linalg.cholesky(R)
+
+bar_est = lambda t_min, nom=p.F_nominal_est: nom
+drift_ekf, L_ekf, Qc, obs_fn, _ = make_mfts_dynamics(
+    p, lambda_dist=LAMBDA_EKF_UKF, sigma_dist=SIGMA_EKF,
+    bar_F3=bar_est, bar_F4=bar_est, F1=F1, F2=F2,
+)
+drift_ukf, L_ukf, _, _, _ = make_mfts_dynamics(
+    p, lambda_dist=LAMBDA_EKF_UKF, sigma_dist=SIGMA_UKF,
+    bar_F3=bar_est, bar_F4=bar_est, F1=F1, F2=F2,
+)
+drift_crf, L_crf, _, _, _ = make_mfts_dynamics(
+    p, lambda_dist=LAMBDA_CRF, sigma_dist=SIGMA_CRF,
+    bar_F3=bar_est, bar_F4=bar_est, F1=F1, F2=F2,
+)
+
+rows: list[dict] = []
+
+
+def score(family, n_iter, m_filt, final_ll, wall, drift_fn):
+    est = estimates_on_fine_grid(m_filt, dt, times_fine_sec, drift_fn, DT_FILTER)
+    rec = {
+        "family": family,
+        "num_iter": n_iter,
+        "mapex": mape_pct(est, true_fine, slice(0, 4)),
+        "maped": mape_pct(est, true_fine, slice(4, 6)),
+        "nll_per_obs": -final_ll / n_obs,
+        "time_s": wall,
+    }
+    rows.append(rec)
+    print(
+        f"  {family:4s} iter={n_iter}  MAPEx={rec['mapex']:6.2f}  "
+        f"MAPEd={rec['maped']:6.2f}  time={1e3*wall:7.1f} ms"
+    )
+
+
+for n_iter in ITERS:
+    ekf_jit = jit(
+        lambda n=n_iter: run_cd_ekf(
+            drift_ekf, obs_fn, L_ekf, Qc, R, m0, P0_j, ys, dt, dt0,
+            num_iter=n, state_order="first", solver="rk4",
+        )
+    )
+    res, wall = time_call(ekf_jit)
+    score("EKF", n_iter, stack_estimates(m0, res.means), float(res.cum_loglik[-1]), wall, drift_ekf)
+
+    ukf_jit = jit(
+        lambda n=n_iter: run_cd_ukf(
+            drift_ukf, obs_fn, L_ukf, Qc, R, m0, P0_j, ys, dt, dt0,
+            UKFParams(), num_iter=n, state_order="first", solver="rk4",
+        )
+    )
+    res, wall = time_call(ukf_jit)
+    score("UKF", n_iter, stack_estimates(m0, res.means), float(res.cum_loglik[-1]), wall, drift_ukf)
+
+    # Exact product CRF: m=5, k=1 → 9 paths
+    crf = build_filter(
+        get_init_params=lambda mi: (m0, chol_P0),
+        get_dynamics=lambda mi: (lambda t, x: drift_crf(t, x), lambda t, x: L_crf(t, x)),
+        get_observations=lambda mi: (obs_fn, chol_R, ys[mi - 1]),
+        noise_dim=2,
+        dt=dt,
+        integration_dt=dt0,
+        cubature_order=1,
+        lyons_degree=5,
+        multidim_paths="product",
+        num_iter=n_iter,
+    )
+    crf_jit = jit(run_filter, static_argnames=["filter_obj"])
+    states, wall = time_call(lambda f=crf_jit, filt=crf: f(filt, model_inputs))
+    score(
+        "CRF",
+        n_iter,
+        stack_estimates(m0, states.mean[1:]),
+        float(states.log_normalizing_constant[-1]),
+        wall,
+        drift_crf,
+    )
+
+csv_path = os.path.join(OUTPUT_DIR, "pareto_iters_smoke.csv")
+with open(csv_path, "w", newline="") as f:
+    w = csv.DictWriter(
+        f,
+        fieldnames=["delta_t_min", "seed", "family", "num_iter", "mapex", "maped", "nll_per_obs", "time_s"],
+    )
+    w.writeheader()
+    for r in rows:
+        w.writerow({"delta_t_min": DELTA_T_MIN, "seed": SEED, **r})
+
+fig, axes = plt.subplots(1, 2, figsize=(10, 4.2), sharex=True)
+all_xs = []
+for ax, metric, ylabel in zip(axes, ("mapex", "maped"), ("MAPEx [%]", "MAPEd [%]")):
+    for fam in ("EKF", "UKF", "CRF"):
+        pts = sorted([r for r in rows if r["family"] == fam], key=lambda r: r["num_iter"])
+        xs = [1e3 * r["time_s"] for r in pts]
+        ys = [r[metric] for r in pts]
+        all_xs.extend(xs)
+        ax.plot(xs, ys, "-o", color=COLORS[fam], lw=1.6, markersize=6, label=fam)
+    ax.set_xlabel("Wall-clock time [ms]")
+    ax.set_ylabel(ylabel)
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.grid(True, which="both", alpha=0.3)
+if all_xs:
+    axes[0].set_xlim(min(all_xs) / 1.25, max(all_xs) * 1.35)
+axes[0].legend(fontsize=9, loc="best")
+fig.suptitle(
+    rf"Smoke: iterated update Pareto at $\Delta t={DELTA_T_MIN:g}$ min "
+    rf"(seed={SEED}; CRF product 9 paths)",
+    fontsize=11,
+)
+fig.tight_layout()
+plot_path = os.path.join(OUTPUT_DIR, "pareto_iters_smoke.png")
+fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+plt.close()
+
+print("-" * 60)
+print(f"Wrote {plot_path}")
+print(f"Wrote {csv_path}")

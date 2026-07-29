@@ -407,16 +407,40 @@ def _ukf_predict(
     return ys[0][-1], psd(ys[1][-1])
 
 
-def _ukf_update(m, P, h, R, y, n, lamb, w_mean, w_cov):
-    sigmas = _ukf_sigmas(m, P, n, lamb)
-    sigmas_prop = vmap(h)(sigmas)
-    y_pred = w_mean @ sigmas_prop
-    S = psd(R + jnp.tensordot(w_cov, _outer(sigmas_prop - y_pred, sigmas_prop - y_pred), axes=1))
-    C = jnp.tensordot(w_cov, _outer(sigmas - m, sigmas_prop - y_pred), axes=1)
-    ll = gaussian_logpdf(y, y_pred, S)
-    K = psd_solve(S, C.T).T
-    m_cond = m + K @ (y - y_pred)
-    P_cond = psd(P - K @ S @ K.T)
+def _ukf_update(m, P, h, R, y, n, lamb, w_mean, w_cov, num_iter: int = 1):
+    """Sigma-point measurement update; ``num_iter>1`` re-linearizes like IEKF.
+
+    Predictive likelihood uses the first linearization about ``(m, P)``. Extra
+    iterations re-form sigma points about the current ``(mean, cov)`` and apply
+    another update (same pattern as ``_ekf_update``).
+    """
+    sigmas0 = _ukf_sigmas(m, P, n, lamb)
+    sigmas_prop0 = vmap(h)(sigmas0)
+    y_pred0 = w_mean @ sigmas_prop0
+    S0 = psd(
+        R
+        + jnp.tensordot(
+            w_cov, _outer(sigmas_prop0 - y_pred0, sigmas_prop0 - y_pred0), axes=1
+        )
+    )
+    ll = gaussian_logpdf(y, y_pred0, S0)
+
+    def iter_step(carry, _):
+        mm, PP = carry
+        sigmas = _ukf_sigmas(mm, PP, n, lamb)
+        sigmas_prop = vmap(h)(sigmas)
+        y_pred = w_mean @ sigmas_prop
+        S = psd(
+            R
+            + jnp.tensordot(
+                w_cov, _outer(sigmas_prop - y_pred, sigmas_prop - y_pred), axes=1
+            )
+        )
+        C = jnp.tensordot(w_cov, _outer(sigmas - mm, sigmas_prop - y_pred), axes=1)
+        K = psd_solve(S, C.T).T
+        return (mm + K @ (y - y_pred), psd(PP - K @ S @ K.T)), None
+
+    (m_cond, P_cond), _ = lax.scan(iter_step, (m, P), jnp.arange(num_iter))
     return ll, m_cond, P_cond
 
 
@@ -432,6 +456,7 @@ def run_cd_ukf(
     dt: float,
     dt0: float = 0.01,
     ukf_params: UKFParams = UKFParams(),
+    num_iter: int = 1,
     state_order: str = "first",
     solver: SolverKind = "diffrax",
 ) -> FilterResult:
@@ -441,6 +466,7 @@ def run_cd_ukf(
     ``state_order="flowmap"`` propagates sigma points through the deterministic flow
     and adds the interval process noise (a stable discrete-UKF variant).
     ``solver`` selects the continuous-time integrator (``"diffrax"`` or ``"rk4"``).
+    ``num_iter`` repeats the sigma-point measurement update (iterated UKF).
     """
     n_steps = ys.shape[0]
     n = m0.shape[0]
@@ -455,7 +481,9 @@ def run_cd_ukf(
         m_pred, P_pred = _ukf_predict(
             m, P, f, L_fn, Qc_fn, t0, t0 + dt, dt0, n, lamb, w_mean, w_cov, W_matrix, state_order, solver=solver, n_steps=n_inner
         )
-        ll_inc, m_filt, P_filt = _ukf_update(m_pred, P_pred, h, R, ys[k], n, lamb, w_mean, w_cov)
+        ll_inc, m_filt, P_filt = _ukf_update(
+            m_pred, P_pred, h, R, ys[k], n, lamb, w_mean, w_cov, num_iter=num_iter
+        )
         ll = ll + ll_inc
         return (m_filt, P_filt, ll), (m_filt, P_filt, ll)
 

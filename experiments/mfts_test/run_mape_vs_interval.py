@@ -15,12 +15,13 @@ Run:
   python experiments/mfts_test/run_mape_vs_interval.py
   python experiments/mfts_test/run_mape_vs_interval.py --solver rk4
   python experiments/mfts_test/run_mape_vs_interval.py --deltas 0.25,0.5,1,2,5,10
-  python experiments/mfts_test/run_mape_vs_interval.py --eval-dt 0.05
+  python experiments/mfts_test/run_mape_vs_interval.py --crf-paths 2,12,24,35
 
 Outputs:
   ``experiments/mfts_test/output/mape_vs_interval.png``
   ``experiments/mfts_test/output/nll_vs_interval.png``
   ``experiments/mfts_test/output/timing_vs_interval.png``
+  ``experiments/mfts_test/output/pareto_time_vs_mape.png``
   ``experiments/mfts_test/output/mape_vs_interval.csv``
 """
 
@@ -103,12 +104,13 @@ _parser.add_argument(
     help="CRF Lyons macro-segment count k (default 2; recombined)",
 )
 _parser.add_argument(
-    "--num-paths",
-    type=int,
-    default=None,
-    dest="num_paths",
-    help="Post-recombination Wiener path budget (default: "
-    "default_recombined_num_paths(2, k))",
+    "--crf-paths",
+    type=str,
+    default="2,12,24,35",
+    dest="crf_paths",
+    help="Comma-separated recombined path budgets (default 2,12,24,35). "
+    "Each plotted as CRF-P{{n}}. Use 'default' for "
+    "default_recombined_num_paths(2, k).",
 )
 _parser.add_argument(
     "--solver",
@@ -165,24 +167,45 @@ SIGMA_UKF = 1.0
 
 ENKF_PARTICLES = 250
 PF_PARTICLES = 1000
-# Force recombined KLV (auto would pick product for small k, e.g. k=2 → 81 paths).
-CRF_NUM_PATHS = (
-    int(_args.num_paths)
-    if _args.num_paths is not None
-    else default_recombined_num_paths(2, CUBATURE_ORDER)
-)
 CRF_MULTIDIM_PATHS = "recombined"
+
+_DEFAULT_CRF_PATHS = default_recombined_num_paths(2, CUBATURE_ORDER)
+CRF_PATH_BUDGETS: list[int] = []
+for _tok in _args.crf_paths.split(","):
+    _tok = _tok.strip()
+    if not _tok:
+        continue
+    if _tok.lower() == "default":
+        CRF_PATH_BUDGETS.append(_DEFAULT_CRF_PATHS)
+    else:
+        CRF_PATH_BUDGETS.append(int(_tok))
+_seen_paths: set[int] = set()
+CRF_PATH_BUDGETS = [
+    n for n in CRF_PATH_BUDGETS if not (n in _seen_paths or _seen_paths.add(n))
+]
+if not CRF_PATH_BUDGETS:
+    raise ValueError("--crf-paths must list at least one path budget")
+
+
+def crf_label(n_paths: int) -> str:
+    return f"CRF-P{n_paths}"
+
 
 F1, F2 = 5.0, 5.0
 
-FILTER_NAMES = ("CD-EKF", "CD-UKF", "CD-EnKF", "PF", "CRF")
+BASE_FILTER_NAMES = ("CD-EKF", "CD-UKF", "CD-EnKF", "PF")
+CRF_FILTER_NAMES = tuple(crf_label(n) for n in CRF_PATH_BUDGETS)
+FILTER_NAMES = BASE_FILTER_NAMES + CRF_FILTER_NAMES
+
+_CRF_PURPLES = ("#C4B0E0", "#9B7EBD", "#7A5CA3", "#6A4C93", "#4A2F6E", "#2F1A4A")
 COLORS = {
     "CD-EKF": "#2E86AB",
     "CD-UKF": "#3DA35D",
     "CD-EnKF": "#F6AE2D",
     "PF": "#F24236",
-    "CRF": "#6A4C93",
 }
+for _i, _name in enumerate(CRF_FILTER_NAMES):
+    COLORS[_name] = _CRF_PURPLES[min(_i, len(_CRF_PURPLES) - 1)]
 
 
 def stack_estimates(m0_arr, means):
@@ -360,7 +383,7 @@ DRIFT_FOR_MAPE = {
     "CD-UKF": drift_ukf,
     "CD-EnKF": drift_enkf,
     "PF": drift_enkf,
-    "CRF": crf_drift,
+    **{name: crf_drift for name in CRF_FILTER_NAMES},
 }
 
 
@@ -387,29 +410,31 @@ def run_filters_at_interval(
 
     model_inputs = jnp.arange(n_obs + 1)
     times: dict[str, float] = {}
+    estimates_obs: dict[str, np.ndarray] = {}
+    final_ll: dict[str, float] = {}
 
-    crf = build_filter(
-        get_init_params=lambda mi: (m0, chol_P0),
-        get_dynamics=lambda mi: (
-            lambda t, x: crf_drift(t, x),
-            lambda t, x: crf_L(t, x),
-        ),
-        get_observations=lambda mi: (obs_fn, chol_R, ys[mi - 1]),
-        noise_dim=2,
-        dt=dt,
-        integration_dt=dt0,
-        cubature_order=CUBATURE_ORDER,
-        num_paths=CRF_NUM_PATHS,
-        multidim_paths=CRF_MULTIDIM_PATHS,
-    )
-    jitted_crf = jit(run_filter, static_argnames=["filter_obj"])
-    crf_states, times["CRF"] = time_call(lambda: jitted_crf(crf, model_inputs))
-    estimates_obs = {
-        "CRF": stack_estimates(m0, crf_states.mean[1:]),
-    }
-    final_ll: dict[str, float] = {
-        "CRF": float(crf_states.log_normalizing_constant[-1]),
-    }
+    for n_paths in CRF_PATH_BUDGETS:
+        name = crf_label(n_paths)
+        crf = build_filter(
+            get_init_params=lambda mi: (m0, chol_P0),
+            get_dynamics=lambda mi: (
+                lambda t, x: crf_drift(t, x),
+                lambda t, x: crf_L(t, x),
+            ),
+            get_observations=lambda mi: (obs_fn, chol_R, ys[mi - 1]),
+            noise_dim=2,
+            dt=dt,
+            integration_dt=dt0,
+            cubature_order=CUBATURE_ORDER,
+            num_paths=n_paths,
+            multidim_paths=CRF_MULTIDIM_PATHS,
+        )
+        jitted_crf = jit(run_filter, static_argnames=["filter_obj"])
+        crf_states, times[name] = time_call(
+            lambda f=jitted_crf, filt=crf: f(filt, model_inputs)
+        )
+        estimates_obs[name] = stack_estimates(m0, crf_states.mean[1:])
+        final_ll[name] = float(crf_states.log_normalizing_constant[-1])
 
     ekf_jit = jit(
         lambda: run_cd_ekf(
@@ -526,7 +551,8 @@ series = {
 print(f"Horizon={HORIZON_MIN:g} min | solver={SOLVER} | seed={SEED}")
 print(
     f"CRF: multidim={CRF_MULTIDIM_PATHS} | k={CUBATURE_ORDER} | "
-    f"num_paths budget={CRF_NUM_PATHS}"
+    f"path budgets={CRF_PATH_BUDGETS} "
+    f"(moment-safe default={_DEFAULT_CRF_PATHS})"
 )
 print(f"Requested Delta_t [min]: {DELTA_T_MIN_REQ}")
 print(f"Timing: median of {N_TIMING} runs after JIT warmup")
@@ -666,6 +692,64 @@ fig.savefig(timing_path, dpi=150, bbox_inches="tight")
 plt.close()
 
 # ---------------------------------------------------------------------------
+# Pareto: wall-clock vs accuracy (lower-left is better)
+# ---------------------------------------------------------------------------
+
+fig, axes = plt.subplots(1, 2, figsize=(11, 4.5), sharex=True)
+for ax, metric, ylabel, title in zip(
+    axes,
+    ("mapex", "maped"),
+    ("MAPEx [%]", "MAPEd [%]"),
+    ("tanks", "disturbances"),
+):
+    for name in FILTER_NAMES:
+        xs = [1e3 * t for t in series[name]["time"]]
+        ys = series[name][metric]
+        ax.plot(
+            xs,
+            ys,
+            color=COLORS[name],
+            marker="o",
+            lw=1.2,
+            alpha=0.85,
+            label=name,
+        )
+        # Annotate the smallest and largest Δt so the sweep direction is readable.
+        ax.annotate(
+            f"{delta_t_eff[0]:g}",
+            (xs[0], ys[0]),
+            textcoords="offset points",
+            xytext=(4, 4),
+            fontsize=7,
+            color=COLORS[name],
+            alpha=0.8,
+        )
+        ax.annotate(
+            f"{delta_t_eff[-1]:g}",
+            (xs[-1], ys[-1]),
+            textcoords="offset points",
+            xytext=(4, -8),
+            fontsize=7,
+            color=COLORS[name],
+            alpha=0.8,
+        )
+    ax.set_xlabel("Wall-clock time [ms]")
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.grid(True, which="both", alpha=0.3)
+axes[0].legend(fontsize=8, loc="best")
+fig.suptitle(
+    r"MFTS Pareto: wall-clock vs MAPE (markers = $\Delta t$ sweep; annotated min/max min)",
+    fontsize=11,
+)
+fig.tight_layout()
+pareto_path = os.path.join(OUTPUT_DIR, "pareto_time_vs_mape.png")
+fig.savefig(pareto_path, dpi=150, bbox_inches="tight")
+plt.close()
+
+# ---------------------------------------------------------------------------
 # CSV
 # ---------------------------------------------------------------------------
 
@@ -702,4 +786,5 @@ print("-" * 72)
 print(f"Wrote {plot_path}")
 print(f"Wrote {nll_path}")
 print(f"Wrote {timing_path}")
+print(f"Wrote {pareto_path}")
 print(f"Wrote {csv_path}")

@@ -21,6 +21,10 @@ dependencies = [
 [project.optional-dependencies]
 experiments = [
     "matplotlib>=3.10.9",
+    "openpyxl>=3.1.5",
+]
+metal = [
+    "jax-mps>=0.10.1",
 ]
 
 dev = [
