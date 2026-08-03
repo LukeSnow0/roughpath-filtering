@@ -1,12 +1,15 @@
 """Smoke Pareto for Lorenz-63: wall-clock vs fine-grid RMSE.
 
-Mirrors the MFTS budget Pareto style: WS-CKF at the smallest exact product
-path count (d=3, m=3,k=1 → 8 paths), EnKF/PF particle sweeps, multi-seed mean.
+Mirrors the MFTS budget Pareto style: WS-CKF product path ladder (d=3),
+EnKF/PF particle sweeps, multi-seed mean.
 
 Run:
   uv run --extra experiments python experiments/l63_test/run_pareto_budget_smoke.py
   uv run --extra experiments python experiments/l63_test/run_pareto_budget_smoke.py \\
-      --seeds 0,1,2,3,4,5,6,7,8
+      --seeds 0,1,2,3,4,5,6,7,8 --crf-max-paths 64
+  uv run --extra experiments python experiments/l63_test/run_pareto_budget_smoke.py \\
+      --append --seeds 0,1,2,3,4,5 --crf-max-paths 64 \\
+      --enkf 25,50,100,200 --pf 50,100,200,500
 
 Outputs:
   ``experiments/l63_test/output/pareto_budget_vs_rmse.png``
@@ -26,6 +29,8 @@ from dataclasses import dataclass
 os.environ.setdefault(
     "MPLCONFIGDIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), ".mplcache")
 )
+# MPS rejects float64; keep x64 on CPU (same pattern as MFTS/movement scripts).
+os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -55,6 +60,7 @@ from cd_dynamax_mirror.filters import (
 from cuthbert import filter as run_filter
 from crf import build_filter
 from crf.library import product_path_count
+from crf.library.cubature_paths import build_recombined_cubature_paths
 
 OUTPUT_DIR = os.path.join(HERE, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -80,18 +86,56 @@ class CrfConfig:
     lyons_degree: int
     k: int
     n_paths: int
+    method: str = "product"  # product | recombined
+    family: str = "CRF-product"
 
 
-def default_crf_configs(noise_dim: int = 3) -> list[CrfConfig]:
-    """Smallest moment-safe exact product config for d=3: m=3,k=1 → 8 paths."""
-    specs = [(3, 1)]
-    configs = []
+def default_crf_configs(noise_dim: int = 3, max_paths: int = 8) -> list[CrfConfig]:
+    """Exact product path counts up to ``max_paths`` (sorted by n_paths).
+
+    For d=3: (m,k) → P = (2^k)^3 for m=3, (3^k)^3 for m=5, so
+    8, 27, 64, 512, 729, ...
+    """
+    specs = [(3, 1), (5, 1), (3, 2), (3, 3), (5, 2), (3, 4), (5, 3)]
+    configs: list[CrfConfig] = []
+    seen: set[int] = set()
     for m, k in specs:
         n = product_path_count(noise_dim, k, lyons_degree=m)
+        if n > max_paths or n in seen:
+            continue
+        seen.add(n)
         configs.append(
-            CrfConfig(label=f"prod-m{m}-k{k}", lyons_degree=m, k=k, n_paths=n)
+            CrfConfig(
+                label=f"prod-m{m}-k{k}",
+                lyons_degree=m,
+                k=k,
+                n_paths=n,
+                method="product",
+                family="CRF-product",
+            )
         )
-    return configs
+    return sorted(configs, key=lambda c: c.n_paths)
+
+
+def recombined_crf_configs(path_counts: list[int], k: int = 2) -> list[CrfConfig]:
+    """Recombined KLV path budgets (arbitrary P; not restricted to product cardinalities)."""
+    configs: list[CrfConfig] = []
+    seen: set[int] = set()
+    for n in path_counts:
+        if n < 1 or n in seen:
+            continue
+        seen.add(n)
+        configs.append(
+            CrfConfig(
+                label=f"rec-P{n}",
+                lyons_degree=5,
+                k=k,
+                n_paths=n,
+                method="recombined",
+                family="CRF-recombined",
+            )
+        )
+    return sorted(configs, key=lambda c: c.n_paths)
 
 
 _parser = argparse.ArgumentParser(description="L63 smoke Pareto: budget vs RMSE")
@@ -107,7 +151,46 @@ _parser.add_argument("--eval-dt", type=float, default=0.01, dest="eval_dt")
 _parser.add_argument("--spinup", type=int, default=5_000, help="Truth spinup steps")
 _parser.add_argument("--enkf", type=str, default="25,50,100")
 _parser.add_argument("--pf", type=str, default="50,100,200")
+_parser.add_argument(
+    "--crf-max-paths",
+    type=int,
+    default=8,
+    dest="crf_max_paths",
+    help="Include exact product WS-CKF configs with P ≤ this (d=3: 8,27,64,…)",
+)
+_parser.add_argument(
+    "--crf-recombined",
+    type=str,
+    default="",
+    dest="crf_recombined",
+    help="Comma-separated recombined path budgets (e.g. 4). Empty = none.",
+)
+_parser.add_argument(
+    "--diff-std",
+    type=float,
+    default=1.0,
+    dest="diff_std",
+    help="Process-noise intensity (diffusion scale); default 1.0",
+)
+_parser.add_argument(
+    "--obs-std",
+    type=float,
+    default=0.3,
+    dest="obs_std",
+    help="Observation-noise std on y=x1; default 0.3",
+)
+_parser.add_argument(
+    "--tag",
+    type=str,
+    default="",
+    help="Optional output filename tag, e.g. 'diff3' → pareto_budget_vs_rmse_diff3.png",
+)
 _parser.add_argument("--n-timing", type=int, default=2, dest="n_timing")
+_parser.add_argument(
+    "--append",
+    action="store_true",
+    help="Merge into existing raw CSV; skip (seed,family,label,budget) already present",
+)
 _args = _parser.parse_args()
 
 SEEDS = _parse_ints(_args.seeds)
@@ -118,11 +201,23 @@ SPINUP_STEPS = int(_args.spinup)
 ENKF_LIST = _parse_ints(_args.enkf)
 PF_LIST = _parse_ints(_args.pf)
 N_TIMING = _args.n_timing
-CRF_CONFIGS = default_crf_configs(3)
+DIFF_STD = float(_args.diff_std)
+OBS_STD = float(_args.obs_std)
+OUT_TAG = f"_{_args.tag}" if _args.tag.strip() else ""
+CRF_CONFIGS = default_crf_configs(3, max_paths=int(_args.crf_max_paths))
+CRF_CONFIGS = sorted(
+    CRF_CONFIGS + recombined_crf_configs(_parse_ints(_args.crf_recombined)),
+    key=lambda c: (c.n_paths, c.method, c.label),
+)
+if not CRF_CONFIGS:
+    raise SystemExit(
+        f"no CRF configs from --crf-max-paths={_args.crf_max_paths} "
+        f"and --crf-recombined={_args.crf_recombined!r}"
+    )
 
 lorenz_sigma, lorenz_rho, lorenz_beta = 10.0, 28.0, 8.0 / 3.0
 DT_INNER = 0.01
-diff_std, obs_std = 1.0, 0.3
+diff_std, obs_std = DIFF_STD, OBS_STD
 x_dim, y_dim, noise_dim = 3, 1, 3
 
 H = jnp.array([[1.0, 0.0, 0.0]])
@@ -136,17 +231,21 @@ COLORS = {
     "CD-EnKF": "#F6AE2D",
     "PF": "#F24236",
     "CRF-product": "#6A4C93",
+    "CRF-recombined": "#6A4C93",
 }
 DISPLAY_NAME = {
     "CRF-product": "WS-CKF",
+    "CRF-recombined": "WS-CKF",
     "CD-EKF": "CD-EKF",
-    "CD-UKF": "CD-UKF",
+    "CD-UKF": "CD-UKF (coarse)",  # flow-map predict
     "CD-EnKF": "CD-EnKF",
     "PF": "PF",
 }
 _LABEL_OFFSET = {
     "CD-EnKF": (0, -10),
     "PF": (0, 7),
+    "CRF-product": (0, 8),
+    "CRF-recombined": (0, 8),
 }
 
 
@@ -281,12 +380,52 @@ model_inputs = jnp.arange(n_obs + 1)
 
 print(
     f"L63 smoke Pareto: Δt={dt:g}, horizon={HORIZON:g}, n_obs={n_obs}, "
+    f"diff_std={diff_std:g}, obs_std={obs_std:g}, "
     f"seeds={SEEDS}, CRF={[c.label + f'({c.n_paths})' for c in CRF_CONFIGS]}"
 )
 
+RAW_FIELDS = ["delta_t", "n_obs", "horizon", "seed", "family", "label", "budget", "rmse", "time_s"]
+raw_path = os.path.join(OUTPUT_DIR, f"pareto_budget_vs_rmse{OUT_TAG}_raw.csv")
+csv_path = os.path.join(OUTPUT_DIR, f"pareto_budget_vs_rmse{OUT_TAG}.csv")
+plot_path = os.path.join(OUTPUT_DIR, f"pareto_budget_vs_rmse{OUT_TAG}.png")
 raw_rows: list[dict] = []
+done_keys: set[tuple[int, str, str, int]] = set()
+if _args.append and os.path.isfile(raw_path):
+    with open(raw_path, newline="") as f:
+        for r in csv.DictReader(f):
+            row = {
+                "seed": int(r["seed"]),
+                "family": r["family"],
+                "label": r["label"],
+                "budget": int(float(r["budget"])),
+                "rmse": float(r["rmse"]),
+                "time_s": float(r["time_s"]),
+            }
+            raw_rows.append(row)
+            done_keys.add((row["seed"], row["family"], row["label"], row["budget"]))
+    print(
+        f"Append mode: loaded {len(raw_rows)} rows "
+        f"({len({k[0] for k in done_keys})} seeds already present)"
+    )
 
-for seed in SEEDS:
+
+def _have(seed: int, family: str, label: str, budget: int) -> bool:
+    return (seed, family, label, budget) in done_keys
+
+
+seeds_to_run = [
+    s
+    for s in SEEDS
+    if any(not _have(s, c.family, c.label, c.n_paths) for c in CRF_CONFIGS)
+    or not _have(s, "CD-EKF", "EKF", 0)
+    or not _have(s, "CD-UKF", "UKF-coarse", 0)
+    or any(not _have(s, "CD-EnKF", f"EnKF-{n}", n) for n in ENKF_LIST)
+    or any(not _have(s, "PF", f"PF-{n}", n) for n in PF_LIST)
+]
+if _args.append and done_keys and not seeds_to_run:
+    print("No missing (seed, config) rows; regenerating summary/plot from existing raw CSV")
+
+for seed in seeds_to_run:
     print(f"\n=== seed {seed} ===")
     rng = np.random.default_rng(seed)
     x = np.array([1.0, 1.0, 1.0], dtype=np.float64)
@@ -324,15 +463,52 @@ for seed in SEEDS:
             "time_s": wall,
         }
         raw_rows.append(rec)
+        done_keys.add((seed, family, label, budget))
         print(
             f"  {family:12s} {label:14s} n={budget:4d}  "
             f"RMSE={rmse:6.3f}  time={1e3 * wall:7.1f} ms"
         )
 
     for cfg in CRF_CONFIGS:
-        n_expect = product_path_count(3, cfg.k, lyons_degree=cfg.lyons_degree)
-        if n_expect != cfg.n_paths:
-            raise RuntimeError(f"path count mismatch {cfg}")
+        if cfg.method == "product":
+            if _have(seed, cfg.family, cfg.label, cfg.n_paths):
+                continue
+            n_expect = product_path_count(3, cfg.k, lyons_degree=cfg.lyons_degree)
+            if n_expect != cfg.n_paths:
+                raise RuntimeError(f"path count mismatch {cfg}")
+            build_kwargs = dict(
+                cubature_order=cfg.k,
+                lyons_degree=cfg.lyons_degree,
+                multidim_paths="product",
+            )
+            label = cfg.label
+            budget = cfg.n_paths
+        else:
+            # Build explicitly so scored budget is the actual support size.
+            n_steps = max(1, int(round(dt / dt0)))
+            ts_path = np.linspace(0.0, float(dt), n_steps + 1, dtype=np.float64)
+            pv, pw = build_recombined_cubature_paths(
+                ts_path,
+                noise_dim=noise_dim,
+                k=cfg.k,
+                recombined_num_paths=cfg.n_paths,
+            )
+            actual_p = int(pv.shape[0])
+            label = f"rec-P{actual_p}"
+            budget = actual_p
+            if actual_p != cfg.n_paths:
+                print(
+                    f"  note: requested P={cfg.n_paths} collapsed to actual P={actual_p}"
+                )
+            if _have(seed, cfg.family, label, budget):
+                continue
+            build_kwargs = dict(
+                wiener_paths=(
+                    jnp.asarray(ts_path),
+                    jnp.asarray(pv),
+                    jnp.asarray(pw),
+                ),
+            )
         crf = build_filter(
             get_init_params=lambda mi: (m0, chol_P0),
             get_dynamics=lambda mi: (
@@ -347,41 +523,44 @@ for seed in SEEDS:
             noise_dim=noise_dim,
             dt=dt,
             integration_dt=dt0,
-            cubature_order=cfg.k,
-            lyons_degree=cfg.lyons_degree,
-            multidim_paths="product",
+            **build_kwargs,
         )
         jitted = jit(run_filter, static_argnames=["filter_obj"])
         states, wall = time_call(lambda f=jitted, filt=crf: f(filt, model_inputs))
         score(
-            "CRF-product",
-            cfg.label,
-            cfg.n_paths,
+            cfg.family,
+            label,
+            budget,
             stack_estimates(m0, states.mean[1:]),
             wall,
         )
 
-    ekf_jit = jit(
-        lambda: run_cd_ekf(
-            f_drift, h_obs, L_fn, Qc_fn, R, m0, P0, ys, dt, dt0,
-            state_order="flowmap", solver="rk4",
+    if not _have(seed, "CD-EKF", "EKF", 0):
+        ekf_jit = jit(
+            lambda: run_cd_ekf(
+                f_drift, h_obs, L_fn, Qc_fn, R, m0, P0, ys, dt, dt0,
+                state_order="flowmap", solver="rk4",
+            )
         )
-    )
-    ekf_res, wall = time_call(ekf_jit)
-    score("CD-EKF", "EKF", 0, stack_estimates(m0, ekf_res.means), wall)
+        ekf_res, wall = time_call(ekf_jit)
+        score("CD-EKF", "EKF", 0, stack_estimates(m0, ekf_res.means), wall)
 
-    ukf_jit = jit(
-        lambda: run_cd_ukf(
-            f_drift, h_obs, L_fn, Qc_fn, R, m0, P0, ys, dt, dt0,
-            UKFParams(), state_order="flowmap", solver="rk4",
+    if not _have(seed, "CD-UKF", "UKF-coarse", 0):
+        ukf_jit = jit(
+            lambda: run_cd_ukf(
+                f_drift, h_obs, L_fn, Qc_fn, R, m0, P0, ys, dt, dt0,
+                UKFParams(), state_order="flowmap", solver="rk4",
+            )
         )
-    )
-    ukf_res, wall = time_call(ukf_jit)
-    score("CD-UKF", "UKF", 0, stack_estimates(m0, ukf_res.means), wall)
+        ukf_res, wall = time_call(ukf_jit)
+        score("CD-UKF", "UKF-coarse", 0, stack_estimates(m0, ukf_res.means), wall)
 
+    # Preserve original RNG chain: always split once per listed budget, even if skipped.
     key = random.key(seed)
     for n_part in ENKF_LIST:
         key, sub = random.split(key)
+        if _have(seed, "CD-EnKF", f"EnKF-{n_part}", n_part):
+            continue
         enkf_jit = jit(
             lambda k, n=n_part: run_cd_enkf(
                 f_drift, h_obs, L_fn, Qc_fn, R, m0, P0, ys, dt, k,
@@ -393,6 +572,8 @@ for seed in SEEDS:
 
     for n_part in PF_LIST:
         key, sub = random.split(key)
+        if _have(seed, "PF", f"PF-{n_part}", n_part):
+            continue
         pf_jit = jit(
             lambda k, n=n_part: run_bootstrap_pf(
                 f_drift, h_obs, L_fn, Qc_fn, R, m0, P0, ys, dt, k,
@@ -403,14 +584,10 @@ for seed in SEEDS:
         score("PF", f"PF-{n_part}", n_part, stack_estimates(m0, pf_res.means), wall)
 
 # ---- CSV ----
-raw_path = os.path.join(OUTPUT_DIR, "pareto_budget_vs_rmse_raw.csv")
 with open(raw_path, "w", newline="") as f:
-    w = csv.DictWriter(
-        f,
-        fieldnames=["delta_t", "n_obs", "horizon", "seed", "family", "label", "budget", "rmse", "time_s"],
-    )
+    w = csv.DictWriter(f, fieldnames=RAW_FIELDS)
     w.writeheader()
-    for r in raw_rows:
+    for r in sorted(raw_rows, key=lambda x: (x["seed"], x["family"], x["budget"], x["label"])):
         w.writerow({"delta_t": dt, "n_obs": n_obs, "horizon": HORIZON, **r})
 
 keys = sorted({(r["family"], r["label"], r["budget"]) for r in raw_rows})
@@ -440,7 +617,7 @@ for family, label, budget in keys:
         }
     )
 
-csv_path = os.path.join(OUTPUT_DIR, "pareto_budget_vs_rmse.csv")
+csv_path = os.path.join(OUTPUT_DIR, f"pareto_budget_vs_rmse{OUT_TAG}.csv")
 with open(csv_path, "w", newline="") as f:
     w = csv.DictWriter(
         f,
@@ -464,11 +641,10 @@ with open(csv_path, "w", newline="") as f:
 
 # ---- plot ----
 BAND_SCALE = 0.3
-WS_CKF_PLOT_BUDGET = CRF_CONFIGS[0].n_paths  # single smallest product config
 
 
 def _annotate_nodes(ax, fam, pts, xs, ys):
-    if fam in ("CD-EKF", "CD-UKF", "CRF-product"):
+    if fam in ("CD-EKF", "CD-UKF"):
         return
     color = COLORS[fam]
     base_dx, base_dy = _LABEL_OFFSET.get(fam, (0, 6))
@@ -488,13 +664,19 @@ def _annotate_nodes(ax, fam, pts, xs, ys):
 
 
 fig, ax = plt.subplots(figsize=(7.5, 4.5))
-plot_families = ["CRF-product", "CD-EnKF", "PF", "CD-EKF", "CD-UKF"]
+# Merge product + recombined onto one WS-CKF curve (sorted by path count).
+plot_groups: list[tuple[str, list[str]]] = [
+    ("WS-CKF", ["CRF-product", "CRF-recombined"]),
+    ("CD-EnKF", ["CD-EnKF"]),
+    ("PF", ["PF"]),
+    ("CD-EKF", ["CD-EKF"]),
+    ("CD-UKF (coarse)", ["CD-UKF"]),
+]
 all_xs: list[float] = []
 n_seeds = len({r["seed"] for r in raw_rows})
-for fam in plot_families:
-    pts = [r for r in summary if r["family"] == fam]
-    if fam == "CRF-product":
-        pts = [r for r in pts if r["budget"] == WS_CKF_PLOT_BUDGET]
+crf_path_note = ",".join(str(c.n_paths) for c in CRF_CONFIGS)
+for disp, fams in plot_groups:
+    pts = [r for r in summary if r["family"] in fams]
     if not pts:
         continue
     pts = sorted(pts, key=lambda r: r["budget"])
@@ -502,9 +684,8 @@ for fam in plot_families:
     ys = np.asarray([r["rmse_mean"] for r in pts])
     ystd = np.asarray([r["rmse_std"] for r in pts]) * BAND_SCALE
     all_xs.extend(xs.tolist())
-    color = COLORS[fam]
-    marker = "s" if fam in ("CD-EKF", "CD-UKF", "CRF-product") else "o"
-    disp = DISPLAY_NAME.get(fam, fam)
+    color = COLORS[fams[0]]
+    marker = "s" if disp in ("CD-EKF", "CD-UKF (coarse)", "WS-CKF") else "o"
     if len(pts) == 1:
         x0 = float(xs[0])
         ax.fill_between(
@@ -519,7 +700,7 @@ for fam in plot_families:
     else:
         ax.fill_between(xs, ys - ystd, ys + ystd, color=color, alpha=0.22, lw=0)
         ax.plot(xs, ys, f"-{marker}", color=color, lw=1.5, markersize=6, label=disp)
-    _annotate_nodes(ax, fam, pts, xs, ys)
+    _annotate_nodes(ax, fams[0], pts, xs, ys)
 
 ax.set_xlabel("Wall-clock time [ms]")
 ax.set_ylabel("Fine-grid RMSE (overall)")
@@ -530,13 +711,13 @@ if all_xs:
 ax.grid(True, which="both", alpha=0.3)
 ax.legend(fontsize=8, loc="best")
 ax.set_title(
-    rf"L63 smoke Pareto at $\Delta t={dt:g}$ "
+    rf"L63 smoke Pareto at $\Delta t={dt:g}$, $\sigma_{{\mathrm{{diff}}}}={diff_std:g}$ "
     rf"(mean±{BAND_SCALE:g}$\sigma$ over {n_seeds} seeds; "
-    rf"horizon={HORIZON:g}; WS-CKF = {WS_CKF_PLOT_BUDGET}-path product)",
+    rf"horizon={HORIZON:g}; WS-CKF P∈{{{crf_path_note}}})",
     fontsize=11,
 )
 fig.tight_layout()
-plot_path = os.path.join(OUTPUT_DIR, "pareto_budget_vs_rmse.png")
+plot_path = os.path.join(OUTPUT_DIR, f"pareto_budget_vs_rmse{OUT_TAG}.png")
 fig.savefig(plot_path, dpi=150, bbox_inches="tight")
 plt.close()
 

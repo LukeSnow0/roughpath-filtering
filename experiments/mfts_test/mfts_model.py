@@ -73,16 +73,28 @@ def make_mfts_dynamics(
     bar_F4: Callable[[float], float],
     F1: float = 5.0,
     F2: float = 5.0,
+    noise: str = "additive",
+    F_noise_scale: float = 150.0,
 ):
     """Return drift, diffusion L, Qc, observation map, and R for continuous-discrete filters.
 
     ``lambda_dist`` / ``sigma_dist`` may be Python floats or JAX scalars (tracers),
     so the returned drift is differentiable w.r.t. those parameters.
+
+    ``noise``:
+      * ``"additive"`` — constant diffusion on ``(F3, F4)`` (Nielsen baseline).
+      * ``"multiplicative"`` — speed-dependent diffusion
+        ``g(F) = σ √(1 + (F / F_c)²)`` on each disturbance channel (same form as
+        the movement-test OU-velocity model). State-dependent, so moment-ODE
+        EKF/UKF freeze ``g`` at the mean while path filters see ``g(F(t))``.
     """
+    if noise not in ("additive", "multiplicative"):
+        raise ValueError(f"noise must be 'additive' or 'multiplicative', got {noise!r}")
     alpha = jnp.array(alphas(p))
     beta = jnp.array(betas(p))
     g1, g2 = p.gamma1, p.gamma2
     eps = p.mass_eps
+    fc = float(F_noise_scale)
 
     def _q_out(m):
         return alpha * jnp.sqrt(jnp.maximum(m, eps))
@@ -102,15 +114,24 @@ def make_mfts_dynamics(
         dF4 = lambda_dist * (b4 - F4)
         return jnp.array([dm1, dm2, dm3, dm4, dF3, dF4])
 
+    def _g(F):
+        return sigma_dist * jnp.sqrt(1.0 + (F / fc) ** 2)
+
     def diffusion_coefficient_fn(t: float, x: jnp.ndarray) -> jnp.ndarray:
+        if noise == "additive":
+            s3 = sigma_dist
+            s4 = sigma_dist
+        else:
+            s3 = _g(x[4])
+            s4 = _g(x[5])
         return jnp.array(
             [
                 [0.0, 0.0],
                 [0.0, 0.0],
                 [0.0, 0.0],
                 [0.0, 0.0],
-                [sigma_dist, 0.0],
-                [0.0, sigma_dist],
+                [s3, 0.0],
+                [0.0, s4],
             ]
         )
 
@@ -135,11 +156,16 @@ def simulate_mfts(
     F1: float = 5.0,
     F2: float = 5.0,
     seed: int = 42,
+    noise: str = "additive",
+    F_noise_scale: float = 150.0,
 ) -> tuple[np.ndarray, np.ndarray, jnp.ndarray]:
     """Euler-Maruyama truth; returns (true_traj, observations, R)."""
+    if noise not in ("additive", "multiplicative"):
+        raise ValueError(f"noise must be 'additive' or 'multiplicative', got {noise!r}")
     rng = np.random.default_rng(seed)
     dt_obs_sec = (horizon_min / n_obs) * 60.0
     dt_sub = dt_obs_sec / n_substeps_truth
+    fc = float(F_noise_scale)
 
     m0 = mfts_steady_masses(F1, F2, p.F_nominal_est, p.F_nominal_est, p)
     x = np.array([*m0, p.F_nominal_est, p.F_nominal_est], dtype=np.float64)
@@ -163,14 +189,21 @@ def simulate_mfts(
         dF4 = lambda_sim * (b4 - F4)
         return np.array([dm1, dm2, dm3, dm4, dF3, dF4])
 
+    def g_np(F: float) -> float:
+        return float(sigma_sim * np.sqrt(1.0 + (F / fc) ** 2))
+
     t_sec = 0.0
     for _ in range(n_obs):
         for _ in range(n_substeps_truth):
             f = drift_np(t_sec, x)
             dW = rng.normal(scale=np.sqrt(dt_sub), size=2)
             x[:4] += f[:4] * dt_sub
-            x[4] += f[4] * dt_sub + sigma_sim * dW[0]
-            x[5] += f[5] * dt_sub + sigma_sim * dW[1]
+            if noise == "additive":
+                x[4] += f[4] * dt_sub + sigma_sim * dW[0]
+                x[5] += f[5] * dt_sub + sigma_sim * dW[1]
+            else:
+                x[4] += f[4] * dt_sub + g_np(x[4]) * dW[0]
+                x[5] += f[5] * dt_sub + g_np(x[5]) * dW[1]
             x[:4] = np.maximum(x[:4], p.mass_eps)
             t_sec += dt_sub
         y = betas(p) * x[:4] + rng.multivariate_normal(np.zeros(4), R)

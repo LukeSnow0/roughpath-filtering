@@ -1,0 +1,41 @@
+{
+  "params": {
+    "gamma1": 0.20642317560444673,
+    "gamma2": 0.23309961956306494,
+    "g": 981.0,
+    "A": [
+      380.1327,
+      380.1327,
+      380.1327,
+      380.1327
+    ],
+    "a_out": [
+      0.4467159163599921,
+      0.6496754367660771,
+      0.44258041060820236,
+      0.7386066735356255
+    ],
+    "k_pump": 69.62509791545536,
+    "meas_std": 0.05,
+    "h_eps": 0.001,
+    "height_bias": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "sigma_u": 14.062472710659131
+  },
+  "meta": {
+    "method": "CD-EnKF",
+    "source": "4T-M2-train",
+    "fit_min": 15.0,
+    "holdout_min": 10.0,
+    "delta_min": 1.0,
+    "heldout_nll_mean": 172.4647062686597,
+    "heldout_nll_std": 1.2055005865959696,
+    "train_ll_final": -4531.960665691498,
+    "warm_start": true,
+    "open_loop_params": "/Users/lukesnow-basis/Documents/code/cubature-filtering/experiments/mfts_test/intaset_real/output/calibrated_params.json"
+  }
+}

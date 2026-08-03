@@ -256,6 +256,37 @@ class FilterResult(NamedTuple):
     means: jax.Array  # (T, x_dim)
     covs: jax.Array  # (T, x_dim, x_dim)  (PF: ensemble covariance)
     cum_loglik: jax.Array  # (T,) cumulative marginal log-likelihood (nan if N/A)
+    # One-step predictive observation moments used for the Gaussian log score / CRPS.
+    pred_obs_mean: jax.Array = None  # (T, y_dim) or None
+    pred_obs_std: jax.Array = None  # (T, y_dim) marginal stds, or None
+    # Optional per-step CRPS of the filter's actual predictive (e.g. PF mixture).
+    pred_crps: jax.Array = None  # (T,) or None
+
+
+def _eabs_gaussian(mu, sigma):
+    """``E|N(μ, σ²)|`` (broadcastable)."""
+    sigma = jnp.maximum(sigma, 1e-12)
+    z = mu / sigma
+    return sigma * jnp.sqrt(2.0 / jnp.pi) * jnp.exp(-0.5 * z * z) + mu * (
+        2.0 * jax.scipy.stats.norm.cdf(z) - 1.0
+    )
+
+
+def crps_gaussian_mixture(y, means, sigma, weights=None):
+    """CRPS of ``∑ w_i N(m_i, σ²)`` at scalar ``y`` (energy form; proper for the mixture)."""
+    means = jnp.reshape(means, (-1,))
+    y = jnp.reshape(y, ())
+    sigma = jnp.maximum(sigma, 1e-12)
+    n = means.shape[0]
+    if weights is None:
+        w = jnp.full((n,), 1.0 / n)
+    else:
+        w = jnp.reshape(weights, (-1,))
+        w = w / jnp.sum(w)
+    e1 = jnp.sum(w * _eabs_gaussian(means - y, sigma))
+    d = means[:, None] - means[None, :]
+    e2 = jnp.sum((w[:, None] * w[None, :]) * _eabs_gaussian(d, sigma * jnp.sqrt(2.0)))
+    return e1 - 0.5 * e2
 
 
 def _flow_map(m, f, t0, t1, dt0, solver: SolverKind = "diffrax", n_steps: Optional[int] = None):
@@ -338,13 +369,15 @@ def run_cd_ekf(
         m_pred, P_pred = _ekf_predict(
             m, P, f, L_fn, Qc_fn, t0, t0 + dt, dt0, state_order, solver=solver, n_steps=n_inner
         )
+        y_hat = h(m_pred)
         H_x = jacfwd(h)(m_pred)
-        ll = ll + gaussian_logpdf(ys[k], h(m_pred), H_x @ P_pred @ H_x.T + R)
+        S = psd(H_x @ P_pred @ H_x.T + R)
+        ll = ll + gaussian_logpdf(ys[k], y_hat, S)
         m_filt, P_filt = _ekf_update(m_pred, P_pred, h, R, ys[k], num_iter)
-        return (m_filt, P_filt, ll), (m_filt, P_filt, ll)
+        return (m_filt, P_filt, ll), (m_filt, P_filt, ll, y_hat, jnp.sqrt(jnp.diag(S)))
 
-    _, (means, covs, lls) = lax.scan(step, (m0, P0, 0.0), jnp.arange(n))
-    return FilterResult(means, covs, lls)
+    _, (means, covs, lls, pred_m, pred_s) = lax.scan(step, (m0, P0, 0.0), jnp.arange(n))
+    return FilterResult(means, covs, lls, pred_m, pred_s)
 
 
 # ---------------------------------------------------------------------------
@@ -441,7 +474,7 @@ def _ukf_update(m, P, h, R, y, n, lamb, w_mean, w_cov, num_iter: int = 1):
         return (mm + K @ (y - y_pred), psd(PP - K @ S @ K.T)), None
 
     (m_cond, P_cond), _ = lax.scan(iter_step, (m, P), jnp.arange(num_iter))
-    return ll, m_cond, P_cond
+    return ll, m_cond, P_cond, y_pred0, jnp.sqrt(jnp.diag(S0))
 
 
 def run_cd_ukf(
@@ -481,14 +514,14 @@ def run_cd_ukf(
         m_pred, P_pred = _ukf_predict(
             m, P, f, L_fn, Qc_fn, t0, t0 + dt, dt0, n, lamb, w_mean, w_cov, W_matrix, state_order, solver=solver, n_steps=n_inner
         )
-        ll_inc, m_filt, P_filt = _ukf_update(
+        ll_inc, m_filt, P_filt, y_hat, y_std = _ukf_update(
             m_pred, P_pred, h, R, ys[k], n, lamb, w_mean, w_cov, num_iter=num_iter
         )
         ll = ll + ll_inc
-        return (m_filt, P_filt, ll), (m_filt, P_filt, ll)
+        return (m_filt, P_filt, ll), (m_filt, P_filt, ll, y_hat, y_std)
 
-    _, (means, covs, lls) = lax.scan(step, (m0, P0, 0.0), jnp.arange(n_steps))
-    return FilterResult(means, covs, lls)
+    _, (means, covs, lls, pred_m, pred_s) = lax.scan(step, (m0, P0, 0.0), jnp.arange(n_steps))
+    return FilterResult(means, covs, lls, pred_m, pred_s)
 
 
 # ---------------------------------------------------------------------------
@@ -582,10 +615,10 @@ def run_cd_enkf(
         ll = ll + gaussian_logpdf(ys[k], y_mean, S)
         mean = jnp.mean(x_filt, axis=0)
         cov = jnp.cov(x_filt, rowvar=False)
-        return (x_filt, ll, key), (mean, cov, ll)
+        return (x_filt, ll, key), (mean, cov, ll, y_mean, jnp.sqrt(jnp.diag(S)))
 
-    _, (means, covs, lls) = lax.scan(step, (particles, 0.0, key), jnp.arange(n_steps))
-    return FilterResult(means, covs, lls)
+    _, (means, covs, lls, pred_m, pred_s) = lax.scan(step, (particles, 0.0, key), jnp.arange(n_steps))
+    return FilterResult(means, covs, lls, pred_m, pred_s)
 
 
 # ---------------------------------------------------------------------------
@@ -643,8 +676,17 @@ def run_bootstrap_pf(
         mean = weights @ x_pred
         dx = x_pred - mean
         cov = (weights[:, None] * dx).T @ dx
+        # Predictive for y is equal-weight mixture ∑ N(h(x_i), R) (bootstrap prior).
+        y_ens = vmap(h)(x_pred)
+        y_mean = jnp.mean(y_ens, axis=0)
+        dy = y_ens - y_mean
+        y_var = jnp.mean(dy * dy, axis=0) + jnp.diag(R)
+        sig_obs = jnp.sqrt(jnp.maximum(jnp.diag(R)[0], 1e-12))
+        crps = crps_gaussian_mixture(ys[k][0], y_ens[:, 0], sig_obs, weights=None)
         idx = _systematic_resample(k_res, weights)
-        return (x_pred[idx], ll, key), (mean, cov, ll)
+        return (x_pred[idx], ll, key), (mean, cov, ll, y_mean, jnp.sqrt(y_var), crps)
 
-    _, (means, covs, lls) = lax.scan(step, (particles, 0.0, key), jnp.arange(n_steps))
-    return FilterResult(means, covs, lls)
+    _, (means, covs, lls, pred_m, pred_s, pred_crps) = lax.scan(
+        step, (particles, 0.0, key), jnp.arange(n_steps)
+    )
+    return FilterResult(means, covs, lls, pred_m, pred_s, pred_crps)

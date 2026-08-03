@@ -8,9 +8,15 @@ Mirrors ``experiments/mfts_test/run_pareto_budget.py``, but:
   training records (InTaSet has no i.i.d. replicates). Default: 3×10 min
   windows from ``4T-M2-train`` (fewer than the simulated 5-seed sweep).
 
+Optional ``--k-proportional`` adds a recombined CRF with
+``k ∝ Δt`` (capped by ``--k-max``) to mitigate long-interval cubature truncation.
+
 Run:
   uv run --extra experiments python \\
       experiments/mfts_test/intaset_real/run_pareto_budget.py
+  uv run --extra experiments python \\
+      experiments/mfts_test/intaset_real/run_pareto_budget.py \\
+      --k-proportional --params output/calibrated_params_filter.json
   uv run --extra experiments python \\
       experiments/mfts_test/intaset_real/run_pareto_budget.py \\
       --sources 4T-M2-train --n-windows 3 --horizon-min 10
@@ -67,7 +73,7 @@ from experiments.cd_dynamax_mirror.filters import (
 )
 from cuthbert import filter as run_filter
 from crf import build_filter
-from crf.library import product_path_count
+from crf.library import default_recombined_num_paths, product_path_count
 
 from intaset_io import default_mc_windows
 from intaset_model import (
@@ -110,7 +116,7 @@ class CrfConfig:
     n_paths: int
     k: int = 1
     lyons_degree: int = 5
-    method: str = "product"
+    method: str = "product"  # "product" | "recombined" | "lv"
 
 
 def default_product_ladder(noise_dim: int = 2, max_paths: int = 100) -> list[CrfConfig]:
@@ -150,6 +156,33 @@ def lv_configs(noise_dim: int = 2) -> list[CrfConfig]:
         )
         for m in (3, 5)
     ]
+
+
+def k_for_delta(dt_min: float, k_ref_min: float, k_max: int) -> int:
+    return min(int(k_max), max(1, int(round(float(dt_min) / float(k_ref_min)))))
+
+
+def kprop_recombined_config(
+    dt_min: float,
+    *,
+    k_ref_min: float,
+    k_max: int,
+    num_paths: int | None = None,
+    k_fixed: int | None = None,
+) -> CrfConfig:
+    """Recombined CRF with macro-segment count k ∝ Δt (or an explicit ``k_fixed``)."""
+    k = int(k_fixed) if k_fixed is not None else k_for_delta(dt_min, k_ref_min, k_max)
+    k = max(1, k)
+    n = default_recombined_num_paths(2, k) if num_paths is None else max(1, int(num_paths))
+    label = f"k∝Δt-k{k}" if k_fixed is None else f"recomb-k{k}"
+    return CrfConfig(
+        family="CRF-recombined",
+        label=label,
+        n_paths=n,
+        k=k,
+        lyons_degree=5,
+        method="recombined",
+    )
 
 
 _parser = argparse.ArgumentParser(
@@ -203,6 +236,49 @@ _parser.add_argument(
     default=81,
     dest="crf_max_paths",
 )
+_parser.add_argument(
+    "--k-proportional",
+    action="store_true",
+    dest="k_proportional",
+    help="Add recombined CRF with k=min(--k-max, max(1, round(Δt/--k-ref-min))) "
+    "to mitigate long-Δt cubature truncation",
+)
+_parser.add_argument(
+    "--k-ref-min",
+    type=float,
+    default=0.5,
+    dest="k_ref_min",
+    help="Target macro-segment length [min] for --k-proportional (default 0.5)",
+)
+_parser.add_argument(
+    "--k-max",
+    type=int,
+    default=8,
+    dest="k_max",
+    help="Cap on k under --k-proportional (default 8)",
+)
+_parser.add_argument(
+    "--k-prop-paths",
+    type=str,
+    default="default",
+    dest="k_prop_paths",
+    help="Path budget for k∝Δt CRF: 'default' or an integer",
+)
+_parser.add_argument(
+    "--k-prop-ks",
+    type=str,
+    default="",
+    dest="k_prop_ks",
+    help="Comma-separated fixed k values for recombined CRF "
+    "(e.g. 3,4). If set, these are used instead of k∝Δt from --k-ref-min. "
+    "Implies recombined CRF configs even without --k-proportional.",
+)
+_parser.add_argument(
+    "--skip-product-crf",
+    action="store_true",
+    dest="skip_product_crf",
+    help="Omit the product Lyons ladder (useful with --k-proportional alone)",
+)
 _parser.add_argument("--include-lv", action="store_true")
 _parser.add_argument(
     "--enkf",
@@ -242,9 +318,39 @@ N_TIMING = _args.n_timing
 FILTER_SEED0 = int(_args.filter_seed)
 ENKF_PARTICLE_LIST = _parse_ints(_args.enkf)
 PF_PARTICLE_LIST = _parse_ints(_args.pf)
-CRF_CONFIGS = default_product_ladder(2, max_paths=_args.crf_max_paths)
+CRF_CONFIGS: list[CrfConfig] = []
+if not _args.skip_product_crf:
+    CRF_CONFIGS.extend(default_product_ladder(2, max_paths=_args.crf_max_paths))
 if _args.include_lv:
-    CRF_CONFIGS = sorted(CRF_CONFIGS + lv_configs(2), key=lambda c: (c.n_paths, c.family))
+    CRF_CONFIGS.extend(lv_configs(2))
+n_override = None
+tok = _args.k_prop_paths.strip().lower()
+if tok not in ("", "default"):
+    n_override = int(tok)
+k_fixed_list = _parse_ints(_args.k_prop_ks) if _args.k_prop_ks.strip() else []
+if k_fixed_list:
+    for k_fix in k_fixed_list:
+        CRF_CONFIGS.append(
+            kprop_recombined_config(
+                DELTA_T_MIN,
+                k_ref_min=float(_args.k_ref_min),
+                k_max=int(_args.k_max),
+                num_paths=n_override,
+                k_fixed=k_fix,
+            )
+        )
+elif _args.k_proportional:
+    if float(_args.k_ref_min) <= 0.0:
+        raise SystemExit("--k-ref-min must be > 0")
+    CRF_CONFIGS.append(
+        kprop_recombined_config(
+            DELTA_T_MIN,
+            k_ref_min=float(_args.k_ref_min),
+            k_max=int(_args.k_max),
+            num_paths=n_override,
+        )
+    )
+CRF_CONFIGS = sorted(CRF_CONFIGS, key=lambda c: (c.family, c.n_paths, c.label))
 ONLY_FAMILIES: Optional[set[str]] = None
 if _args.only.strip():
     ONLY_FAMILIES = {s.strip() for s in _args.only.split(",") if s.strip()}
@@ -255,7 +361,9 @@ if N_WINDOWS < 1:
     raise SystemExit("--n-windows must be ≥ 1")
 if ONLY_FAMILIES is None:
     if not CRF_CONFIGS:
-        raise SystemExit("No CRF configs (raise --crf-max-paths?)")
+        raise SystemExit(
+            "No CRF configs (raise --crf-max-paths, or pass --k-proportional)"
+        )
     if not ENKF_PARTICLE_LIST or not PF_PARTICLE_LIST:
         raise SystemExit("--enkf / --pf must list at least one particle count")
 
@@ -299,10 +407,12 @@ COLORS = {
     "PF": "#F24236",
     "CRF-product": "#6A4C93",
     "CRF-LV": "#C44536",
+    "CRF-recombined": "#8B1E3F",
 }
 DISPLAY_NAME = {
     "CRF-product": "WS-CKF",
     "CRF-LV": "WS-CKF-LV",
+    "CRF-recombined": r"WS-CKF $k\propto\Delta t$",
     "CD-EKF": "CD-EKF",
     "CD-UKF": "CD-UKF",
     "CD-CKF": "CD-CKF",
@@ -410,6 +520,10 @@ print(
     f"  params: k_pump={p.k_pump:.3g} γ=({p.gamma1:.3f},{p.gamma2:.3f}) "
     f"meas_std={p.meas_std:.3f} sigma_u={sigma_u:.3g}"
 )
+print(
+    "  CRF: "
+    + ", ".join(f"{c.label}({c.method},k={c.k},P={c.n_paths})" for c in CRF_CONFIGS)
+)
 for w in windows:
     print(f"  {w.source}: n={w.n}, dt≈{w.dt_sec:.3f}s, dur={w.duration_sec/60:.2f} min")
 
@@ -466,6 +580,38 @@ def build_crf(cfg: CrfConfig, drift, L, obs_fn, m0, chol_P0, chol_R, ys, dt, dt0
             raise RuntimeError(
                 f"LV m={cfg.lyons_degree}: expected {cfg.n_paths} paths, got {n_actual}"
             )
+        return build_filter(
+            get_init_params=lambda mi: (m0, chol_P0),
+            get_dynamics=lambda mi: (
+                lambda t, x: drift(t, x),
+                lambda t, x: L(t, x),
+            ),
+            get_observations=lambda mi: (obs_fn, chol_R, ys[mi - 1]),
+            noise_dim=2,
+            dt=dt,
+            integration_dt=dt0,
+            cubature_order=cfg.k,
+            lyons_degree=cfg.lyons_degree,
+            multidim_paths="product",
+            wiener_paths=wiener_paths,
+        )
+    if cfg.method == "recombined":
+        return build_filter(
+            get_init_params=lambda mi: (m0, chol_P0),
+            get_dynamics=lambda mi: (
+                lambda t, x: drift(t, x),
+                lambda t, x: L(t, x),
+            ),
+            get_observations=lambda mi: (obs_fn, chol_R, ys[mi - 1]),
+            noise_dim=2,
+            dt=dt,
+            integration_dt=dt0,
+            cubature_order=cfg.k,
+            num_paths=cfg.n_paths,
+            multidim_paths="recombined",
+            sde_form="ito",
+        )
+    # product Lyons–Victoir
     return build_filter(
         get_init_params=lambda mi: (m0, chol_P0),
         get_dynamics=lambda mi: (
@@ -479,7 +625,7 @@ def build_crf(cfg: CrfConfig, drift, L, obs_fn, m0, chol_P0, chol_R, ys, dt, dt0
         cubature_order=cfg.k,
         lyons_degree=cfg.lyons_degree,
         multidim_paths="product",
-        wiener_paths=wiener_paths,
+        sde_form="ito",
     )
 
 
@@ -825,11 +971,19 @@ BAND_SCALE = 0.3
 # Single moment-safe WS-CKF point (higher path budgets don't help much here).
 WS_CKF_PLOT_BUDGETS = {4}
 PARTICLE_PLOT_HIDE_BUDGETS = {25, 1000}
-plot_families = ["CRF-product", "CD-EnKF", "PF", "CD-EKF", "CD-UKF", "CD-CKF"]
+plot_families = [
+    "CRF-product",
+    "CRF-recombined",
+    "CD-EnKF",
+    "PF",
+    "CD-EKF",
+    "CD-UKF",
+    "CD-CKF",
+]
 
 
 def _annotate_nodes(ax, fam, pts, xs, ys):
-    if fam in ("CD-EKF", "CD-UKF", "CD-CKF", "CRF-product"):
+    if fam in ("CD-EKF", "CD-UKF", "CD-CKF", "CRF-product", "CRF-recombined"):
         return
     color = COLORS.get(fam, "#333333")
     base_dx, base_dy = _LABEL_OFFSET.get(fam, (0, 6))
@@ -876,7 +1030,7 @@ def _plot_pareto_metric(metric: str, ylabel: str, title: str, out_name: str) -> 
         ystd = np.asarray([r[f"{metric}_std"] for r in pts]) * BAND_SCALE
         all_xs.extend(xs.tolist())
         color = COLORS.get(fam, "#333333")
-        if fam == "CRF-product":
+        if fam in ("CRF-product", "CRF-recombined"):
             marker = "*"
         elif fam in ("CD-EKF", "CD-UKF", "CD-CKF"):
             marker = "s"

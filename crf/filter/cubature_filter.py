@@ -33,6 +33,9 @@ class CRFState(NamedTuple):
     chol_cov: Array
     model_inputs: ArrayTree
     log_normalizing_constant: ScalarArray
+    # One-step predictive observation moments at this assimilation (zeros at t0).
+    pred_obs_mean: Array
+    pred_obs_std: Array
 
     @property
     def cov(self) -> Array:
@@ -187,6 +190,8 @@ def init_prepare(
         chol_cov=chol_P0,
         model_inputs=model_inputs,
         log_normalizing_constant=jnp.array(0.0),
+        pred_obs_mean=jnp.zeros((), dtype=m0.dtype),
+        pred_obs_std=jnp.zeros((), dtype=m0.dtype),
     )
 
 
@@ -221,6 +226,8 @@ def filter_prepare(
         chol_cov=dummy_chol_cov,
         model_inputs=model_inputs,
         log_normalizing_constant=jnp.array(0.0),
+        pred_obs_mean=jnp.zeros((), dtype=dummy_mean.dtype),
+        pred_obs_std=jnp.zeros((), dtype=dummy_mean.dtype),
     )
 
 
@@ -257,7 +264,7 @@ def filter_combine(
     observation_fn, chol_R, y = get_observations(state_2.model_inputs)
 
     # First update uses the Wiener-path propagated cloud.
-    updated_mean, updated_chol_cov, log_likelihood = update(
+    updated_mean, updated_chol_cov, log_likelihood, z_mean, chol_S = update(
         predicted_mean,
         samples,
         weights,
@@ -269,7 +276,7 @@ def filter_combine(
     def _extra_iter(carry, _):
         m, chol = carry
         nodes, node_w = spatial_cubature_nodes(m, chol)
-        m2, c2, _ = update(m, nodes, node_w, observation_fn, chol_R, y)
+        m2, c2, _, _, _ = update(m, nodes, node_w, observation_fn, chol_R, y)
         return (m2, c2), None
 
     num_extra = max(0, int(num_iter) - 1)
@@ -279,9 +286,12 @@ def filter_combine(
         jnp.arange(num_extra),
     )
 
+    S = chol_S @ chol_S.T
     return CRFState(
         mean=updated_mean,
         chol_cov=updated_chol_cov,
         model_inputs=state_2.model_inputs,
         log_normalizing_constant=state_1.log_normalizing_constant + log_likelihood,
+        pred_obs_mean=jnp.reshape(z_mean, (-1,))[0],
+        pred_obs_std=jnp.sqrt(S[0, 0]),
     )

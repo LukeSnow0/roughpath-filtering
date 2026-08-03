@@ -184,3 +184,7 @@ cuthbertlib/
 .output/
 
 *.ttf
+
+# AZT1D raw release (third-party; keep scripts under experiments/AZT1D/ tracked)
+experiments/AZT1D/AZT1D 2025/
+experiments/AZT1D/.mplcache/

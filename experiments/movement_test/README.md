@@ -41,7 +41,7 @@ Fixed in fits: home-range \(\omega^2\), speed scale \(v_c\), measurement \(R\). 
 
 ## Filtering & MLE
 
-Maximize each filter’s marginal log-likelihood of the GPS series over \((\tau_v,\sigma_v)\) (Adam on \((\log\tau_v,\log\sigma_v)\); optional 2D grid).
+Maximize each filter’s **train-prefix** marginal log-likelihood of the GPS series over \((\tau_v,\sigma_v)\) (Adam on \((\log\tau_v,\log\sigma_v)\); optional 2D train grid). Default `--holdout-frac 0.3`: fit on \(y_{1:N_{\mathrm{train}}}\) only, then rank \(\hat\theta\) by **held-out NLL under a shared reference EnKF** (default 500 particles; `--ref-enkf-particles`). Train is warmup on the full-track reference run (no cold start; no held-out leakage into \(\hat\theta\)). Self-likelihood scores are kept as diagnostics only.
 
 | Filter | Forecast | Role in this study |
 |--------|----------|--------------------|
@@ -54,20 +54,47 @@ Maximize each filter’s marginal log-likelihood of the GPS series over \((\tau_
 
 ## Main findings (N = 600, `MALL 825 M`)
 
-- **CRF ≈ EnKF:** \(\hat\tau_v\sim 0.75\,\mathrm{h}\), \(\hat\sigma_v\sim 2.5\)–\(2.8\,\mathrm{km/h}\) (same high-likelihood ridge).
+- **CRF ≈ EnKF:** \(\hat\tau_v\sim 0.75\,\mathrm{h}\), \(\hat\sigma_v\sim 2.5\)–\(2.8\,\mathrm{km/h}\) (same high-likelihood ridge; historically from full-track fits).
 - **EKF differs:** shorter \(\tau_v\), larger \(\sigma_v\) / implied \(\sigma_0\) — moment closure mishandles state-dependent diffusion.
-- No ground-truth \(\theta\); agreement of SDE-propagating filters is the claim, not a validated biological constant. Rank accuracy further via simulation recovery and held-out predictive loglik.
+- Real-data accuracy column: **train-fit \(\hat\theta\) → held-out NLL under ref EnKF** (`movement_heldout_compare.png`). Twin / simulation recovery remains the absolute-\(\theta\) check.
 
 ## Run
 
 ```bash
 uv run --extra experiments python experiments/movement_test/run_movement_mle.py
 uv run --extra experiments python experiments/movement_test/run_movement_mle.py \
-    --n-obs 600 --mle-iters 40 --grid 10
+    --n-obs 600 --holdout-frac 0.3 --mle-iters 40 --grid 10
+uv run --extra experiments python experiments/movement_test/run_movement_mle.py \
+    --holdout-frac 0   # full-track fit only (no held-out score)
 uv run --extra experiments python experiments/movement_test/run_movement_mle.py \
     --timing-only --solver rk4   # or diffrax
 ```
 
+## Pooled multi-bird + leave-one-bird-out
+
+Shared \((\tau_v,\sigma_v)\) fit on several same-species tracks, then **leave-one-bird-out**: fit on all but bird \(b\), score bird \(b\) under ref EnKF (bird \(b\) never in the fit).
+
+```bash
+uv run --extra experiments python experiments/movement_test/run_movement_pooled_lobo.py
+uv run --extra experiments python experiments/movement_test/run_movement_pooled_lobo.py \
+    --n-birds 4 --n-obs 400 --mle-iters 25 --num-paths 35
+```
+
+Outputs: `movement_lobo_compare.png`, `movement_lobo_summary.csv`, `movement_lobo_folds.csv`.
+
+## Paths vs particles Pareto
+
+Fixed-\(\theta^\*\) cost–accuracy curve (no per-budget refit). Default \(\theta^\*\) is the CRF/EnKF consensus from the MLE run; score **held-out NLL / obs** on a suffix of the track; fair wall-clock vs **RK4** EnKF. This is *propagator* efficiency, not train-MLE accuracy (see MLE held-out above).
+
+```bash
+uv run --extra experiments python experiments/movement_test/run_pareto_budget.py
+uv run --extra experiments python experiments/movement_test/run_pareto_budget.py \
+    --n-obs 600 --holdout-frac 0.3 --enkf 25,50,100,200,500 \
+    --crf-max-paths 81 --n-timing 3
+```
+
+Outputs: `pareto_budget_vs_nll.png` (held-out + full-track NLL panels), `pareto_budget_vs_nll.csv`, `pareto_budget_vs_nll_raw.csv`.
+
 ## Outputs
 
-`output/movement_loglik.png` (2D \(L(\tau_v,\sigma_v)\)), `movement_mle_trace.png`, `movement_track.png`, `movement_timing*.png`, `movement_summary.csv`.
+`output/movement_loglik.png` (2D **train** \(L(\tau_v,\sigma_v)\)), `movement_mle_trace.png`, `movement_track.png`, `movement_heldout_compare.png` (θ̂ plane + held-out NLL + split), `movement_heldout.png`, `movement_timing*.png`, `movement_summary.csv`.

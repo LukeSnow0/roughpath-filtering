@@ -219,7 +219,7 @@ def update(
         y: Observation vector, shape ``(y_dim,)``.
 
     Returns:
-        Tuple ``(updated_mean, updated_chol_cov, log_likelihood)``.
+        Tuple ``(updated_mean, updated_chol_cov, log_likelihood, innov_mean, chol_S)``.
     """
     weights = weights / jnp.sum(weights)
     x_dim = predicted_mean.shape[0]
@@ -250,4 +250,10 @@ def update(
 
     log_likelihood = multivariate_normal.logpdf(y, z_mean, chol_S, nan_support=False)
 
-    return updated_mean, updated_chol_cov, jnp.asarray(log_likelihood)
+    return (
+        updated_mean,
+        updated_chol_cov,
+        jnp.asarray(log_likelihood),
+        z_mean,
+        chol_S,
+    )

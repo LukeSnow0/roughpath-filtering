@@ -35,6 +35,8 @@ from typing import Optional
 os.environ.setdefault(
     "MPLCONFIGDIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), ".mplcache")
 )
+# MPS rejects float64; keep x64 on CPU.
+os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 EXPERIMENTS_DIR = os.path.abspath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
@@ -232,6 +234,20 @@ _parser.add_argument(
     help="Comma-separated families to run (e.g. CD-CKF). Use with --merge "
     "to fill a family into an existing Pareto CSV without re-running others.",
 )
+_parser.add_argument(
+    "--noise",
+    choices=("additive", "multiplicative"),
+    default="additive",
+    help="Disturbance diffusion: additive (Nielsen) or multiplicative "
+    "g(F)=σ√(1+(F/Fc)²) on F3,F4",
+)
+_parser.add_argument(
+    "--tag",
+    type=str,
+    default="",
+    help="Output filename tag. Empty → '' for additive, '_mult' for multiplicative. "
+    "Example: --tag mult → pareto_budget_vs_mape_mult.png",
+)
 _args = _parser.parse_args()
 
 SEEDS = _parse_ints(_args.seeds)
@@ -239,6 +255,13 @@ DELTA_T_MIN = float(_args.delta)
 EVAL_DT_MIN = float(_args.eval_dt)
 SOLVER = _args.solver
 N_TIMING = _args.n_timing
+NOISE_MODE = _args.noise
+if _args.tag.strip():
+    OUT_TAG = f"_{_args.tag.strip()}"
+elif NOISE_MODE == "multiplicative":
+    OUT_TAG = "_mult"
+else:
+    OUT_TAG = ""
 ENKF_PARTICLE_LIST = _parse_ints(_args.enkf)
 PF_PARTICLE_LIST = _parse_ints(_args.pf)
 CRF_CONFIGS = default_product_ladder(2, max_paths=_args.crf_max_paths)
@@ -283,7 +306,7 @@ def _load_raw_rows(path: str) -> list[dict]:
     return rows
 
 
-RAW_PATH = os.path.join(OUTPUT_DIR, "pareto_budget_vs_mape_raw.csv")
+RAW_PATH = os.path.join(OUTPUT_DIR, f"pareto_budget_vs_mape{OUT_TAG}_raw.csv")
 EXISTING_RAW: list[dict] = []
 if _args.append or _args.merge:
     if not os.path.exists(RAW_PATH):
@@ -314,7 +337,10 @@ SIGMA_SIM = 5.0
 LAMBDA_EKF_UKF = 0.0
 LAMBDA_ENKF_PF = 2.0e-3
 SIGMA_EKF_ENKF_PF = 5.0
-SIGMA_UKF = 1.0
+# Additive Nielsen bakeoff uses a tighter UKF process noise; under multiplicative
+# diffusion keep a shared σ so moment-ODE vs path filters are comparable.
+SIGMA_UKF = 5.0 if NOISE_MODE == "multiplicative" else 1.0
+F_NOISE_SCALE = 150.0
 F1, F2 = 5.0, 5.0
 
 # Spherical-radial cubature ≡ UKF with λ = 0 (Arasaratnam–Haykin CD-CKF).
@@ -322,7 +348,8 @@ CKF_PARAMS = UKFParams(alpha=1.0, beta=0.0, kappa=0.0)
 
 COLORS = {
     "CD-EKF": "#2E86AB",
-    "CD-UKF": "#E8B923",  # yellow (readable on white)
+    "CD-UKF-fine": "#E8B923",  # yellow — moment-ODE predict
+    "CD-UKF-coarse": "#B8860B",  # darkgoldenrod — flow-map predict
     "CD-CKF": "#3DA35D",  # green
     "CD-EnKF": "#D97706",  # amber-orange (away from PF red / UKF yellow)
     "PF": "#F24236",
@@ -335,7 +362,8 @@ DISPLAY_NAME = {
     "CRF-product": "WS-CKF",
     "CRF-LV": "WS-CKF-LV",
     "CD-EKF": "CD-EKF",
-    "CD-UKF": "CD-UKF",
+    "CD-UKF-fine": "CD-UKF (fine)",
+    "CD-UKF-coarse": "CD-UKF (coarse)",
     "CD-CKF": "CD-CKF",
     "CD-EnKF": "CD-EnKF",
     "PF": "PF",
@@ -464,14 +492,14 @@ model_inputs = jnp.arange(n_obs + 1)
 
 p = MFTSParams()
 bar_est = lambda t_min, nom=p.F_nominal_est: nom
+_dyn_kw = dict(noise=NOISE_MODE, F_noise_scale=F_NOISE_SCALE, F1=F1, F2=F2)
 drift_ekf, L_ekf, Qc, obs_fn, _ = make_mfts_dynamics(
     p,
     lambda_dist=LAMBDA_EKF_UKF,
     sigma_dist=SIGMA_EKF_ENKF_PF,
     bar_F3=bar_est,
     bar_F4=bar_est,
-    F1=F1,
-    F2=F2,
+    **_dyn_kw,
 )
 drift_ukf, L_ukf, _, _, _ = make_mfts_dynamics(
     p,
@@ -479,8 +507,7 @@ drift_ukf, L_ukf, _, _, _ = make_mfts_dynamics(
     sigma_dist=SIGMA_UKF,
     bar_F3=bar_est,
     bar_F4=bar_est,
-    F1=F1,
-    F2=F2,
+    **_dyn_kw,
 )
 drift_ens, L_ens, _, _, _ = make_mfts_dynamics(
     p,
@@ -488,12 +515,11 @@ drift_ens, L_ens, _, _, _ = make_mfts_dynamics(
     sigma_dist=SIGMA_EKF_ENKF_PF,
     bar_F3=bar_est,
     bar_F4=bar_est,
-    F1=F1,
-    F2=F2,
+    **_dyn_kw,
 )
 
 print(
-    f"Δt={dt_min:g} min, n_obs={n_obs}, seeds={SEEDS}, "
+    f"Δt={dt_min:g} min, n_obs={n_obs}, noise={NOISE_MODE}, seeds={SEEDS}, "
     f"CRF configs={[c.label + f'({c.n_paths})' for c in CRF_CONFIGS]}"
 )
 
@@ -577,6 +603,8 @@ for seed in SEEDS:
         F1=F1,
         F2=F2,
         seed=seed,
+        noise=NOISE_MODE,
+        F_noise_scale=F_NOISE_SCALE,
     )
     ys_fine = jnp.asarray(ys_fine_np)
     ys = ys_fine[stride - 1 :: stride]
@@ -641,7 +669,8 @@ for seed in SEEDS:
             true_fine,
         )
 
-    if _want("CD-UKF"):
+    if _want("CD-UKF-fine") or _want("CD-UKF"):
+        # Moment-ODE predict (canonical continuous–discrete UKF).
         ukf_jit = jit(
             lambda: run_cd_ukf(
                 drift_ukf,
@@ -661,12 +690,44 @@ for seed in SEEDS:
         )
         ukf_res, wall = time_call(ukf_jit)
         score(
-            "CD-UKF",
-            "UKF",
+            "CD-UKF-fine",
+            "UKF-fine",
             0,
             seed,
             stack_estimates(m0, ukf_res.means),
             float(ukf_res.cum_loglik[-1]),
+            wall,
+            drift_ukf,
+            true_fine,
+        )
+
+    if _want("CD-UKF-coarse"):
+        # Flow-map predict (discrete UKF on the SDE flow over each obs interval).
+        ukf_c_jit = jit(
+            lambda: run_cd_ukf(
+                drift_ukf,
+                obs_fn,
+                L_ukf,
+                Qc,
+                R,
+                m0,
+                P0_j,
+                ys,
+                dt,
+                dt0,
+                UKFParams(),
+                state_order="flowmap",
+                solver=SOLVER,
+            )
+        )
+        ukf_c_res, wall = time_call(ukf_c_jit)
+        score(
+            "CD-UKF-coarse",
+            "UKF-coarse",
+            0,
+            seed,
+            stack_estimates(m0, ukf_c_res.means),
+            float(ukf_c_res.cum_loglik[-1]),
             wall,
             drift_ukf,
             true_fine,
@@ -838,7 +899,7 @@ for family, label, budget in keys:
         }
     )
 
-csv_path = os.path.join(OUTPUT_DIR, "pareto_budget_vs_mape.csv")
+csv_path = os.path.join(OUTPUT_DIR, f"pareto_budget_vs_mape{OUT_TAG}.csv")
 with open(csv_path, "w", newline="") as f:
     writer = csv.DictWriter(
         f,
@@ -870,7 +931,7 @@ with open(csv_path, "w", newline="") as f:
 
 def _annotate_nodes(ax, fam, pts, xs, ys):
     """Label multi-budget nodes with path/particle count (EKF/UKF/CKF via legend)."""
-    if fam in ("CD-EKF", "CD-UKF", "CD-CKF", "CRF-product"):
+    if fam in ("CD-EKF", "CD-UKF-fine", "CD-UKF-coarse", "CD-CKF", "CRF-product"):
         return
     color = COLORS.get(fam, "#333333")
     base_dx, base_dy = _LABEL_OFFSET.get(fam, (0, 6))
@@ -897,16 +958,27 @@ def _annotate_nodes(ax, fam, pts, xs, ys):
 
 
 BAND_SCALE = 0.3  # visual width of shaded ±σ band
-# Figure: single moment-safe WS-CKF point (higher path budgets don't move MAPE here).
-WS_CKF_PLOT_BUDGETS = {4}
+# Additive: single moment-safe WS-CKF point. Multiplicative: full product ladder
+# so path-order / Lévy-area effects are visible on the Pareto.
+WS_CKF_PLOT_BUDGETS: set[int] | None = (
+    None if NOISE_MODE == "multiplicative" else {4}
+)
 # Keep 25 / 1000 in CSV; omit from figure for a cleaner mid-range Pareto.
 PARTICLE_PLOT_HIDE_BUDGETS = {25, 1000}
-plot_families = ["CRF-product", "CD-EnKF", "PF", "CD-EKF", "CD-UKF", "CD-CKF"]
+plot_families = [
+    "CRF-product",
+    "CD-EnKF",
+    "PF",
+    "CD-EKF",
+    "CD-UKF-fine",
+    "CD-UKF-coarse",
+    "CD-CKF",
+]
 
 
 def _plot_pts_for_family(fam: str) -> list[dict]:
     pts = [r for r in summary if r["family"] == fam]
-    if fam == "CRF-product":
+    if fam == "CRF-product" and WS_CKF_PLOT_BUDGETS is not None:
         pts = [r for r in pts if r["budget"] in WS_CKF_PLOT_BUDGETS]
     elif fam in ("CD-EnKF", "PF"):
         pts = [r for r in pts if r["budget"] not in PARTICLE_PLOT_HIDE_BUDGETS]
@@ -928,7 +1000,7 @@ def _plot_pareto_metric(metric: str, ylabel: str, title: str, out_name: str) -> 
         color = COLORS.get(fam, "#333333")
         if fam == "CRF-product":
             marker = "*"
-        elif fam in ("CD-EKF", "CD-UKF", "CD-CKF"):
+        elif fam in ("CD-EKF", "CD-UKF-fine", "CD-UKF-coarse", "CD-CKF"):
             marker = "s"
         else:
             marker = "o"
@@ -981,7 +1053,7 @@ def _plot_pareto_metric(metric: str, ylabel: str, title: str, out_name: str) -> 
     return out_path
 
 
-def _plot_pareto_mapex_maped(out_name: str) -> str:
+def _plot_pareto_mapex_maped(out_name: str, title: str = "") -> str:
     """MAPEx (solid) and MAPEd (dashed) on one axes; color = filter family."""
 
     fig, ax = plt.subplots(figsize=(8.0, 5.0))
@@ -1013,7 +1085,7 @@ def _plot_pareto_mapex_maped(out_name: str) -> str:
         color = COLORS.get(fam, "#333333")
         if fam == "CRF-product":
             marker = "*"
-        elif fam in ("CD-EKF", "CD-UKF", "CD-CKF"):
+        elif fam in ("CD-EKF", "CD-UKF-fine", "CD-UKF-coarse", "CD-CKF"):
             marker = "s"
         else:
             marker = "o"
@@ -1105,6 +1177,8 @@ def _plot_pareto_mapex_maped(out_name: str) -> str:
         title=r"solid = MAPEx,  dashed/open = MAPEd",
         title_fontsize=10,
     )
+    if title:
+        ax.set_title(title, fontsize=11)
     fig.tight_layout()
     out_path = os.path.join(OUTPUT_DIR, out_name)
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
@@ -1112,20 +1186,26 @@ def _plot_pareto_mapex_maped(out_name: str) -> str:
     return out_path
 
 
-_ws_ckf_budgets = ",".join(str(b) for b in sorted(WS_CKF_PLOT_BUDGETS))
+_ws_ckf_budgets = (
+    "ladder"
+    if WS_CKF_PLOT_BUDGETS is None
+    else ",".join(str(b) for b in sorted(WS_CKF_PLOT_BUDGETS))
+)
+_noise_note = "multiplicative $g(F)$" if NOISE_MODE == "multiplicative" else "additive"
 _title_suffix = (
-    rf"at $\Delta t={dt_min:g}$ min "
+    rf"at $\Delta t={dt_min:g}$ min, {_noise_note} "
     rf"(mean±{BAND_SCALE:g}$\sigma$ over {n_seeds_total} seeds; "
     rf"WS-CKF paths = {_ws_ckf_budgets})"
 )
 mape_plot_path = _plot_pareto_mapex_maped(
-    "pareto_budget_vs_mape.png",
+    f"pareto_budget_vs_mape{OUT_TAG}.png",
+    title=rf"MFTS Pareto: MAPE vs wall-clock {_title_suffix}",
 )
 nll_plot_path = _plot_pareto_metric(
     "nll_per_obs",
     "Mean NLL per observation",
     rf"MFTS Pareto: NLL vs wall-clock {_title_suffix}",
-    "pareto_budget_vs_nll.png",
+    f"pareto_budget_vs_nll{OUT_TAG}.png",
 )
 
 print("-" * 72)

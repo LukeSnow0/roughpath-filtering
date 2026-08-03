@@ -11,15 +11,22 @@ interval ``Delta_t``:
 5. Records predictive NLL (total and per observation) from each filter's cum. loglik
 6. Times each filter (median wall-clock, excl. JIT; default CD solver=rk4)
 
+Optional ``--k-proportional`` runs a recombined CRF with
+``k = max(1, round(Δt / --k-ref-min))`` to test whether refining the Lyons
+macro-segment partition with Δt closes the CRF–EKF NLL gap at long intervals.
+
 Run:
   python experiments/mfts_test/run_mape_vs_interval.py
   python experiments/mfts_test/run_mape_vs_interval.py --solver rk4
   python experiments/mfts_test/run_mape_vs_interval.py --deltas 0.25,0.5,1,2,5,10
-  python experiments/mfts_test/run_mape_vs_interval.py --crf-paths 2,12,24,35
+  python experiments/mfts_test/run_mape_vs_interval.py --crf-paths 2,12,35
+  python experiments/mfts_test/run_mape_vs_interval.py --k-proportional \\
+      --k-ref-min 0.5 --crf-paths 2,35 --n-timing 2
 
 Outputs:
   ``experiments/mfts_test/output/mape_vs_interval.png``
   ``experiments/mfts_test/output/nll_vs_interval.png``
+  ``experiments/mfts_test/output/nll_gap_vs_ekf_interval.png``
   ``experiments/mfts_test/output/timing_vs_interval.png``
   ``experiments/mfts_test/output/pareto_time_vs_mape.png``
   ``experiments/mfts_test/output/mape_vs_interval.csv``
@@ -36,6 +43,7 @@ import time
 os.environ.setdefault(
     "MPLCONFIGDIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), ".mplcache")
 )
+os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 EXPERIMENTS_DIR = os.path.abspath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
@@ -101,16 +109,46 @@ _parser.add_argument(
     type=int,
     default=2,
     dest="cubature_order",
-    help="CRF Lyons macro-segment count k (default 2; recombined)",
+    help="Fixed CRF Lyons macro-segment count k for CRF-P* (default 2; recombined)",
 )
 _parser.add_argument(
     "--crf-paths",
     type=str,
-    default="2,12,24,35",
+    default="2,12,35",
     dest="crf_paths",
-    help="Comma-separated recombined path budgets (default 2,12,24,35). "
+    help="Comma-separated recombined path budgets for fixed-k CRF (default 2,12,35). "
     "Each plotted as CRF-P{{n}}. Use 'default' for "
-    "default_recombined_num_paths(2, k).",
+    "default_recombined_num_paths(2, k). Empty string skips fixed-k CRF.",
+)
+_parser.add_argument(
+    "--k-proportional",
+    action="store_true",
+    dest="k_proportional",
+    help="Also run recombined CRF with k=max(1, round(Δt / --k-ref-min)) "
+    "and path budget default_recombined_num_paths(2, k) (tests cubature "
+    "time-partition hypothesis).",
+)
+_parser.add_argument(
+    "--k-ref-min",
+    type=float,
+    default=0.5,
+    dest="k_ref_min",
+    help="Target macro-segment length [min] for --k-proportional "
+    "(default 0.5 → k≈Δt/0.5)",
+)
+_parser.add_argument(
+    "--k-max",
+    type=int,
+    default=8,
+    dest="k_max",
+    help="Cap on k under --k-proportional (default 8; recombination cost grows with k)",
+)
+_parser.add_argument(
+    "--k-prop-paths",
+    type=str,
+    default="default",
+    dest="k_prop_paths",
+    help="Path budget for k∝Δt CRF: 'default' or an integer override",
 )
 _parser.add_argument(
     "--solver",
@@ -147,6 +185,14 @@ SOLVER = _args.solver
 DELTA_T_MIN_REQ = [float(x) for x in _args.deltas.split(",") if x.strip()]
 EVAL_DT_MIN = float(_args.eval_dt)
 N_TIMING = _args.n_timing
+K_PROPORTIONAL = bool(_args.k_proportional)
+K_REF_MIN = float(_args.k_ref_min)
+K_MAX = int(_args.k_max)
+if K_PROPORTIONAL and K_REF_MIN <= 0.0:
+    raise SystemExit("--k-ref-min must be > 0")
+if K_PROPORTIONAL and K_MAX < 1:
+    raise SystemExit("--k-max must be ≥ 1")
+
 
 # ---------------------------------------------------------------------------
 # Shared Nielsen MFTS settings (match run_comparison.py)
@@ -168,6 +214,7 @@ SIGMA_UKF = 1.0
 ENKF_PARTICLES = 250
 PF_PARTICLES = 1000
 CRF_MULTIDIM_PATHS = "recombined"
+CRF_KPROP_NAME = "CRF-k∝Δt"
 
 _DEFAULT_CRF_PATHS = default_recombined_num_paths(2, CUBATURE_ORDER)
 CRF_PATH_BUDGETS: list[int] = []
@@ -183,19 +230,30 @@ _seen_paths: set[int] = set()
 CRF_PATH_BUDGETS = [
     n for n in CRF_PATH_BUDGETS if not (n in _seen_paths or _seen_paths.add(n))
 ]
-if not CRF_PATH_BUDGETS:
-    raise ValueError("--crf-paths must list at least one path budget")
 
 
 def crf_label(n_paths: int) -> str:
     return f"CRF-P{n_paths}"
 
 
+def k_for_delta(dt_min: float) -> int:
+    """Macro-segment count with target segment length ``K_REF_MIN`` minutes."""
+    return min(K_MAX, max(1, int(round(float(dt_min) / K_REF_MIN))))
+
+
+def kprop_num_paths(k: int) -> int:
+    tok = _args.k_prop_paths.strip().lower()
+    if tok == "default" or tok == "":
+        return default_recombined_num_paths(2, k)
+    return max(1, int(tok))
+
+
 F1, F2 = 5.0, 5.0
 
 BASE_FILTER_NAMES = ("CD-EKF", "CD-UKF", "CD-EnKF", "PF")
 CRF_FILTER_NAMES = tuple(crf_label(n) for n in CRF_PATH_BUDGETS)
-FILTER_NAMES = BASE_FILTER_NAMES + CRF_FILTER_NAMES
+KPROP_FILTER_NAMES = (CRF_KPROP_NAME,) if K_PROPORTIONAL else ()
+FILTER_NAMES = BASE_FILTER_NAMES + CRF_FILTER_NAMES + KPROP_FILTER_NAMES
 
 _CRF_PURPLES = ("#C4B0E0", "#9B7EBD", "#7A5CA3", "#6A4C93", "#4A2F6E", "#2F1A4A")
 COLORS = {
@@ -203,6 +261,7 @@ COLORS = {
     "CD-UKF": "#3DA35D",
     "CD-EnKF": "#F6AE2D",
     "PF": "#F24236",
+    CRF_KPROP_NAME: "#C44536",
 }
 for _i, _name in enumerate(CRF_FILTER_NAMES):
     COLORS[_name] = _CRF_PURPLES[min(_i, len(_CRF_PURPLES) - 1)]
@@ -384,12 +443,13 @@ DRIFT_FOR_MAPE = {
     "CD-EnKF": drift_enkf,
     "PF": drift_enkf,
     **{name: crf_drift for name in CRF_FILTER_NAMES},
+    **({CRF_KPROP_NAME: crf_drift} if K_PROPORTIONAL else {}),
 }
 
 
 def run_filters_at_interval(
     dt_min_req: float,
-) -> tuple[float, int, dict[str, dict[str, float]], dict[str, float]]:
+) -> tuple[float, int, dict[str, dict[str, float]], dict[str, float], dict]:
     """Subsample fine truth, filter, score fine-grid MAPE, time each filter."""
     stride = stride_for_delta(dt_min_req, DT_FINE_MIN)
     n_obs = N_FINE // stride
@@ -412,9 +472,9 @@ def run_filters_at_interval(
     times: dict[str, float] = {}
     estimates_obs: dict[str, np.ndarray] = {}
     final_ll: dict[str, float] = {}
+    meta: dict = {"k_prop": None, "k_prop_paths": None}
 
-    for n_paths in CRF_PATH_BUDGETS:
-        name = crf_label(n_paths)
+    def _run_crf(name: str, *, k: int, n_paths: int):
         crf = build_filter(
             get_init_params=lambda mi: (m0, chol_P0),
             get_dynamics=lambda mi: (
@@ -425,16 +485,27 @@ def run_filters_at_interval(
             noise_dim=2,
             dt=dt,
             integration_dt=dt0,
-            cubature_order=CUBATURE_ORDER,
+            cubature_order=k,
             num_paths=n_paths,
             multidim_paths=CRF_MULTIDIM_PATHS,
         )
         jitted_crf = jit(run_filter, static_argnames=["filter_obj"])
-        crf_states, times[name] = time_call(
+        crf_states, wall = time_call(
             lambda f=jitted_crf, filt=crf: f(filt, model_inputs)
         )
+        times[name] = wall
         estimates_obs[name] = stack_estimates(m0, crf_states.mean[1:])
         final_ll[name] = float(crf_states.log_normalizing_constant[-1])
+
+    for n_paths in CRF_PATH_BUDGETS:
+        _run_crf(crf_label(n_paths), k=CUBATURE_ORDER, n_paths=n_paths)
+
+    if K_PROPORTIONAL:
+        k_prop = k_for_delta(dt_min)
+        n_prop = kprop_num_paths(k_prop)
+        meta["k_prop"] = k_prop
+        meta["k_prop_paths"] = n_prop
+        _run_crf(CRF_KPROP_NAME, k=k_prop, n_paths=n_prop)
 
     ekf_jit = jit(
         lambda: run_cd_ekf(
@@ -534,7 +605,7 @@ def run_filters_at_interval(
             "nll": -final_ll[name],
             "nll_per_obs": -final_ll[name] / n_obs,
         }
-    return dt_min, n_obs, mapes, times
+    return dt_min, n_obs, mapes, times, meta
 
 
 # ---------------------------------------------------------------------------
@@ -543,6 +614,8 @@ def run_filters_at_interval(
 
 delta_t_eff: list[float] = []
 n_obs_list: list[int] = []
+k_prop_list: list[int | None] = []
+k_prop_paths_list: list[int | None] = []
 series = {
     name: {"mapex": [], "maped": [], "nll": [], "nll_per_obs": [], "time": []}
     for name in FILTER_NAMES
@@ -550,21 +623,35 @@ series = {
 
 print(f"Horizon={HORIZON_MIN:g} min | solver={SOLVER} | seed={SEED}")
 print(
-    f"CRF: multidim={CRF_MULTIDIM_PATHS} | k={CUBATURE_ORDER} | "
+    f"CRF fixed-k: multidim={CRF_MULTIDIM_PATHS} | k={CUBATURE_ORDER} | "
     f"path budgets={CRF_PATH_BUDGETS} "
     f"(moment-safe default={_DEFAULT_CRF_PATHS})"
 )
+if K_PROPORTIONAL:
+    print(
+        f"CRF k∝Δt: k=min({K_MAX}, max(1, round(Δt/{K_REF_MIN:g}))), "
+        f"paths={_args.k_prop_paths!r} → "
+        + ", ".join(
+            f"Δt={d:g}→k={k_for_delta(d)}/P={kprop_num_paths(k_for_delta(d))}"
+            for d in DELTA_T_MIN_REQ
+        )
+    )
 print(f"Requested Delta_t [min]: {DELTA_T_MIN_REQ}")
 print(f"Timing: median of {N_TIMING} runs after JIT warmup")
 print("-" * 72)
 
 for dt_req in DELTA_T_MIN_REQ:
-    dt_eff, n_obs, mapes, times = run_filters_at_interval(dt_req)
+    dt_eff, n_obs, mapes, times, meta = run_filters_at_interval(dt_req)
     delta_t_eff.append(dt_eff)
     n_obs_list.append(n_obs)
+    k_prop_list.append(meta.get("k_prop"))
+    k_prop_paths_list.append(meta.get("k_prop_paths"))
+    k_info = ""
+    if meta.get("k_prop") is not None:
+        k_info = f", k∝Δt={meta['k_prop']} P={meta['k_prop_paths']}"
     print(
         f"Delta_t={dt_eff:6.3f} min  (n_obs={n_obs:4d}, "
-        f"dt={dt_eff * 60.0:7.2f} s)"
+        f"dt={dt_eff * 60.0:7.2f} s{k_info})"
     )
     for name in FILTER_NAMES:
         series[name]["mapex"].append(mapes[name]["mapex"])
@@ -573,7 +660,7 @@ for dt_req in DELTA_T_MIN_REQ:
         series[name]["nll_per_obs"].append(mapes[name]["nll_per_obs"])
         series[name]["time"].append(times[name])
         print(
-            f"  {name:8s}  MAPEx={mapes[name]['mapex']:8.2f}%  "
+            f"  {name:10s}  MAPEx={mapes[name]['mapex']:8.2f}%  "
             f"MAPEd={mapes[name]['maped']:8.2f}%  "
             f"NLL/obs={mapes[name]['nll_per_obs']:8.2f}  "
             f"time={times[name] * 1e3:8.2f} ms"
@@ -636,6 +723,37 @@ fig.tight_layout()
 nll_path = os.path.join(OUTPUT_DIR, "nll_vs_interval.png")
 fig.savefig(nll_path, dpi=150, bbox_inches="tight")
 plt.close()
+
+# ---------------------------------------------------------------------------
+# Hypothesis test: NLL gap vs EKF grows with Δt for CRF (cubature truncation)
+# ---------------------------------------------------------------------------
+
+fig, ax = plt.subplots(figsize=(7.2, 4.6))
+ekf_nll = np.asarray(series["CD-EKF"]["nll_per_obs"], dtype=np.float64)
+for name in FILTER_NAMES:
+    if name == "CD-EKF":
+        continue
+    gap = np.asarray(series[name]["nll_per_obs"], dtype=np.float64) - ekf_nll
+    ax.plot(
+        delta_t_eff,
+        gap,
+        color=COLORS[name],
+        marker="o",
+        lw=1.8,
+        label=name,
+    )
+ax.axhline(0.0, color="0.4", ls="--", lw=1.0)
+ax.set_xlabel(r"Observation interval $\Delta t$ [min]")
+ax.set_ylabel(r"NLL/obs $-$ NLL/obs$_{\mathrm{EKF}}$  (higher = worse than EKF)")
+ax.set_title(r"MFTS: filter NLL gap vs EKF (cubature / $\Delta t$ hypothesis)")
+ax.set_xscale("log")
+ax.grid(True, which="both", alpha=0.3)
+ax.legend(fontsize=8, loc="best")
+fig.tight_layout()
+gap_path = os.path.join(OUTPUT_DIR, "nll_gap_vs_ekf_interval.png")
+fig.savefig(gap_path, dpi=150, bbox_inches="tight")
+plt.close()
+print(f"Wrote {gap_path}")
 
 # ---------------------------------------------------------------------------
 # Plot wall-clock time vs Delta_t
@@ -756,7 +874,14 @@ plt.close()
 csv_path = os.path.join(OUTPUT_DIR, "mape_vs_interval.csv")
 with open(csv_path, "w", newline="") as f:
     writer = csv.writer(f)
-    header = ["delta_t_min", "n_obs", "eval_dt_min", "solver"]
+    header = [
+        "delta_t_min",
+        "n_obs",
+        "eval_dt_min",
+        "solver",
+        "k_prop",
+        "k_prop_paths",
+    ]
     for name in FILTER_NAMES:
         header.extend(
             [
@@ -769,7 +894,14 @@ with open(csv_path, "w", newline="") as f:
         )
     writer.writerow(header)
     for i, dt_eff in enumerate(delta_t_eff):
-        row = [dt_eff, n_obs_list[i], DT_FINE_MIN, SOLVER]
+        row = [
+            dt_eff,
+            n_obs_list[i],
+            DT_FINE_MIN,
+            SOLVER,
+            k_prop_list[i],
+            k_prop_paths_list[i],
+        ]
         for name in FILTER_NAMES:
             row.extend(
                 [
@@ -785,6 +917,7 @@ with open(csv_path, "w", newline="") as f:
 print("-" * 72)
 print(f"Wrote {plot_path}")
 print(f"Wrote {nll_path}")
+print(f"Wrote {gap_path}")
 print(f"Wrote {timing_path}")
 print(f"Wrote {pareto_path}")
 print(f"Wrote {csv_path}")

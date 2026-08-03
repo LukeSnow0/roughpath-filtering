@@ -1,0 +1,41 @@
+{
+  "params": {
+    "gamma1": 0.20642317560444673,
+    "gamma2": 0.23309961956306494,
+    "g": 981.0,
+    "A": [
+      380.1327,
+      380.1327,
+      380.1327,
+      380.1327
+    ],
+    "a_out": [
+      0.4467159163599921,
+      0.6496754367660771,
+      0.44258041060820236,
+      0.7386066735356255
+    ],
+    "k_pump": 69.62509791545536,
+    "meas_std": 1.0340660332257654,
+    "h_eps": 0.001,
+    "height_bias": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "sigma_u": 41.8019396053879
+  },
+  "meta": {
+    "source": "4T-M2-train",
+    "fit_min": 15.0,
+    "holdout_start_min": 15.0,
+    "calibration": "enkf-mle-dynamics + enkf-mle-noise",
+    "dynamics_from": "/Users/lukesnow-basis/Documents/code/cubature-filtering/experiments/mfts_test/intaset_real/output/mle_params_best.json",
+    "open_loop_params": "/Users/lukesnow-basis/Documents/code/cubature-filtering/experiments/mfts_test/intaset_real/output/calibrated_params.json",
+    "meas_std_init": 0.5547430637932426,
+    "noise_iters": 40,
+    "train_ll_final": -95.81431375860915,
+    "rmse_openloop_fit_cm": 1.1094861275864851
+  }
+}

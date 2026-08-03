@@ -214,7 +214,6 @@ Outputs: `experiments/l63_test/output/` (state trajectories, per-component RMSE,
 cumulative log-likelihood, runtime). Settings are fixed in the script; edit
 there to explore variants.
 
-
 ## Methods compared
 
 | Method | Description |

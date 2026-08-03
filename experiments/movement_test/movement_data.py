@@ -134,3 +134,59 @@ def load_duck_track(
         center_km=center,
         dt_hours=1.0,
     )
+
+
+def list_band_run_lengths(
+    *,
+    csv_path: str = DEFAULT_CSV,
+    species: str | None = None,
+) -> list[tuple[str, str, str, int]]:
+    """Return ``(band, species, sex, longest_hourly_run_len)`` sorted by length desc."""
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(
+            f"{csv_path} not found. See experiments/movement_test/data/README.md "
+            "for the Dryad download (doi:10.5061/dryad.1ns1rn93p)."
+        )
+
+    by_band: dict[tuple[str, str, str], list[datetime]] = {}
+    with open(csv_path, newline="") as f:
+        r = csv.reader(f)
+        hdr = next(r)
+        idx = {c: i for i, c in enumerate(hdr)}
+        for row in r:
+            spp = row[idx["spp"]]
+            if species is not None and spp != species:
+                continue
+            t = _parse_dt(row[idx["round_cst"]])
+            if t is None:
+                continue
+            key = (row[idx["band"]], spp, row[idx["sex"]])
+            by_band.setdefault(key, []).append(t)
+
+    out: list[tuple[str, str, str, int]] = []
+    for (band, spp, sex), times in by_band.items():
+        times = sorted(times)
+        start, stop = _longest_hourly_run(times)
+        out.append((band, spp, sex, stop - start))
+    out.sort(key=lambda r: r[3], reverse=True)
+    return out
+
+
+def select_bands(
+    *,
+    n_birds: int = 4,
+    min_n: int = 400,
+    species: str = "MALL",
+    csv_path: str = DEFAULT_CSV,
+) -> list[str]:
+    """Pick the ``n_birds`` longest tracks of ``species`` with run length ≥ ``min_n``."""
+    rows = [
+        r for r in list_band_run_lengths(csv_path=csv_path, species=species)
+        if r[3] >= min_n
+    ]
+    if len(rows) < n_birds:
+        raise ValueError(
+            f"Only {len(rows)} {species} tracks with N>={min_n}; "
+            f"need n_birds={n_birds}."
+        )
+    return [r[0] for r in rows[:n_birds]]
