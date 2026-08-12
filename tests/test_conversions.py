@@ -2,7 +2,7 @@
 
 import jax.numpy as jnp
 
-from crf.library.conversions import ito_to_stratonovich_drift
+from wsckf.library.conversions import ito_to_stratonovich_drift
 
 
 def test_constant_diffusion_leaves_drift_unchanged():

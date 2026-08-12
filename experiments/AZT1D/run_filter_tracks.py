@@ -41,8 +41,8 @@ import matplotlib.pyplot as plt
 jax.config.update("jax_enable_x64", True)
 
 from cuthbert import filter as run_filter
-from crf import build_filter
-from crf.library import product_path_count
+from wsckf import build_filter
+from wsckf.library import product_path_count
 from cd_dynamax_mirror.filters import (
     UKFParams,
     run_bootstrap_pf,
@@ -58,7 +58,7 @@ from azt1d_data import (
 )
 from glucose_model import (
     GlucoseParams,
-    crf_glucose_dynamics,
+    wsckf_glucose_dynamics,
     init_estimate,
     make_glucose_dynamics,
 )
@@ -211,7 +211,7 @@ def main():
         help="assimilation interval [min]; subsample every dt_assim/5 from the 5-min grid",
     )
     ap.add_argument("--holdout-frac", type=float, default=0.3, dest="holdout_frac")
-    ap.add_argument("--crf-paths", type=int, default=4, dest="crf_paths")
+    ap.add_argument("--wsckf-paths", type=int, default=4, dest="wsckf_paths")
     ap.add_argument("--enkf", type=int, default=500)
     ap.add_argument("--pf", type=int, default=500)
     ap.add_argument("--dt0", type=float, default=1.0)
@@ -408,13 +408,13 @@ def main():
         state_covs[name] = _align_covs(covs_or_chol, n_obs, from_chol=from_chol)
 
     # ---- WSC-KF ----
-    m_lyons, k_cub = _product_cfg(args.crf_paths)
+    m_lyons, k_cub = _product_cfg(args.wsckf_paths)
 
     def get_init_params(_mi):
         return M0, CHOL_P0
 
     def get_dynamics(mi):
-        return crf_glucose_dynamics(drift, L, mi, dt)
+        return wsckf_glucose_dynamics(drift, L, mi, dt)
 
     def get_observations(mi):
         idx = mi if not hasattr(mi, "t_idx") else mi.t_idx

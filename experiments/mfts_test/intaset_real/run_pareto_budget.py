@@ -8,7 +8,7 @@ Mirrors ``experiments/mfts_test/run_pareto_budget.py``, but:
   training records (InTaSet has no i.i.d. replicates). Default: 3×10 min
   windows from ``4T-M2-train`` (fewer than the simulated 5-seed sweep).
 
-Optional ``--k-proportional`` adds a recombined CRF with
+Optional ``--k-proportional`` adds a recombined WSC-KF with
 ``k ∝ Δt`` (capped by ``--k-max``) to mitigate long-interval cubature truncation.
 
 Run:
@@ -72,8 +72,8 @@ from experiments.cd_dynamax_mirror.filters import (
     run_cd_ukf,
 )
 from cuthbert import filter as run_filter
-from crf import build_filter
-from crf.library import default_recombined_num_paths, product_path_count
+from wsckf import build_filter
+from wsckf.library import default_recombined_num_paths, product_path_count
 
 from intaset_io import default_mc_windows
 from intaset_model import (
@@ -110,7 +110,7 @@ def _parse_ints(s: str) -> list[int]:
 
 
 @dataclass(frozen=True)
-class CrfConfig:
+class WSCKFConfig:
     family: str
     label: str
     n_paths: int
@@ -119,9 +119,9 @@ class CrfConfig:
     method: str = "product"  # "product" | "recombined" | "lv"
 
 
-def default_product_ladder(noise_dim: int = 2, max_paths: int = 100) -> list[CrfConfig]:
+def default_product_ladder(noise_dim: int = 2, max_paths: int = 100) -> list[WSCKFConfig]:
     specs = [(3, 1), (5, 1), (3, 2), (3, 3), (5, 2), (3, 4), (5, 3)]
-    configs: list[CrfConfig] = []
+    configs: list[WSCKFConfig] = []
     seen: set[int] = set()
     for m, k in specs:
         n = product_path_count(noise_dim, k, lyons_degree=m)
@@ -129,8 +129,8 @@ def default_product_ladder(noise_dim: int = 2, max_paths: int = 100) -> list[Crf
             continue
         seen.add(n)
         configs.append(
-            CrfConfig(
-                family="CRF-product",
+            WSCKFConfig(
+                family="WSC-KF-product",
                 label=f"prod-m{m}-k{k}",
                 n_paths=n,
                 k=k,
@@ -141,13 +141,13 @@ def default_product_ladder(noise_dim: int = 2, max_paths: int = 100) -> list[Crf
     return sorted(configs, key=lambda c: c.n_paths)
 
 
-def lv_configs(noise_dim: int = 2) -> list[CrfConfig]:
+def lv_configs(noise_dim: int = 2) -> list[WSCKFConfig]:
     if precompute_lv_paths is None:
         raise SystemExit("--include-lv requires lyons_victoir_paths")
     counts = {3: 2 * noise_dim, 5: (3**noise_dim) * 2}
     return [
-        CrfConfig(
-            family="CRF-LV",
+        WSCKFConfig(
+            family="WSC-KF-LV",
             label=f"LV-m{m}",
             n_paths=counts[m],
             k=1,
@@ -169,14 +169,14 @@ def kprop_recombined_config(
     k_max: int,
     num_paths: int | None = None,
     k_fixed: int | None = None,
-) -> CrfConfig:
-    """Recombined CRF with macro-segment count k ∝ Δt (or an explicit ``k_fixed``)."""
+) -> WSCKFConfig:
+    """Recombined WSC-KF with macro-segment count k ∝ Δt (or an explicit ``k_fixed``)."""
     k = int(k_fixed) if k_fixed is not None else k_for_delta(dt_min, k_ref_min, k_max)
     k = max(1, k)
     n = default_recombined_num_paths(2, k) if num_paths is None else max(1, int(num_paths))
     label = f"k∝Δt-k{k}" if k_fixed is None else f"recomb-k{k}"
-    return CrfConfig(
-        family="CRF-recombined",
+    return WSCKFConfig(
+        family="WSC-KF-recombined",
         label=label,
         n_paths=n,
         k=k,
@@ -231,16 +231,16 @@ _parser.add_argument(
 )
 _parser.add_argument("--delta", type=float, default=1.0, help="Δt in minutes")
 _parser.add_argument(
-    "--crf-max-paths",
+    "--wsckf-max-paths",
     type=int,
     default=81,
-    dest="crf_max_paths",
+    dest="wsckf_max_paths",
 )
 _parser.add_argument(
     "--k-proportional",
     action="store_true",
     dest="k_proportional",
-    help="Add recombined CRF with k=min(--k-max, max(1, round(Δt/--k-ref-min))) "
+    help="Add recombined WSC-KF with k=min(--k-max, max(1, round(Δt/--k-ref-min))) "
     "to mitigate long-Δt cubature truncation",
 )
 _parser.add_argument(
@@ -262,21 +262,21 @@ _parser.add_argument(
     type=str,
     default="default",
     dest="k_prop_paths",
-    help="Path budget for k∝Δt CRF: 'default' or an integer",
+    help="Path budget for k∝Δt WSC-KF: 'default' or an integer",
 )
 _parser.add_argument(
     "--k-prop-ks",
     type=str,
     default="",
     dest="k_prop_ks",
-    help="Comma-separated fixed k values for recombined CRF "
+    help="Comma-separated fixed k values for recombined WSC-KF "
     "(e.g. 3,4). If set, these are used instead of k∝Δt from --k-ref-min. "
-    "Implies recombined CRF configs even without --k-proportional.",
+    "Implies recombined WSC-KF configs even without --k-proportional.",
 )
 _parser.add_argument(
-    "--skip-product-crf",
+    "--skip-product-wsckf",
     action="store_true",
-    dest="skip_product_crf",
+    dest="skip_product_wsckf",
     help="Omit the product Lyons ladder (useful with --k-proportional alone)",
 )
 _parser.add_argument("--include-lv", action="store_true")
@@ -305,7 +305,7 @@ _parser.add_argument(
     "--only",
     type=str,
     default="",
-    help="Comma-separated families to run (e.g. CD-EKF,CRF-product)",
+    help="Comma-separated families to run (e.g. CD-EKF,WSC-KF-product)",
 )
 _args = _parser.parse_args()
 
@@ -318,11 +318,11 @@ N_TIMING = _args.n_timing
 FILTER_SEED0 = int(_args.filter_seed)
 ENKF_PARTICLE_LIST = _parse_ints(_args.enkf)
 PF_PARTICLE_LIST = _parse_ints(_args.pf)
-CRF_CONFIGS: list[CrfConfig] = []
-if not _args.skip_product_crf:
-    CRF_CONFIGS.extend(default_product_ladder(2, max_paths=_args.crf_max_paths))
+WSCKF_CONFIGS: list[WSCKFConfig] = []
+if not _args.skip_product_wsckf:
+    WSCKF_CONFIGS.extend(default_product_ladder(2, max_paths=_args.wsckf_max_paths))
 if _args.include_lv:
-    CRF_CONFIGS.extend(lv_configs(2))
+    WSCKF_CONFIGS.extend(lv_configs(2))
 n_override = None
 tok = _args.k_prop_paths.strip().lower()
 if tok not in ("", "default"):
@@ -330,7 +330,7 @@ if tok not in ("", "default"):
 k_fixed_list = _parse_ints(_args.k_prop_ks) if _args.k_prop_ks.strip() else []
 if k_fixed_list:
     for k_fix in k_fixed_list:
-        CRF_CONFIGS.append(
+        WSCKF_CONFIGS.append(
             kprop_recombined_config(
                 DELTA_T_MIN,
                 k_ref_min=float(_args.k_ref_min),
@@ -342,7 +342,7 @@ if k_fixed_list:
 elif _args.k_proportional:
     if float(_args.k_ref_min) <= 0.0:
         raise SystemExit("--k-ref-min must be > 0")
-    CRF_CONFIGS.append(
+    WSCKF_CONFIGS.append(
         kprop_recombined_config(
             DELTA_T_MIN,
             k_ref_min=float(_args.k_ref_min),
@@ -350,7 +350,7 @@ elif _args.k_proportional:
             num_paths=n_override,
         )
     )
-CRF_CONFIGS = sorted(CRF_CONFIGS, key=lambda c: (c.family, c.n_paths, c.label))
+WSCKF_CONFIGS = sorted(WSCKF_CONFIGS, key=lambda c: (c.family, c.n_paths, c.label))
 ONLY_FAMILIES: Optional[set[str]] = None
 if _args.only.strip():
     ONLY_FAMILIES = {s.strip() for s in _args.only.split(",") if s.strip()}
@@ -360,9 +360,9 @@ if not SOURCES:
 if N_WINDOWS < 1:
     raise SystemExit("--n-windows must be ≥ 1")
 if ONLY_FAMILIES is None:
-    if not CRF_CONFIGS:
+    if not WSCKF_CONFIGS:
         raise SystemExit(
-            "No CRF configs (raise --crf-max-paths, or pass --k-proportional)"
+            "No WSC-KF configs (raise --wsckf-max-paths, or pass --k-proportional)"
         )
     if not ENKF_PARTICLE_LIST or not PF_PARTICLE_LIST:
         raise SystemExit("--enkf / --pf must list at least one particle count")
@@ -405,14 +405,14 @@ COLORS = {
     "CD-CKF": "#3DA35D",
     "CD-EnKF": "#D97706",
     "PF": "#F24236",
-    "CRF-product": "#6A4C93",
-    "CRF-LV": "#C44536",
-    "CRF-recombined": "#8B1E3F",
+    "WSC-KF-product": "#6A4C93",
+    "WSC-KF-LV": "#C44536",
+    "WSC-KF-recombined": "#8B1E3F",
 }
 DISPLAY_NAME = {
-    "CRF-product": "WS-CKF",
-    "CRF-LV": "WS-CKF-LV",
-    "CRF-recombined": r"WS-CKF $k\propto\Delta t$",
+    "WSC-KF-product": "WSC-KF",
+    "WSC-KF-LV": "WSC-KF-LV",
+    "WSC-KF-recombined": r"WSC-KF $k\propto\Delta t$",
     "CD-EKF": "CD-EKF",
     "CD-UKF": "CD-UKF",
     "CD-CKF": "CD-CKF",
@@ -420,7 +420,7 @@ DISPLAY_NAME = {
     "PF": "PF",
 }
 _LABEL_OFFSET = {
-    "CRF-product": (0, 7),
+    "WSC-KF-product": (0, 7),
     "CD-EnKF": (0, -10),
     "PF": (0, 7),
 }
@@ -521,8 +521,8 @@ print(
     f"meas_std={p.meas_std:.3f} sigma_u={sigma_u:.3g}"
 )
 print(
-    "  CRF: "
-    + ", ".join(f"{c.label}({c.method},k={c.k},P={c.n_paths})" for c in CRF_CONFIGS)
+    "  WSC-KF: "
+    + ", ".join(f"{c.label}({c.method},k={c.k},P={c.n_paths})" for c in WSCKF_CONFIGS)
 )
 for w in windows:
     print(f"  {w.source}: n={w.n}, dt≈{w.dt_sec:.3f}s, dur={w.duration_sec/60:.2f} min")
@@ -565,7 +565,7 @@ def score(
     )
 
 
-def build_crf(cfg: CrfConfig, drift, L, obs_fn, m0, chol_P0, chol_R, ys, dt, dt0):
+def build_wsckf(cfg: WSCKFConfig, drift, L, obs_fn, m0, chol_P0, chol_R, ys, dt, dt0):
     wiener_paths = None
     if cfg.method == "lv":
         assert precompute_lv_paths is not None
@@ -670,18 +670,18 @@ for win_idx, traj in enumerate(windows):
         f"n_fine={grids['n_fine']}"
     )
 
-    for cfg in CRF_CONFIGS:
+    for cfg in WSCKF_CONFIGS:
         if not _want(cfg.family):
             continue
         if cfg.method == "product":
             n_expect = product_path_count(2, cfg.k, lyons_degree=cfg.lyons_degree)
             if n_expect != cfg.n_paths:
                 raise RuntimeError(f"config mismatch: {cfg} vs product count {n_expect}")
-        crf = build_crf(
+        wsckf = build_wsckf(
             cfg, drift_ens, L_ens, obs_fn, m0, chol_P0, chol_R, ys, dt, dt0
         )
         jitted = jit(run_filter, static_argnames=["filter_obj"])
-        states, wall = time_call(lambda f=jitted, filt=crf: f(filt, model_inputs))
+        states, wall = time_call(lambda f=jitted, filt=wsckf: f(filt, model_inputs))
         score(
             cfg.family,
             cfg.label,
@@ -968,12 +968,12 @@ with open(csv_path, "w", newline="") as f:
 # ---------------------------------------------------------------------------
 
 BAND_SCALE = 0.3
-# Single moment-safe WS-CKF point (higher path budgets don't help much here).
-WS_CKF_PLOT_BUDGETS = {4}
+# Single moment-safe WSC-KF point (higher path budgets don't help much here).
+WSC_KF_PLOT_BUDGETS = {4}
 PARTICLE_PLOT_HIDE_BUDGETS = {25, 1000}
 plot_families = [
-    "CRF-product",
-    "CRF-recombined",
+    "WSC-KF-product",
+    "WSC-KF-recombined",
     "CD-EnKF",
     "PF",
     "CD-EKF",
@@ -983,7 +983,7 @@ plot_families = [
 
 
 def _annotate_nodes(ax, fam, pts, xs, ys):
-    if fam in ("CD-EKF", "CD-UKF", "CD-CKF", "CRF-product", "CRF-recombined"):
+    if fam in ("CD-EKF", "CD-UKF", "CD-CKF", "WSC-KF-product", "WSC-KF-recombined"):
         return
     color = COLORS.get(fam, "#333333")
     base_dx, base_dy = _LABEL_OFFSET.get(fam, (0, 6))
@@ -1010,8 +1010,8 @@ def _annotate_nodes(ax, fam, pts, xs, ys):
 
 def _plot_pts_for_family(fam: str) -> list[dict]:
     pts = [r for r in summary if r["family"] == fam]
-    if fam == "CRF-product":
-        pts = [r for r in pts if r["budget"] in WS_CKF_PLOT_BUDGETS]
+    if fam == "WSC-KF-product":
+        pts = [r for r in pts if r["budget"] in WSC_KF_PLOT_BUDGETS]
     elif fam in ("CD-EnKF", "PF"):
         pts = [r for r in pts if r["budget"] not in PARTICLE_PLOT_HIDE_BUDGETS]
     return pts
@@ -1030,7 +1030,7 @@ def _plot_pareto_metric(metric: str, ylabel: str, title: str, out_name: str) -> 
         ystd = np.asarray([r[f"{metric}_std"] for r in pts]) * BAND_SCALE
         all_xs.extend(xs.tolist())
         color = COLORS.get(fam, "#333333")
-        if fam in ("CRF-product", "CRF-recombined"):
+        if fam in ("WSC-KF-product", "WSC-KF-recombined"):
             marker = "*"
         elif fam in ("CD-EKF", "CD-UKF", "CD-CKF"):
             marker = "s"
@@ -1084,11 +1084,11 @@ def _plot_pareto_metric(metric: str, ylabel: str, title: str, out_name: str) -> 
     return out_path
 
 
-_ws_ckf_budgets = ",".join(str(b) for b in sorted(WS_CKF_PLOT_BUDGETS))
+_wsc_kf_budgets = ",".join(str(b) for b in sorted(WSC_KF_PLOT_BUDGETS))
 _title_suffix = (
     rf"at $\Delta t={DELTA_T_MIN:g}$ min "
     rf"(mean±{BAND_SCALE:g}$\sigma$ over {n_windows_total} windows; "
-    rf"WS-CKF paths = {_ws_ckf_budgets})"
+    rf"WSC-KF paths = {_wsc_kf_budgets})"
 )
 mape_plot_path = _plot_pareto_metric(
     "mape",

@@ -1,4 +1,4 @@
-"""CRF example with an Ito-specified model (automatic conversion via sde_form).
+"""WSC-KF example with an Ito-specified model (automatic conversion via sde_form).
 
 Ito model (1D, multiplicative noise):
     dx = (theta - kappa * x) dt + sigma * x dW
@@ -14,7 +14,7 @@ import jax.numpy as jnp
 from cuthbert import filter as run_filter
 from jax import jit
 
-from crf import build_filter
+from wsckf import build_filter
 
 jax.config.update("jax_enable_x64", True)
 

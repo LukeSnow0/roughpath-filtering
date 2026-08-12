@@ -1,4 +1,4 @@
-"""Wiener-space cubature path construction for the Cubature Recursive Filter (CRF).
+"""Wiener-space cubature path construction for the Wiener Space Cubature Kalman Filter (WSC-KF).
 
 These routines build a small set of deterministic Brownian "cubature" paths
 omega^{j}(t)` together with weights w_j that match the moments
@@ -6,7 +6,7 @@ of the Wiener measure up to a chosen degree. They are computed **host-side with
 NumPy** because they depend only on the assimilation interval, the Brownian
 dimension and the cubature order -- never on the (traced) filter state. The
 resulting arrays are therefore treated as static constants and closed over by the
-JAX filtering kernels in crf.filtering.
+JAX filtering kernels in wsckf.filtering.
 
 Two multidimensional constructions are provided:
 

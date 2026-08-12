@@ -1,9 +1,9 @@
-from crf.library.conversions import (
+from wsckf.library.conversions import (
     ito_to_stratonovich_drift,
     ito_to_stratonovich_dynamics,
     wrap_ito_dynamics,
 )
-from crf.library.cubature_paths import (
+from wsckf.library.cubature_paths import (
     build_cubature_driver,
     default_num_paths,
     default_recombined_num_paths,
@@ -12,7 +12,7 @@ from crf.library.cubature_paths import (
     select_multidim_paths,
 )
 
-from crf.filter.filtering import (
+from wsckf.filter.filtering import (
     integrate_stratonovich_cde,
     predict,
     spatial_cubature_nodes,

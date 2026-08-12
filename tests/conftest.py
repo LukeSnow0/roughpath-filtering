@@ -2,5 +2,5 @@
 
 import jax
 
-# Match experiment scripts and examples: CRF numerics assume float64.
+# Match experiment scripts and examples: WSC-KF numerics assume float64.
 jax.config.update("jax_enable_x64", True)

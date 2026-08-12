@@ -17,11 +17,11 @@ Train / held-out protocol (default --holdout-frac 0.3)
 * After fitting, each ``θ̂`` is scored by a **shared reference likelihood**
   (default: large RK4 EnKF) on the held-out suffix: run the reference filter on
   the **full** track at that ``θ̂`` (train is warmup; no cold start). This avoids
-  comparing incomparable self-likelihoods (EKF closure vs CRF/EnKF).
+  comparing incomparable self-likelihoods (EKF closure vs WSC-KF/EnKF).
 * Heatmaps show train ``L(θ)``; the accuracy column is reference held-out NLL/obs.
 
 Compares:
-* CRF-AD -- pathwise jax.value_and_grad through checkpointed ODE adjoint
+* WSC-KF-AD -- pathwise jax.value_and_grad through checkpointed ODE adjoint
 * CD-EKF-AD -- moment-ODE EKF pathwise VJP
 * CD-EnKF-AD -- ensemble filter, pathwise VJP with fixed RNG key
   (--skip-stochastic to drop EnKF)
@@ -29,7 +29,7 @@ Compares:
 Outputs (experiments/movement_test/output/):
   movement_loglik.png       2D train L(τ_v, σ_v) heatmaps
   movement_mle_trace.png    joint Adam traces in (τ_v, σ_v)
-  movement_track.png        GPS + CRF filtered mean at train MLE
+  movement_track.png        GPS + WSC-KF filtered mean at train MLE
   movement_heldout.png      held-out NLL/obs bar chart
   movement_timing.png       per-eval wall times
   movement_summary.csv
@@ -76,7 +76,7 @@ import matplotlib.pyplot as plt
 jax.config.update("jax_enable_x64", True)
 
 from cuthbert import filter as run_filter
-from crf import build_filter
+from wsckf import build_filter
 from cd_dynamax_mirror.filters import run_cd_ekf, run_cd_enkf
 
 from movement_data import load_duck_track
@@ -146,12 +146,12 @@ _parser.add_argument(
 _parser.add_argument("--n-timing", type=int, default=3, dest="n_timing")
 _parser.add_argument(
     "--solver", type=str, default="rk4", choices=("rk4", "diffrax"),
-    help="CD-filter forecast integrator (CRF uses its own cubature RK4)",
+    help="CD-filter forecast integrator (WSC-KF uses its own cubature RK4)",
 )
 _parser.add_argument("--timing-only", action="store_true")
 _parser.add_argument("--seed", type=int, default=0)
 _parser.add_argument("--skip-stochastic", action="store_true",
-                     help="skip EnKF (CRF + EKF only)")
+                     help="skip EnKF (WSC-KF + EKF only)")
 _args = _parser.parse_args()
 ENKF_PARTICLES = _args.enkf_particles
 REF_ENKF_PARTICLES = _args.ref_enkf_particles
@@ -220,7 +220,7 @@ print(
     f"(holdout_frac={_args.holdout_frac:g}; MLE/grid use train only)"
 )
 print(
-    f"CRF: recombined paths={_args.num_paths}  k={_args.cubature_order}  "
+    f"WSC-KF: recombined paths={_args.num_paths}  k={_args.cubature_order}  "
     f"EnKF fit={ENKF_PARTICLES}p  ref={REF_ENKF_PARTICLES}p"
 )
 print(
@@ -239,8 +239,8 @@ class MInputs(NamedTuple):
     sigma_v: jnp.ndarray
 
 
-def build_crf(ys, *, checkpoint_steps: bool):
-    """CRF closed over a fixed observation array ``ys`` (train or full)."""
+def build_wsckf(ys, *, checkpoint_steps: bool):
+    """WSC-KF closed over a fixed observation array ``ys`` (train or full)."""
 
     def get_init_params(mi):
         return M0, CHOL_P0
@@ -279,20 +279,20 @@ def _mi(tau_v, sigma_v, n_obs: int):
 _run = jit(run_filter, static_argnames=["filter_obj"])
 
 # Train filters (fit + grid) — closed over YS_TRAIN only.
-CRF_TRAIN = build_crf(YS_TRAIN, checkpoint_steps=False)
-CRF_TRAIN_CKPT = build_crf(YS_TRAIN, checkpoint_steps=True)
+WSCKF_TRAIN = build_wsckf(YS_TRAIN, checkpoint_steps=False)
+WSCKF_TRAIN_CKPT = build_wsckf(YS_TRAIN, checkpoint_steps=True)
 # Full-track filters (held-out score + track plot) — never used for Adam/grid.
-CRF_FULL = build_crf(YS, checkpoint_steps=False)
-CRF_FULL_CKPT = build_crf(YS, checkpoint_steps=True)
+WSCKF_FULL = build_wsckf(YS, checkpoint_steps=False)
+WSCKF_FULL_CKPT = build_wsckf(YS, checkpoint_steps=True)
 
 
-def crf_train_loglik(tau_v, sigma_v, *, checkpoint=True):
-    filt = CRF_TRAIN_CKPT if checkpoint else CRF_TRAIN
+def wsckf_train_loglik(tau_v, sigma_v, *, checkpoint=True):
+    filt = WSCKF_TRAIN_CKPT if checkpoint else WSCKF_TRAIN
     return _run(filt, _mi(tau_v, sigma_v, N_TRAIN)).log_normalizing_constant[-1]
 
 
-def crf_full_states(tau_v, sigma_v, *, checkpoint=True):
-    filt = CRF_FULL_CKPT if checkpoint else CRF_FULL
+def wsckf_full_states(tau_v, sigma_v, *, checkpoint=True):
+    filt = WSCKF_FULL_CKPT if checkpoint else WSCKF_FULL
     return _run(filt, _mi(tau_v, sigma_v, N_OBS))
 
 
@@ -325,7 +325,7 @@ def enkf_train_loglik(tau_v, sigma_v, key):
 def heldout_nll_per_obs(cum_ll, n_train: int, n_obs: int) -> float:
     """Incremental NLL on obs[n_train:] from a cumulative loglik array.
 
-    CRF ``log_normalizing_constant`` has length ``n_obs+1`` (index 0 = prior).
+    WSC-KF ``log_normalizing_constant`` has length ``n_obs+1`` (index 0 = prior).
     CD filters ``cum_loglik`` has length ``n_obs``.
     """
     if n_train >= n_obs:
@@ -356,9 +356,9 @@ def ref_enkf_heldout_nll(tau_v, sigma_v, *, n_particles: int, seeds: list[int]):
     return float(arr.mean()), float(arr.std(ddof=1))
 
 
-def crf_ref_heldout_nll(tau_v, sigma_v):
-    """Held-out NLL/obs under the CRF likelihood at fixed ``(τ_v, σ_v)``."""
-    st = crf_full_states(tau_v, sigma_v, checkpoint=False)
+def wsckf_ref_heldout_nll(tau_v, sigma_v):
+    """Held-out NLL/obs under the WSC-KF likelihood at fixed ``(τ_v, σ_v)``."""
+    st = wsckf_full_states(tau_v, sigma_v, checkpoint=False)
     return heldout_nll_per_obs(st.log_normalizing_constant, N_TRAIN, N_OBS), st
 
 
@@ -369,15 +369,15 @@ def _ll_from_theta(ll2, theta):
 
 
 # Gradients / forwards for **train** likelihood only (no held-out leakage).
-crf_vg = jit(value_and_grad(
-    lambda th: _ll_from_theta(lambda t, s: crf_train_loglik(t, s, checkpoint=True), th)
+wsckf_vg = jit(value_and_grad(
+    lambda th: _ll_from_theta(lambda t, s: wsckf_train_loglik(t, s, checkpoint=True), th)
 ))
 ekf_vg = jit(value_and_grad(lambda th: _ll_from_theta(ekf_train_loglik, th)))
 _enkf_key_ad = jr.PRNGKey(_args.seed + 17)
 enkf_vg = jit(value_and_grad(
     lambda th: _ll_from_theta(lambda t, s: enkf_train_loglik(t, s, _enkf_key_ad), th)
 ))
-_crf_train_ll = jit(lambda t, s: crf_train_loglik(t, s, checkpoint=False))
+_wsckf_train_ll = jit(lambda t, s: wsckf_train_loglik(t, s, checkpoint=False))
 _ekf_train_ll = jit(ekf_train_loglik)
 _enkf_train_ll = jit(enkf_train_loglik)
 _ekf_full_cum = jit(lambda t, s: ekf_loglik_on(YS, t, s))
@@ -433,12 +433,12 @@ def main():
         f"\n=== Median wall time (n={N_TIMING}, N_train={N_TRAIN}, "
         f"cd_solver={SOLVER}) ==="
     )
-    t_crf_fwd = median_time(lambda: _crf_train_ll(_args.tau_init, _args.sigma_v_init))
-    t_crf_ad = median_time(lambda: crf_vg(theta0))
+    t_wsckf_fwd = median_time(lambda: _wsckf_train_ll(_args.tau_init, _args.sigma_v_init))
+    t_wsckf_ad = median_time(lambda: wsckf_vg(theta0))
     t_ekf_fwd = median_time(lambda: _ekf_train_ll(_args.tau_init, _args.sigma_v_init))
     t_ekf_ad = median_time(lambda: ekf_vg(theta0))
-    print(f"  CRF forward:        {t_crf_fwd:.4f}s")
-    print(f"  CRF-AD (2-param):   {t_crf_ad:.4f}s")
+    print(f"  WSC-KF forward:        {t_wsckf_fwd:.4f}s")
+    print(f"  WSC-KF-AD (2-param):   {t_wsckf_ad:.4f}s")
     print(f"  CD-EKF forward:     {t_ekf_fwd:.4f}s")
     print(f"  CD-EKF-AD:          {t_ekf_ad:.4f}s")
     t_enkf_fwd = t_enkf_ad = float("nan")
@@ -454,8 +454,8 @@ def main():
     fig_t, axes = plt.subplots(1, 2, figsize=(11.5, 4.6))
     ax = axes[0]
     timing_rows = [
-        ("CRF fwd", t_crf_fwd, "C2"),
-        ("CRF-AD", t_crf_ad, "C2"),
+        ("WSC-KF fwd", t_wsckf_fwd, "C2"),
+        ("WSC-KF-AD", t_wsckf_ad, "C2"),
         ("EKF fwd", t_ekf_fwd, "C3"),
         ("EKF-AD", t_ekf_ad, "C3"),
     ]
@@ -484,13 +484,13 @@ def main():
 
     print(f"\n=== Joint Adam MLE wall ({_args.mle_iters} iters, train only) ===")
     t0 = time.perf_counter()
-    adam_mle_2d(crf_vg)
-    crf_mle_wall = time.perf_counter() - t0
+    adam_mle_2d(wsckf_vg)
+    wsckf_mle_wall = time.perf_counter() - t0
     t0 = time.perf_counter()
     adam_mle_2d(ekf_vg)
     ekf_mle_wall = time.perf_counter() - t0
     enkf_mle_wall = float("nan")
-    print(f"  CRF-AD:  {crf_mle_wall:.2f}s")
+    print(f"  WSC-KF-AD:  {wsckf_mle_wall:.2f}s")
     print(f"  EKF-AD:  {ekf_mle_wall:.2f}s")
     if stochastic:
         t0 = time.perf_counter()
@@ -499,8 +499,8 @@ def main():
         print(f"  EnKF-AD: {enkf_mle_wall:.2f}s")
 
     ax = axes[1]
-    mle_labels = ["CRF-AD", "EKF-AD"]
-    mle_times = [crf_mle_wall, ekf_mle_wall]
+    mle_labels = ["WSC-KF-AD", "EKF-AD"]
+    mle_times = [wsckf_mle_wall, ekf_mle_wall]
     mle_colors = ["C2", "C3"]
     if stochastic:
         mle_labels.append("EnKF-AD")
@@ -543,7 +543,7 @@ def main():
                 N_TIMING, "",
             ])
         w.writerow([
-            "mle_wall", "CRF-AD", crf_mle_wall, SOLVER, N_OBS, N_TRAIN, "",
+            "mle_wall", "WSC-KF-AD", wsckf_mle_wall, SOLVER, N_OBS, N_TRAIN, "",
             _args.mle_iters,
         ])
         w.writerow([
@@ -565,22 +565,22 @@ def main():
     tau_axis = np.geomspace(0.4, 8.0, n_g)
     sv_axis = np.geomspace(0.5, 8.0, n_g)
     print(f"\n=== 2D train loglik grid ({n_g}×{n_g}, N_train={N_TRAIN}) ===")
-    crf_Z = np.full((n_g, n_g), np.nan)
+    wsckf_Z = np.full((n_g, n_g), np.nan)
     ekf_Z = np.full((n_g, n_g), np.nan)
     enkf_Z = np.full((n_g, n_g), np.nan) if stochastic else None
     key_grid = jr.PRNGKey(_args.seed)
     for i, tau in enumerate(tau_axis):
         for j, sv in enumerate(sv_axis):
-            crf_Z[i, j] = float(_crf_train_ll(tau, sv))
+            wsckf_Z[i, j] = float(_wsckf_train_ll(tau, sv))
             ekf_Z[i, j] = float(_ekf_train_ll(tau, sv))
             if stochastic:
                 enkf_Z[i, j] = float(_enkf_train_ll(tau, sv, key_grid))
         if (i + 1) % max(1, n_g // 4) == 0:
             print(f"  grid row {i+1}/{n_g} done")
 
-    crf_tau, crf_sv, crf_L = _grid_argmax(tau_axis, sv_axis, crf_Z)
+    wsckf_tau, wsckf_sv, wsckf_L = _grid_argmax(tau_axis, sv_axis, wsckf_Z)
     ekf_tau, ekf_sv, ekf_L = _grid_argmax(tau_axis, sv_axis, ekf_Z)
-    print(f"  CRF  grid-argmax:  τ_v={crf_tau:.2f}h  σ_v={crf_sv:.2f}  L={crf_L:.1f}")
+    print(f"  WSC-KF  grid-argmax:  τ_v={wsckf_tau:.2f}h  σ_v={wsckf_sv:.2f}  L={wsckf_L:.1f}")
     print(f"  EKF  grid-argmax:  τ_v={ekf_tau:.2f}h  σ_v={ekf_sv:.2f}  L={ekf_L:.1f}")
     if stochastic:
         enkf_tau, enkf_sv, enkf_L = _grid_argmax(tau_axis, sv_axis, enkf_Z)
@@ -589,17 +589,17 @@ def main():
     # ---- joint Adam MLE on train only ----
     print(f"\n=== Joint Adam MLE on train ({_args.mle_iters} iters, N_train={N_TRAIN}) ===")
     t0 = time.perf_counter()
-    crf_vg(theta0)
-    crf_compile = time.perf_counter() - t0
+    wsckf_vg(theta0)
+    wsckf_compile = time.perf_counter() - t0
     t0 = time.perf_counter()
-    crf_tau_tr, crf_sv_tr, crf_ll_tr = adam_mle_2d(crf_vg)
-    crf_mle_t = time.perf_counter() - t0
+    wsckf_tau_tr, wsckf_sv_tr, wsckf_ll_tr = adam_mle_2d(wsckf_vg)
+    wsckf_mle_t = time.perf_counter() - t0
     t0 = time.perf_counter()
     ekf_tau_tr, ekf_sv_tr, ekf_ll_tr = adam_mle_2d(ekf_vg)
     ekf_mle_t = time.perf_counter() - t0
     print(
-        f"  CRF-AD:  τ̂={crf_tau_tr[-1]:.3f}h  σ̂_v={crf_sv_tr[-1]:.3f}  "
-        f"(compile={crf_compile:.2f}s, {crf_mle_t:.2f}s)"
+        f"  WSC-KF-AD:  τ̂={wsckf_tau_tr[-1]:.3f}h  σ̂_v={wsckf_sv_tr[-1]:.3f}  "
+        f"(compile={wsckf_compile:.2f}s, {wsckf_mle_t:.2f}s)"
     )
     print(
         f"  EKF-AD:  τ̂={ekf_tau_tr[-1]:.3f}h  σ̂_v={ekf_sv_tr[-1]:.3f}  "
@@ -616,18 +616,18 @@ def main():
             f"({enkf_mle_t:.2f}s)"
         )
 
-    _, sig0_crf = tau_sigma_to_beta_sigma0(crf_tau_tr[-1], crf_sv_tr[-1])
+    _, sig0_wsckf = tau_sigma_to_beta_sigma0(wsckf_tau_tr[-1], wsckf_sv_tr[-1])
     _, sig0_ekf = tau_sigma_to_beta_sigma0(ekf_tau_tr[-1], ekf_sv_tr[-1])
-    print(f"  implied σ₀:  CRF={float(sig0_crf):.3f}  EKF={float(sig0_ekf):.3f}")
+    print(f"  implied σ₀:  WSC-KF={float(sig0_wsckf):.3f}  EKF={float(sig0_ekf):.3f}")
 
     # ---- held-out scores ----
     # Primary: shared reference EnKF likelihood at each train θ̂ (fair ranking).
-    # Secondary: self-likelihood diagnostics + CRF-reference cross-scores (CSV).
-    crf_held = ekf_held = enkf_held = float("nan")
+    # Secondary: self-likelihood diagnostics + WSC-KF-reference cross-scores (CSV).
+    wsckf_held = ekf_held = enkf_held = float("nan")
     enkf_held_std = float("nan")
-    crf_ref_at_crf = crf_ref_at_ekf = crf_ref_at_enkf = float("nan")
-    enkf_ref_at_crf = enkf_ref_at_ekf = enkf_ref_at_enkf = float("nan")
-    enkf_ref_at_crf_std = enkf_ref_at_ekf_std = enkf_ref_at_enkf_std = float("nan")
+    wsckf_ref_at_wsckf = wsckf_ref_at_ekf = wsckf_ref_at_enkf = float("nan")
+    enkf_ref_at_wsckf = enkf_ref_at_ekf = enkf_ref_at_enkf = float("nan")
+    enkf_ref_at_wsckf_std = enkf_ref_at_ekf_std = enkf_ref_at_enkf_std = float("nan")
     st = None
     if DO_HELDOUT:
         print(
@@ -635,21 +635,21 @@ def main():
             f"(EnKF-{REF_ENKF_PARTICLES}p @ each train θ̂; "
             f"N_held={N_HELD}; state carried through train) ==="
         )
-        theta_crf = (float(crf_tau_tr[-1]), float(crf_sv_tr[-1]))
+        theta_wsckf = (float(wsckf_tau_tr[-1]), float(wsckf_sv_tr[-1]))
         theta_ekf = (float(ekf_tau_tr[-1]), float(ekf_sv_tr[-1]))
         theta_enkf = (
             (float(enkf_tau_tr[-1]), float(enkf_sv_tr[-1]))
             if stochastic else None
         )
 
-        enkf_ref_at_crf, enkf_ref_at_crf_std = ref_enkf_heldout_nll(
-            *theta_crf, n_particles=REF_ENKF_PARTICLES, seeds=REF_SEEDS
+        enkf_ref_at_wsckf, enkf_ref_at_wsckf_std = ref_enkf_heldout_nll(
+            *theta_wsckf, n_particles=REF_ENKF_PARTICLES, seeds=REF_SEEDS
         )
         enkf_ref_at_ekf, enkf_ref_at_ekf_std = ref_enkf_heldout_nll(
             *theta_ekf, n_particles=REF_ENKF_PARTICLES, seeds=REF_SEEDS
         )
         print(
-            f"  ref-EnKF @ θ̂_CRF  = {enkf_ref_at_crf:.4f} ± {enkf_ref_at_crf_std:.4f}"
+            f"  ref-EnKF @ θ̂_WSCKF  = {enkf_ref_at_wsckf:.4f} ± {enkf_ref_at_wsckf_std:.4f}"
         )
         print(
             f"  ref-EnKF @ θ̂_EKF  = {enkf_ref_at_ekf:.4f} ± {enkf_ref_at_ekf_std:.4f}"
@@ -663,21 +663,21 @@ def main():
                 f"± {enkf_ref_at_enkf_std:.4f}"
             )
 
-        # CRF-reference cross-score (deterministic) + track states at θ̂_CRF.
-        crf_ref_at_crf, st = crf_ref_heldout_nll(*theta_crf)
-        crf_ref_at_ekf, _ = crf_ref_heldout_nll(*theta_ekf)
-        print(f"  ref-CRF  @ θ̂_CRF  = {crf_ref_at_crf:.4f}")
-        print(f"  ref-CRF  @ θ̂_EKF  = {crf_ref_at_ekf:.4f}")
+        # WSC-KF-reference cross-score (deterministic) + track states at θ̂_WSCKF.
+        wsckf_ref_at_wsckf, st = wsckf_ref_heldout_nll(*theta_wsckf)
+        wsckf_ref_at_ekf, _ = wsckf_ref_heldout_nll(*theta_ekf)
+        print(f"  ref-WSC-KF  @ θ̂_WSCKF  = {wsckf_ref_at_wsckf:.4f}")
+        print(f"  ref-WSC-KF  @ θ̂_EKF  = {wsckf_ref_at_ekf:.4f}")
         if theta_enkf is not None:
-            crf_ref_at_enkf, _ = crf_ref_heldout_nll(*theta_enkf)
-            print(f"  ref-CRF  @ θ̂_EnKF = {crf_ref_at_enkf:.4f}")
+            wsckf_ref_at_enkf, _ = wsckf_ref_heldout_nll(*theta_enkf)
+            print(f"  ref-WSC-KF  @ θ̂_EnKF = {wsckf_ref_at_enkf:.4f}")
 
         # Self-score diagnostics (not used for ranking — incomparable scorers).
         print("\n=== Self-score diagnostics (own filter @ own θ̂; not for ranking) ===")
-        crf_held = crf_ref_at_crf
+        wsckf_held = wsckf_ref_at_wsckf
         ekf_cum = _ekf_full_cum(jnp.asarray(theta_ekf[0]), jnp.asarray(theta_ekf[1]))
         ekf_held = heldout_nll_per_obs(ekf_cum, N_TRAIN, N_OBS)
-        print(f"  CRF  self held-out NLL/obs = {crf_held:.4f}")
+        print(f"  WSC-KF  self held-out NLL/obs = {wsckf_held:.4f}")
         print(f"  EKF  self held-out NLL/obs = {ekf_held:.4f}")
         if stochastic:
             enkf_vals = []
@@ -696,8 +696,8 @@ def main():
                 f"± {enkf_held_std:.4f}"
             )
     else:
-        st = crf_full_states(
-            jnp.asarray(crf_tau_tr[-1]), jnp.asarray(crf_sv_tr[-1]), checkpoint=False
+        st = wsckf_full_states(
+            jnp.asarray(wsckf_tau_tr[-1]), jnp.asarray(wsckf_sv_tr[-1]), checkpoint=False
         )
 
     filt_xy = np.asarray(st.mean)[:, :2]
@@ -707,7 +707,7 @@ def main():
     n_panels = 3 if stochastic else 2
     fig1, axes = plt.subplots(1, n_panels, figsize=(4.6 * n_panels, 4.4), sharey=True)
     panels = [
-        ("CRF", crf_Z, "C2", (crf_tau, crf_sv), (crf_tau_tr[-1], crf_sv_tr[-1])),
+        ("WSC-KF", wsckf_Z, "C2", (wsckf_tau, wsckf_sv), (wsckf_tau_tr[-1], wsckf_sv_tr[-1])),
         ("CD-EKF", ekf_Z, "C3", (ekf_tau, ekf_sv), (ekf_tau_tr[-1], ekf_sv_tr[-1])),
     ]
     if stochastic:
@@ -745,11 +745,11 @@ def main():
 
     fig2, axes2 = plt.subplots(1, 2, figsize=(11.0, 4.6))
     ax = axes2[0]
-    ax.plot(crf_tau_tr, crf_sv_tr, "o-", color="C2", ms=4, label="CRF-AD")
+    ax.plot(wsckf_tau_tr, wsckf_sv_tr, "o-", color="C2", ms=4, label="WSC-KF-AD")
     ax.plot(ekf_tau_tr, ekf_sv_tr, "s-", color="C3", ms=4, label="EKF-AD")
     if stochastic:
         ax.plot(enkf_tau_tr, enkf_sv_tr, "D-", color="C1", ms=4, label="EnKF-AD")
-    ax.plot(crf_tau, crf_sv, "*", color="C2", ms=14, markeredgecolor="k")
+    ax.plot(wsckf_tau, wsckf_sv, "*", color="C2", ms=14, markeredgecolor="k")
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlabel(r"$\tau_v$ [h]")
@@ -760,8 +760,8 @@ def main():
 
     ax = axes2[1]
     it = np.arange(_args.mle_iters)
-    ax.plot(it, crf_tau_tr, "o-", color="C2", ms=3, label=r"CRF $\tau_v$")
-    ax.plot(it, crf_sv_tr, "o--", color="C2", ms=3, alpha=0.7, label=r"CRF $\sigma_v$")
+    ax.plot(it, wsckf_tau_tr, "o-", color="C2", ms=3, label=r"WSC-KF $\tau_v$")
+    ax.plot(it, wsckf_sv_tr, "o--", color="C2", ms=3, alpha=0.7, label=r"WSC-KF $\sigma_v$")
     ax.plot(it, ekf_tau_tr, "s-", color="C3", ms=3, label=r"EKF $\tau_v$")
     ax.plot(it, ekf_sv_tr, "s--", color="C3", ms=3, alpha=0.7, label=r"EKF $\sigma_v$")
     if stochastic:
@@ -795,8 +795,8 @@ def main():
     ax.plot(
         filt_xy[:, 0], filt_xy[:, 1], "-", lw=1.0, color="C2",
         label=(
-            f"CRF filtered mean @ train MLE\n"
-            f"$\\hat\\tau_v$={crf_tau_tr[-1]:.2f}h, $\\hat\\sigma_v$={crf_sv_tr[-1]:.2f}"
+            f"WSC-KF filtered mean @ train MLE\n"
+            f"$\\hat\\tau_v$={wsckf_tau_tr[-1]:.2f}h, $\\hat\\sigma_v$={wsckf_sv_tr[-1]:.2f}"
         ),
     )
     ax.plot(obs_xy[0, 0], obs_xy[0, 1], "o", color="green", label="start")
@@ -808,7 +808,7 @@ def main():
     ax.set_xlabel("east (km, centred)")
     ax.set_ylabel("north (km, centred)")
     ax.set_aspect("equal", adjustable="datalim")
-    ax.set_title(f"{track.species} {track.band}: GPS + CRF @ train MLE")
+    ax.set_title(f"{track.species} {track.band}: GPS + WSC-KF @ train MLE")
     ax.legend(fontsize=8)
     ax.grid(alpha=0.3)
     fig3.tight_layout()
@@ -819,15 +819,15 @@ def main():
         compare = []
         compare.append(
             {
-                "name": "CRF",
+                "name": "WSC-KF",
                 "color": "#2ca02c",
                 "marker": "o",
-                "tau": float(crf_tau_tr[-1]),
-                "sv": float(crf_sv_tr[-1]),
-                "held": float(enkf_ref_at_crf),
-                "held_err": float(enkf_ref_at_crf_std),
-                "path_tau": crf_tau_tr,
-                "path_sv": crf_sv_tr,
+                "tau": float(wsckf_tau_tr[-1]),
+                "sv": float(wsckf_sv_tr[-1]),
+                "held": float(enkf_ref_at_wsckf),
+                "held_err": float(enkf_ref_at_wsckf_std),
+                "path_tau": wsckf_tau_tr,
+                "path_sv": wsckf_sv_tr,
             }
         )
         compare.append(
@@ -863,12 +863,12 @@ def main():
 
         # A — parameter estimates from train MLE
         ax_a = fig_c.add_subplot(gs[0, 0])
-        finite = crf_Z[np.isfinite(crf_Z)]
+        finite = wsckf_Z[np.isfinite(wsckf_Z)]
         if finite.size:
             c_vmax = float(np.max(finite))
             c_vmin = c_vmax - 4000.0
             ax_a.contourf(
-                Tau, Sv, crf_Z, levels=18, cmap="Greys",
+                Tau, Sv, wsckf_Z, levels=18, cmap="Greys",
                 vmin=c_vmin, vmax=c_vmax, alpha=0.55, zorder=0,
             )
         for rec in compare:
@@ -944,7 +944,7 @@ def main():
         )
         ax_c.plot(
             filt_xy[:, 0], filt_xy[:, 1], "-", lw=1.1, color="#2ca02c",
-            label="CRF mean @ train MLE", zorder=2,
+            label="WSC-KF mean @ train MLE", zorder=2,
         )
         ax_c.plot(obs_xy[0, 0], obs_xy[0, 1], "o", color="#2ca02c", ms=6, zorder=3)
         ax_c.plot(
@@ -1006,15 +1006,15 @@ def main():
         w.writerow(["setup", "grid", n_g])
         w.writerow(["setup", "mle_iters", _args.mle_iters])
         w.writerow(["setup", "enkf_particles", ENKF_PARTICLES])
-        w.writerow(["setup", "crf_num_paths", _args.num_paths])
-        w.writerow(["setup", "crf_cubature_order", _args.cubature_order])
+        w.writerow(["setup", "wsckf_num_paths", _args.num_paths])
+        w.writerow(["setup", "wsckf_cubature_order", _args.cubature_order])
         w.writerow(["setup", "mle_uses", "train_prefix_only"])
         w.writerow(["setup", "heldout_score", "ref_enkf_at_each_train_theta"])
         w.writerow(["setup", "ref_enkf_particles", REF_ENKF_PARTICLES])
         w.writerow(["setup", "ref_seeds", ",".join(str(s) for s in REF_SEEDS)])
-        w.writerow(["mle", "crf_tau_v", crf_tau_tr[-1]])
-        w.writerow(["mle", "crf_sigma_v", crf_sv_tr[-1]])
-        w.writerow(["mle", "crf_sigma0_implied", float(sig0_crf)])
+        w.writerow(["mle", "wsckf_tau_v", wsckf_tau_tr[-1]])
+        w.writerow(["mle", "wsckf_sigma_v", wsckf_sv_tr[-1]])
+        w.writerow(["mle", "wsckf_sigma0_implied", float(sig0_wsckf)])
         w.writerow(["mle", "ekf_tau_v", ekf_tau_tr[-1]])
         w.writerow(["mle", "ekf_sigma_v", ekf_sv_tr[-1]])
         w.writerow(["mle", "ekf_sigma0_implied", float(sig0_ekf)])
@@ -1023,23 +1023,23 @@ def main():
             w.writerow(["mle", "enkf_tau_v", enkf_tau_tr[-1]])
             w.writerow(["mle", "enkf_sigma_v", enkf_sv_tr[-1]])
             w.writerow(["mle", "enkf_sigma0_implied", float(sig0_enkf)])
-        w.writerow(["mle", "crf_grid_tau_v", crf_tau])
-        w.writerow(["mle", "crf_grid_sigma_v", crf_sv])
+        w.writerow(["mle", "wsckf_grid_tau_v", wsckf_tau])
+        w.writerow(["mle", "wsckf_grid_sigma_v", wsckf_sv])
         w.writerow(["mle", "ekf_grid_tau_v", ekf_tau])
         w.writerow(["mle", "ekf_grid_sigma_v", ekf_sv])
         if DO_HELDOUT:
-            w.writerow(["heldout_ref_enkf", "at_theta_crf_mean", enkf_ref_at_crf])
-            w.writerow(["heldout_ref_enkf", "at_theta_crf_std", enkf_ref_at_crf_std])
+            w.writerow(["heldout_ref_enkf", "at_theta_wsckf_mean", enkf_ref_at_wsckf])
+            w.writerow(["heldout_ref_enkf", "at_theta_wsckf_std", enkf_ref_at_wsckf_std])
             w.writerow(["heldout_ref_enkf", "at_theta_ekf_mean", enkf_ref_at_ekf])
             w.writerow(["heldout_ref_enkf", "at_theta_ekf_std", enkf_ref_at_ekf_std])
             if stochastic:
                 w.writerow(["heldout_ref_enkf", "at_theta_enkf_mean", enkf_ref_at_enkf])
                 w.writerow(["heldout_ref_enkf", "at_theta_enkf_std", enkf_ref_at_enkf_std])
-            w.writerow(["heldout_ref_crf", "at_theta_crf", crf_ref_at_crf])
-            w.writerow(["heldout_ref_crf", "at_theta_ekf", crf_ref_at_ekf])
+            w.writerow(["heldout_ref_wsckf", "at_theta_wsckf", wsckf_ref_at_wsckf])
+            w.writerow(["heldout_ref_wsckf", "at_theta_ekf", wsckf_ref_at_ekf])
             if stochastic:
-                w.writerow(["heldout_ref_crf", "at_theta_enkf", crf_ref_at_enkf])
-            w.writerow(["heldout_self", "crf_nll_per_obs", crf_held])
+                w.writerow(["heldout_ref_wsckf", "at_theta_enkf", wsckf_ref_at_enkf])
+            w.writerow(["heldout_self", "wsckf_nll_per_obs", wsckf_held])
             w.writerow(["heldout_self", "ekf_nll_per_obs", ekf_held])
             if stochastic:
                 w.writerow(["heldout_self", "enkf_nll_per_obs_mean", enkf_held])
@@ -1048,11 +1048,11 @@ def main():
                     "heldout_self", "enkf_seeds",
                     ",".join(str(s) for s in HELDOUT_ENKF_SEEDS),
                 ])
-        w.writerow(["timing", "crf_forward_s", t_crf_fwd])
-        w.writerow(["timing", "crf_ad_vjp_s", t_crf_ad])
+        w.writerow(["timing", "wsckf_forward_s", t_wsckf_fwd])
+        w.writerow(["timing", "wsckf_ad_vjp_s", t_wsckf_ad])
         w.writerow(["timing", "ekf_forward_s", t_ekf_fwd])
         w.writerow(["timing", "ekf_ad_vjp_s", t_ekf_ad])
-        w.writerow(["timing", "crf_ad_mle_s", crf_mle_t])
+        w.writerow(["timing", "wsckf_ad_mle_s", wsckf_mle_t])
         w.writerow(["timing", "ekf_ad_mle_s", ekf_mle_t])
         if stochastic:
             w.writerow(["timing", "enkf_forward_s", t_enkf_fwd])
@@ -1060,12 +1060,12 @@ def main():
             w.writerow(["timing", "enkf_ad_mle_s", enkf_mle_t])
         w.writerow([])
         w.writerow(
-            ["tau_v", "sigma_v", "crf_train_loglik", "ekf_train_loglik"]
+            ["tau_v", "sigma_v", "wsckf_train_loglik", "ekf_train_loglik"]
             + (["enkf_train_loglik"] if stochastic else [])
         )
         for i, tau in enumerate(tau_axis):
             for j, sv in enumerate(sv_axis):
-                row = [tau, sv, crf_Z[i, j], ekf_Z[i, j]]
+                row = [tau, sv, wsckf_Z[i, j], ekf_Z[i, j]]
                 if stochastic:
                     row.append(enkf_Z[i, j])
                 w.writerow(row)

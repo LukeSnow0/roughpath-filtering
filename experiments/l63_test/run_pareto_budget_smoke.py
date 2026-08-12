@@ -1,14 +1,14 @@
 """Smoke Pareto for Lorenz-63: wall-clock vs fine-grid RMSE.
 
-Mirrors the MFTS budget Pareto style: WS-CKF product path ladder (d=3),
+Mirrors the MFTS budget Pareto style: WSC-KF product path ladder (d=3),
 EnKF/PF particle sweeps, multi-seed mean.
 
 Run:
   uv run --extra experiments python experiments/l63_test/run_pareto_budget_smoke.py
   uv run --extra experiments python experiments/l63_test/run_pareto_budget_smoke.py \\
-      --seeds 0,1,2,3,4,5,6,7,8 --crf-max-paths 64
+      --seeds 0,1,2,3,4,5,6,7,8 --wsckf-max-paths 64
   uv run --extra experiments python experiments/l63_test/run_pareto_budget_smoke.py \\
-      --append --seeds 0,1,2,3,4,5 --crf-max-paths 64 \\
+      --append --seeds 0,1,2,3,4,5 --wsckf-max-paths 64 \\
       --enkf 25,50,100,200 --pf 50,100,200,500
 
 Outputs:
@@ -58,9 +58,9 @@ from cd_dynamax_mirror.filters import (
     run_cd_ukf,
 )
 from cuthbert import filter as run_filter
-from crf import build_filter
-from crf.library import product_path_count
-from crf.library.cubature_paths import build_recombined_cubature_paths
+from wsckf import build_filter
+from wsckf.library import product_path_count
+from wsckf.library.cubature_paths import build_recombined_cubature_paths
 
 OUTPUT_DIR = os.path.join(HERE, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -81,23 +81,23 @@ def _parse_ints(s: str) -> list[int]:
 
 
 @dataclass(frozen=True)
-class CrfConfig:
+class WSCKFConfig:
     label: str
     lyons_degree: int
     k: int
     n_paths: int
     method: str = "product"  # product | recombined
-    family: str = "CRF-product"
+    family: str = "WSC-KF-product"
 
 
-def default_crf_configs(noise_dim: int = 3, max_paths: int = 8) -> list[CrfConfig]:
+def default_wsckf_configs(noise_dim: int = 3, max_paths: int = 8) -> list[WSCKFConfig]:
     """Exact product path counts up to ``max_paths`` (sorted by n_paths).
 
     For d=3: (m,k) → P = (2^k)^3 for m=3, (3^k)^3 for m=5, so
     8, 27, 64, 512, 729, ...
     """
     specs = [(3, 1), (5, 1), (3, 2), (3, 3), (5, 2), (3, 4), (5, 3)]
-    configs: list[CrfConfig] = []
+    configs: list[WSCKFConfig] = []
     seen: set[int] = set()
     for m, k in specs:
         n = product_path_count(noise_dim, k, lyons_degree=m)
@@ -105,34 +105,34 @@ def default_crf_configs(noise_dim: int = 3, max_paths: int = 8) -> list[CrfConfi
             continue
         seen.add(n)
         configs.append(
-            CrfConfig(
+            WSCKFConfig(
                 label=f"prod-m{m}-k{k}",
                 lyons_degree=m,
                 k=k,
                 n_paths=n,
                 method="product",
-                family="CRF-product",
+                family="WSC-KF-product",
             )
         )
     return sorted(configs, key=lambda c: c.n_paths)
 
 
-def recombined_crf_configs(path_counts: list[int], k: int = 2) -> list[CrfConfig]:
+def recombined_wsckf_configs(path_counts: list[int], k: int = 2) -> list[WSCKFConfig]:
     """Recombined KLV path budgets (arbitrary P; not restricted to product cardinalities)."""
-    configs: list[CrfConfig] = []
+    configs: list[WSCKFConfig] = []
     seen: set[int] = set()
     for n in path_counts:
         if n < 1 or n in seen:
             continue
         seen.add(n)
         configs.append(
-            CrfConfig(
+            WSCKFConfig(
                 label=f"rec-P{n}",
                 lyons_degree=5,
                 k=k,
                 n_paths=n,
                 method="recombined",
-                family="CRF-recombined",
+                family="WSC-KF-recombined",
             )
         )
     return sorted(configs, key=lambda c: c.n_paths)
@@ -152,17 +152,17 @@ _parser.add_argument("--spinup", type=int, default=5_000, help="Truth spinup ste
 _parser.add_argument("--enkf", type=str, default="25,50,100")
 _parser.add_argument("--pf", type=str, default="50,100,200")
 _parser.add_argument(
-    "--crf-max-paths",
+    "--wsckf-max-paths",
     type=int,
     default=8,
-    dest="crf_max_paths",
-    help="Include exact product WS-CKF configs with P ≤ this (d=3: 8,27,64,…)",
+    dest="wsckf_max_paths",
+    help="Include exact product WSC-KF configs with P ≤ this (d=3: 8,27,64,…)",
 )
 _parser.add_argument(
-    "--crf-recombined",
+    "--wsckf-recombined",
     type=str,
     default="",
-    dest="crf_recombined",
+    dest="wsckf_recombined",
     help="Comma-separated recombined path budgets (e.g. 4). Empty = none.",
 )
 _parser.add_argument(
@@ -204,15 +204,15 @@ N_TIMING = _args.n_timing
 DIFF_STD = float(_args.diff_std)
 OBS_STD = float(_args.obs_std)
 OUT_TAG = f"_{_args.tag}" if _args.tag.strip() else ""
-CRF_CONFIGS = default_crf_configs(3, max_paths=int(_args.crf_max_paths))
-CRF_CONFIGS = sorted(
-    CRF_CONFIGS + recombined_crf_configs(_parse_ints(_args.crf_recombined)),
+WSCKF_CONFIGS = default_wsckf_configs(3, max_paths=int(_args.wsckf_max_paths))
+WSCKF_CONFIGS = sorted(
+    WSCKF_CONFIGS + recombined_wsckf_configs(_parse_ints(_args.wsckf_recombined)),
     key=lambda c: (c.n_paths, c.method, c.label),
 )
-if not CRF_CONFIGS:
+if not WSCKF_CONFIGS:
     raise SystemExit(
-        f"no CRF configs from --crf-max-paths={_args.crf_max_paths} "
-        f"and --crf-recombined={_args.crf_recombined!r}"
+        f"no WSC-KF configs from --wsckf-max-paths={_args.wsckf_max_paths} "
+        f"and --wsckf-recombined={_args.wsckf_recombined!r}"
     )
 
 lorenz_sigma, lorenz_rho, lorenz_beta = 10.0, 28.0, 8.0 / 3.0
@@ -230,12 +230,12 @@ COLORS = {
     "CD-UKF": "#3DA35D",
     "CD-EnKF": "#F6AE2D",
     "PF": "#F24236",
-    "CRF-product": "#6A4C93",
-    "CRF-recombined": "#6A4C93",
+    "WSC-KF-product": "#6A4C93",
+    "WSC-KF-recombined": "#6A4C93",
 }
 DISPLAY_NAME = {
-    "CRF-product": "WS-CKF",
-    "CRF-recombined": "WS-CKF",
+    "WSC-KF-product": "WSC-KF",
+    "WSC-KF-recombined": "WSC-KF",
     "CD-EKF": "CD-EKF",
     "CD-UKF": "CD-UKF (coarse)",  # flow-map predict
     "CD-EnKF": "CD-EnKF",
@@ -244,8 +244,8 @@ DISPLAY_NAME = {
 _LABEL_OFFSET = {
     "CD-EnKF": (0, -10),
     "PF": (0, 7),
-    "CRF-product": (0, 8),
-    "CRF-recombined": (0, 8),
+    "WSC-KF-product": (0, 8),
+    "WSC-KF-recombined": (0, 8),
 }
 
 
@@ -381,7 +381,7 @@ model_inputs = jnp.arange(n_obs + 1)
 print(
     f"L63 smoke Pareto: Δt={dt:g}, horizon={HORIZON:g}, n_obs={n_obs}, "
     f"diff_std={diff_std:g}, obs_std={obs_std:g}, "
-    f"seeds={SEEDS}, CRF={[c.label + f'({c.n_paths})' for c in CRF_CONFIGS]}"
+    f"seeds={SEEDS}, WSC-KF={[c.label + f'({c.n_paths})' for c in WSCKF_CONFIGS]}"
 )
 
 RAW_FIELDS = ["delta_t", "n_obs", "horizon", "seed", "family", "label", "budget", "rmse", "time_s"]
@@ -416,7 +416,7 @@ def _have(seed: int, family: str, label: str, budget: int) -> bool:
 seeds_to_run = [
     s
     for s in SEEDS
-    if any(not _have(s, c.family, c.label, c.n_paths) for c in CRF_CONFIGS)
+    if any(not _have(s, c.family, c.label, c.n_paths) for c in WSCKF_CONFIGS)
     or not _have(s, "CD-EKF", "EKF", 0)
     or not _have(s, "CD-UKF", "UKF-coarse", 0)
     or any(not _have(s, "CD-EnKF", f"EnKF-{n}", n) for n in ENKF_LIST)
@@ -469,7 +469,7 @@ for seed in seeds_to_run:
             f"RMSE={rmse:6.3f}  time={1e3 * wall:7.1f} ms"
         )
 
-    for cfg in CRF_CONFIGS:
+    for cfg in WSCKF_CONFIGS:
         if cfg.method == "product":
             if _have(seed, cfg.family, cfg.label, cfg.n_paths):
                 continue
@@ -509,7 +509,7 @@ for seed in seeds_to_run:
                     jnp.asarray(pw),
                 ),
             )
-        crf = build_filter(
+        wsckf = build_filter(
             get_init_params=lambda mi: (m0, chol_P0),
             get_dynamics=lambda mi: (
                 lambda t, x: lorenz_drift(x),
@@ -526,7 +526,7 @@ for seed in seeds_to_run:
             **build_kwargs,
         )
         jitted = jit(run_filter, static_argnames=["filter_obj"])
-        states, wall = time_call(lambda f=jitted, filt=crf: f(filt, model_inputs))
+        states, wall = time_call(lambda f=jitted, filt=wsckf: f(filt, model_inputs))
         score(
             cfg.family,
             label,
@@ -664,9 +664,9 @@ def _annotate_nodes(ax, fam, pts, xs, ys):
 
 
 fig, ax = plt.subplots(figsize=(7.5, 4.5))
-# Merge product + recombined onto one WS-CKF curve (sorted by path count).
+# Merge product + recombined onto one WSC-KF curve (sorted by path count).
 plot_groups: list[tuple[str, list[str]]] = [
-    ("WS-CKF", ["CRF-product", "CRF-recombined"]),
+    ("WSC-KF", ["WSC-KF-product", "WSC-KF-recombined"]),
     ("CD-EnKF", ["CD-EnKF"]),
     ("PF", ["PF"]),
     ("CD-EKF", ["CD-EKF"]),
@@ -674,7 +674,7 @@ plot_groups: list[tuple[str, list[str]]] = [
 ]
 all_xs: list[float] = []
 n_seeds = len({r["seed"] for r in raw_rows})
-crf_path_note = ",".join(str(c.n_paths) for c in CRF_CONFIGS)
+wsckf_path_note = ",".join(str(c.n_paths) for c in WSCKF_CONFIGS)
 for disp, fams in plot_groups:
     pts = [r for r in summary if r["family"] in fams]
     if not pts:
@@ -685,7 +685,7 @@ for disp, fams in plot_groups:
     ystd = np.asarray([r["rmse_std"] for r in pts]) * BAND_SCALE
     all_xs.extend(xs.tolist())
     color = COLORS[fams[0]]
-    marker = "s" if disp in ("CD-EKF", "CD-UKF (coarse)", "WS-CKF") else "o"
+    marker = "s" if disp in ("CD-EKF", "CD-UKF (coarse)", "WSC-KF") else "o"
     if len(pts) == 1:
         x0 = float(xs[0])
         ax.fill_between(
@@ -713,7 +713,7 @@ ax.legend(fontsize=8, loc="best")
 ax.set_title(
     rf"L63 smoke Pareto at $\Delta t={dt:g}$, $\sigma_{{\mathrm{{diff}}}}={diff_std:g}$ "
     rf"(mean±{BAND_SCALE:g}$\sigma$ over {n_seeds} seeds; "
-    rf"horizon={HORIZON:g}; WS-CKF P∈{{{crf_path_note}}})",
+    rf"horizon={HORIZON:g}; WSC-KF P∈{{{wsckf_path_note}}})",
     fontsize=11,
 )
 fig.tight_layout()

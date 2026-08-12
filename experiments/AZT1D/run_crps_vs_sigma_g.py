@@ -42,8 +42,8 @@ import matplotlib.pyplot as plt
 jax.config.update("jax_enable_x64", True)
 
 from cuthbert import filter as run_filter
-from crf import build_filter
-from crf.library import product_path_count
+from wsckf import build_filter
+from wsckf.library import product_path_count
 from cd_dynamax_mirror.filters import (
     UKFParams,
     run_bootstrap_pf,
@@ -55,7 +55,7 @@ from cd_dynamax_mirror.filters import (
 from azt1d_data import list_subjects, load_azt1d_series
 from glucose_model import (
     GlucoseParams,
-    crf_glucose_dynamics,
+    wsckf_glucose_dynamics,
     heldout_crps_per_obs,
     heldout_mean_score,
     init_estimate,
@@ -103,7 +103,7 @@ def main():
         help="comma-separated multipliers on calibrated σ_G",
     )
     ap.add_argument("--subjects", type=str, default="", help="default: all in params json")
-    ap.add_argument("--crf-paths", type=int, default=4, dest="crf_paths")
+    ap.add_argument("--wsckf-paths", type=int, default=4, dest="wsckf_paths")
     ap.add_argument("--enkf", type=int, default=100, help="EnKF particles; 0 = skip")
     ap.add_argument("--pf", type=int, default=100, help="PF particles; 0 = skip")
     ap.add_argument("--dt0", type=float, default=1.0)
@@ -128,14 +128,14 @@ def main():
 
     scales = _parse_floats(args.scales)
     # match product path count
-    n_paths = int(args.crf_paths)
+    n_paths = int(args.wsckf_paths)
     m_lyons, k_cub = None, None
     for m, k in [(3, 1), (5, 1), (3, 2), (5, 2), (3, 3)]:
         if product_path_count(2, k, lyons_degree=m) == n_paths:
             m_lyons, k_cub = m, k
             break
     if m_lyons is None:
-        raise SystemExit(f"crf-paths={n_paths} not on product ladder")
+        raise SystemExit(f"wsckf-paths={n_paths} not on product ladder")
 
     rows: list[dict] = []
     P_base = GlucoseParams(meas_std=float(args.meas_std))
@@ -180,7 +180,7 @@ def main():
                 return M0, CHOL_P0
 
             def get_dynamics(mi, drift=drift, L=L, dt=dt):
-                return crf_glucose_dynamics(drift, L, mi, dt)
+                return wsckf_glucose_dynamics(drift, L, mi, dt)
 
             def get_observations(mi, OBS_FN=OBS_FN, CHOL_R=CHOL_R, YS=YS):
                 idx_ = mi if not hasattr(mi, "t_idx") else mi.t_idx

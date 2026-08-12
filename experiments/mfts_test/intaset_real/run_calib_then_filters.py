@@ -7,7 +7,7 @@ Two-stage calibration (train window only):
      with dynamics held fixed — replaces the open-loop high-frequency
      ``meas_std≈0.05`` floor that made likelihoods pathological.
 
-Then compare CD-EKF / CD-EnKF / CRF on held-out windows under:
+Then compare CD-EKF / CD-EnKF / WSC-KF on held-out windows under:
   * open-loop LS params (``calibrated_params.json``)
   * filter-refined params (``calibrated_params_filter.json``)
 
@@ -49,8 +49,8 @@ import matplotlib.pyplot as plt
 jax.config.update("jax_enable_x64", True)
 
 from cuthbert import filter as run_filter
-from crf import build_filter
-from crf.library import default_recombined_num_paths, product_path_count
+from wsckf import build_filter
+from wsckf.library import default_recombined_num_paths, product_path_count
 from experiments.cd_dynamax_mirror.filters import run_cd_ekf, run_cd_enkf
 
 from intaset_io import default_mc_windows, load_named, window_trajectory
@@ -333,7 +333,7 @@ for label, p in (("open-loop", p_ol), ("filter-calib", p_filt)):
 # Filter bake-off on held-out windows
 # ---------------------------------------------------------------------------
 
-class CrfCfg(NamedTuple):
+class WSCKFCfg(NamedTuple):
     family: str
     label: str
     n_paths: int
@@ -348,10 +348,10 @@ def _k_for_delta(dt_min: float, k_ref: float = 0.5, k_max: int = 8) -> int:
 
 _k_prop = _k_for_delta(float(_args.delta))
 _n_prop = default_recombined_num_paths(2, _k_prop)
-CRF_CFGS = [
-    CrfCfg("CRF-product", "prod-m5-k1", product_path_count(2, 1, lyons_degree=5), 1, "product", 5),
-    CrfCfg("CRF-product", "prod-m5-k2", product_path_count(2, 2, lyons_degree=5), 2, "product", 5),
-    CrfCfg("CRF-recombined", f"k∝Δt-k{_k_prop}", _n_prop, _k_prop, "recombined", 5),
+WSCKF_CFGS = [
+    WSCKFCfg("WSC-KF-product", "prod-m5-k1", product_path_count(2, 1, lyons_degree=5), 1, "product", 5),
+    WSCKFCfg("WSC-KF-product", "prod-m5-k2", product_path_count(2, 2, lyons_degree=5), 2, "product", 5),
+    WSCKFCfg("WSC-KF-recombined", f"k∝Δt-k{_k_prop}", _n_prop, _k_prop, "recombined", 5),
 ]
 ENKF_BUDGETS = [100, 250]
 
@@ -489,8 +489,8 @@ def run_filters_for_params(tag: str, p: IntaSetParams):
             m_enkf = np.vstack([m0, np.asarray(enkf_res.means)])
             score("CD-EnKF", f"EnKF-{np_}", np_, m_enkf, enkf_res.cum_loglik[-1], enkf_t)
 
-        # CRF (product ladder + k∝Δt recombined mitigation)
-        for cfg in CRF_CFGS:
+        # WSC-KF (product ladder + k∝Δt recombined mitigation)
+        for cfg in WSCKF_CFGS:
             kwargs = dict(
                 get_init_params=lambda mi: (m0j, chol_P0),
                 get_dynamics=lambda mi: (drift, L),
@@ -516,17 +516,17 @@ def run_filters_for_params(tag: str, p: IntaSetParams):
             run = jit(run_filter, static_argnames=["filter_obj"])
             mis = jnp.arange(n_obs + 1)
 
-            def _crf(filt=filt, mis=mis):
+            def _wsckf(filt=filt, mis=mis):
                 return run(filt, mis)
 
-            st, crf_t = time_call(_crf)
+            st, wsckf_t = time_call(_wsckf)
             score(
                 cfg.family,
                 cfg.label,
                 cfg.n_paths,
                 np.asarray(st.mean),
                 st.log_normalizing_constant[-1],
-                crf_t,
+                wsckf_t,
             )
     return rows
 
@@ -578,9 +578,9 @@ fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.4))
 # Order methods for display
 order = [
     ("CD-EKF", "EKF", 0),
-    ("CRF-product", "prod-m5-k1", 9),
-    ("CRF-product", "prod-m5-k2", 81),
-    ("CRF-recombined", f"k∝Δt-k{_k_prop}", _n_prop),
+    ("WSC-KF-product", "prod-m5-k1", 9),
+    ("WSC-KF-product", "prod-m5-k2", 81),
+    ("WSC-KF-recombined", f"k∝Δt-k{_k_prop}", _n_prop),
     ("CD-EnKF", "EnKF-100", 100),
     ("CD-EnKF", "EnKF-250", 250),
 ]

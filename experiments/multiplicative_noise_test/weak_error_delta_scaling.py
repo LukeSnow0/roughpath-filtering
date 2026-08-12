@@ -1,4 +1,4 @@
-"""Temporal weak-error delta-scaling of the CRF: the Lyons-Victoir rate O(delta^{(m+1)/2}).
+"""Temporal weak-error delta-scaling of the WSC-KF: the Lyons-Victoir rate O(delta^{(m+1)/2}).
 
 The Lyons-Victoir cubature-on-Wiener-space theorem bounds the one-interval weak
 (semigroup) error of a degree-``m`` formula by
@@ -7,7 +7,7 @@ The Lyons-Victoir cubature-on-Wiener-space theorem bounds the one-interval weak
 
 We measure this exponent empirically. To isolate the *temporal* Wiener-cubature
 error from the *spatial* (Gaussian-closure) error, we start each predict from a
-**point mass** ``P0 = 0``: the CRF's spatial cubature nodes then collapse onto the
+**point mass** ``P0 = 0``: the WSC-KF's spatial cubature nodes then collapse onto the
 mean and contribute no error, so the predicted-moment error is purely the
 semigroup approximation the theorem bounds.
 
@@ -18,13 +18,13 @@ Closed-form conditional moments give an exact reference:
     Var[x_delta | x0] = x0^2 * exp(2 mu delta) * (exp(sigma^2 delta) - 1)
 
 Two panels:
-  (1) CRF mean weak-error vs delta for cubature_order k in {1,3,5,7} (1D product
+  (1) WSC-KF mean weak-error vs delta for cubature_order k in {1,3,5,7} (1D product
       Lyons paths). All collapse to the SAME slope -> the rate is set by the
       cubature *degree*, not the macro-segment count k. The observed slope ~3
       implies degree m=5 (the 1D base rule is 3-point Gauss-Hermite, exact to
       degree 5 -- not degree 3 as the docstring says).
-  (2) **2D independent GBM**: CRF (Lyons degrees m=3,5,7) vs CD-EKF/UKF/CKF
-      covariance weak-error vs delta. CRF slopes track (m+1)/2; CD moment-ODE
+  (2) **2D independent GBM**: WSC-KF (Lyons degrees m=3,5,7) vs CD-EKF/UKF/CKF
+      covariance weak-error vs delta. WSC-KF slopes track (m+1)/2; CD moment-ODE
       filters (diffusion frozen at the mean) stay near the Gaussian-closure rate.
       m=3,5 use product Lyons–Victoir paths; m=7 uses the product of 1D
       4-point Gauss–Hermite straight lines (16 paths) — enough for independent
@@ -57,7 +57,7 @@ sys.path.insert(0, ROOT_DIR)
 
 from cd_dynamax_mirror.filters import UKFParams, _ekf_predict, _ukf_predict, _ukf_weights
 
-from crf.library import ito_to_stratonovich_dynamics, precompute_cubature_paths, predict
+from wsckf.library import ito_to_stratonovich_dynamics, precompute_cubature_paths, predict
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -103,7 +103,7 @@ ITO_DRIFT_1D, DIFFUSION_1D, QC_1D = make_gbm_1d()
 STRAT_DRIFT_1D, STRAT_DIFF_1D = ito_to_stratonovich_dynamics(ITO_DRIFT_1D, DIFFUSION_1D)
 
 
-def crf_predict_1d(
+def wsckf_predict_1d(
     delta,
     k,
     multidim_paths="auto",
@@ -111,7 +111,7 @@ def crf_predict_1d(
     num_paths=None,
     lyons_degree=5,
 ):
-    """Point-mass CRF predict on 1D GBM.
+    """Point-mass WSC-KF predict on 1D GBM.
 
     ``lyons_degree`` ∈ {3, 5} uses the repo product Lyons–Victoir paths.
     ``lyons_degree=7`` is 1D-only: 4-point Gauss–Hermite terminals with
@@ -262,8 +262,8 @@ ITO_DRIFT_2D, DIFFUSION_2D, QC_2D = make_gbm_2d()
 STRAT_DRIFT_2D, STRAT_DIFF_2D = ito_to_stratonovich_dynamics(ITO_DRIFT_2D, DIFFUSION_2D)
 
 
-def crf_predict_2d(delta, lyons_degree, k=1):
-    """Point-mass CRF predict on 2D independent GBM; returns (mean, cov)."""
+def wsckf_predict_2d(delta, lyons_degree, k=1):
+    """Point-mass WSC-KF predict on 2D independent GBM; returns (mean, cov)."""
     integration_dt = delta / INNER_STEPS
     if int(lyons_degree) == 7:
         if int(k) != 1:
@@ -343,26 +343,26 @@ def main():
     deltas = np.logspace(np.log10(0.03), np.log10(3.5), 14)
     rng_floor = 1e-15
 
-    # ---- Panel 1: CRF mean weak-error, k sweep (1D) ----
+    # ---- Panel 1: WSC-KF mean weak-error, k sweep (1D) ----
     ks = [1, 3, 5, 7]
     mean_err_by_k = {}
     for k in ks:
         errs = []
         for d in deltas:
-            m_pred, _ = crf_predict_1d(d, k, multidim_paths="product")
+            m_pred, _ = wsckf_predict_1d(d, k, multidim_paths="product")
             errs.append(abs(m_pred - exact_mean(d)))
         mean_err_by_k[k] = np.array(errs)
 
-    # ---- Panel 2: 2D CRF (m=3,5,7) vs CD cov weak-error ----
+    # ---- Panel 2: 2D WSC-KF (m=3,5,7) vs CD cov weak-error ----
     # Fixed k=1 so the only change is Lyons degree m.
-    crf_degrees = (3, 5, 7)
-    crf_cov_err_2d = {}
-    for m in crf_degrees:
+    wsckf_degrees = (3, 5, 7)
+    wsckf_cov_err_2d = {}
+    for m in wsckf_degrees:
         errs = []
         for d in deltas:
-            _, P_crf = crf_predict_2d(d, lyons_degree=m, k=1)
-            errs.append(float(np.linalg.norm(P_crf - exact_cov_2d(d), ord="fro")))
-        crf_cov_err_2d[m] = np.array(errs)
+            _, P_wsckf = wsckf_predict_2d(d, lyons_degree=m, k=1)
+            errs.append(float(np.linalg.norm(P_wsckf - exact_cov_2d(d), ord="fro")))
+        wsckf_cov_err_2d[m] = np.array(errs)
 
     ekf_cov_err, ukf_cov_err, ckf_cov_err = [], [], []
     for d in deltas:
@@ -379,13 +379,13 @@ def main():
 
     # ----- console -----
     print(f"GBM  mu={MU} sigma={SIGMA} x0={X0}  (point-mass initial: P0=0)\n")
-    print("Panel 1 -- CRF mean weak-error slope vs delta (should be ~(m+1)/2, m=5 -> 3):")
+    print("Panel 1 -- WSC-KF mean weak-error slope vs delta (should be ~(m+1)/2, m=5 -> 3):")
     for k in ks:
         print(f"    k={k}:  slope = {fit_slope(deltas, mean_err_by_k[k]):.2f}")
     print("\nPanel 2 -- 2D cov weak-error slope vs delta:")
-    for m in crf_degrees:
+    for m in wsckf_degrees:
         print(
-            f"    CRF m={m}: slope = {fit_slope(deltas, crf_cov_err_2d[m]):.2f}"
+            f"    WSC-KF m={m}: slope = {fit_slope(deltas, wsckf_cov_err_2d[m]):.2f}"
             f"   (theory {(m + 1) / 2:.1f})"
         )
     print(f"    CD-EKF  : slope = {fit_slope(deltas, ekf_cov_err):.2f}")
@@ -398,7 +398,7 @@ def main():
         w = csv.writer(f)
         w.writerow(
             ["delta"]
-            + [f"crf_mean_err_k{k}" for k in ks]
+            + [f"wsckf_mean_err_k{k}" for k in ks]
             + [
                 "crf2d_cov_err_m3",
                 "crf2d_cov_err_m5",
@@ -413,9 +413,9 @@ def main():
                 [d]
                 + [mean_err_by_k[k][i] for k in ks]
                 + [
-                    crf_cov_err_2d[3][i],
-                    crf_cov_err_2d[5][i],
-                    crf_cov_err_2d[7][i],
+                    wsckf_cov_err_2d[3][i],
+                    wsckf_cov_err_2d[5][i],
+                    wsckf_cov_err_2d[7][i],
                     ekf_cov_err[i],
                     ukf_cov_err[i],
                     ckf_cov_err[i],
@@ -424,7 +424,7 @@ def main():
 
     # ----- plot (two separate figures) -----
     mid = min(6, len(deltas) - 1)
-    crf_colors = {3: "#6A4C93", 5: "#9B5DE5", 7: "#F15BB5"}
+    wsckf_colors = {3: "#6A4C93", 5: "#9B5DE5", 7: "#F15BB5"}
     AXIS_FS = 13
     LEGEND_FS = 11
     TICK_FS = 11
@@ -437,7 +437,7 @@ def main():
             np.maximum(mean_err_by_k[k], rng_floor),
             marker="o",
             color=c,
-            label=rf"WS-CKF  $k$={k}",
+            label=rf"WSC-KF  $k$={k}",
         )
         h_ws.append(ln)
     h_g3 = guide(
@@ -474,13 +474,13 @@ def main():
 
     fig2, ax2 = plt.subplots(figsize=(6.2, 4.8))
     h_ws = []
-    for m in crf_degrees:
+    for m in wsckf_degrees:
         (ln,) = ax2.loglog(
             deltas,
-            np.maximum(crf_cov_err_2d[m], rng_floor),
+            np.maximum(wsckf_cov_err_2d[m], rng_floor),
             "o-",
-            color=crf_colors[m],
-            label=rf"WS-CKF $m$={m} (fit={fit_slope(deltas, crf_cov_err_2d[m]):.2f})",
+            color=wsckf_colors[m],
+            label=rf"WSC-KF $m$={m} (fit={fit_slope(deltas, wsckf_cov_err_2d[m]):.2f})",
         )
         h_ws.append(ln)
     (h_ekf,) = ax2.loglog(
@@ -497,13 +497,13 @@ def main():
         color="0.35", ls="--",
     )
     h_g3 = guide(
-        ax2, deltas, crf_cov_err_2d[5][mid], deltas[mid], 3.0, r"$\propto\delta^{3}$",
+        ax2, deltas, wsckf_cov_err_2d[5][mid], deltas[mid], 3.0, r"$\propto\delta^{3}$",
         color="0.35", ls=":",
     )
     h_g4 = guide(
         ax2,
         deltas,
-        max(crf_cov_err_2d[7][mid], rng_floor),
+        max(wsckf_cov_err_2d[7][mid], rng_floor),
         deltas[mid],
         4.0,
         r"$\propto\delta^{4}$",
@@ -515,7 +515,7 @@ def main():
     ax2.set_xlim(deltas[0], deltas[-1])
     ax2.tick_params(axis="both", which="major", labelsize=TICK_FS)
     ax2.grid(True, which="both", alpha=0.3)
-    # One box, 3 columns (column-major): WS-CKF | CD | ∝δ guides; above axes.
+    # One box, 3 columns (column-major): WSC-KF | CD | ∝δ guides; above axes.
     ax2.legend(
         handles=[h_ws[0], h_ws[1], h_ws[2], h_ekf, h_ukf, h_ckf, h_g2, h_g3, h_g4],
         labels=[

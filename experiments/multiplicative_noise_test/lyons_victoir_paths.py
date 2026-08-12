@@ -1,7 +1,7 @@
 """Lyons–Victoir explicit multi-D cubature paths (Proc. R. Soc. A, 2004).
 
 This is a **standalone** path builder for the paper's degree ``m = 3`` and
-``m = 5`` constructions. It does **not** modify ``crf.library.cubature_paths``
+``m = 5`` constructions. It does **not** modify ``wsckf.library.cubature_paths``
 (the repo default is the 1D-product KLV grid, which is not the LV multi-D lift).
 
 Constructions (cf. Lyons–Victoir Thms for Wiener-space cubature via Gaussian

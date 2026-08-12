@@ -1,8 +1,8 @@
-"""Provides types for CRF callback functions."""
+"""Provides types for WSC-KF callback functions."""
 
 from typing import Protocol
 
-from crf.filter.filtering import DiffusionFn, DriftFn, ObservationFn
+from wsckf.filter.filtering import DiffusionFn, DriftFn, ObservationFn
 from cuthbertlib.types import Array, ArrayTreeLike
 
 
@@ -22,7 +22,7 @@ class GetInitParams(Protocol):
         ...
 
 
-class GetCRFDynamics(Protocol):
+class GetWSCKFDynamics(Protocol):
     """Protocol for getting the Stratonovich SDE dynamics of the latent state."""
 
     def __call__(self, model_inputs: ArrayTreeLike) -> tuple[DriftFn, DiffusionFn]:
@@ -41,7 +41,7 @@ class GetCRFDynamics(Protocol):
         ...
 
 
-class GetCRFObservations(Protocol):
+class GetWSCKFObservations(Protocol):
     """Protocol for getting observation function, chol_R, and observation vector.
 
     i.e. for state ``x_t``, ``y_t = h(x_t) + v_t`` with ``v_t ~ N(0, chol_R chol_R^T)``,

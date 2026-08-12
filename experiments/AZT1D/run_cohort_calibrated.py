@@ -56,8 +56,8 @@ import matplotlib.pyplot as plt
 jax.config.update("jax_enable_x64", True)
 
 from cuthbert import filter as run_filter
-from crf import build_filter
-from crf.library import product_path_count
+from wsckf import build_filter
+from wsckf.library import product_path_count
 from cd_dynamax_mirror.filters import (
     UKFParams,
     run_bootstrap_pf,
@@ -74,7 +74,7 @@ from azt1d_data import (
 )
 from glucose_model import (
     GlucoseParams,
-    crf_glucose_dynamics,
+    wsckf_glucose_dynamics,
     heldout_crps_per_obs,
     heldout_mean_score,
     init_estimate,
@@ -109,10 +109,10 @@ _parser.add_argument("--p3-init", type=float, default=5e-4, dest="p3_init")
 _parser.add_argument("--sigma-g-init", type=float, default=1.5, dest="sigma_g_init")
 _parser.add_argument("--dt0", type=float, default=1.0)
 _parser.add_argument(
-    "--crf-paths",
+    "--wsckf-paths",
     type=str,
     default="4",
-    dest="crf_paths",
+    dest="wsckf_paths",
     help="comma-separated product path counts (matched to m,k ladder)",
 )
 _parser.add_argument(
@@ -204,22 +204,22 @@ def _parse_ints(s: str) -> list[int]:
 
 
 @dataclass(frozen=True)
-class CrfConfig:
+class WSCKFConfig:
     label: str
     n_paths: int
     k: int
     lyons_degree: int
 
 
-def product_configs_for_paths(wanted: list[int], noise_dim: int = 2) -> list[CrfConfig]:
+def product_configs_for_paths(wanted: list[int], noise_dim: int = 2) -> list[WSCKFConfig]:
     """Map requested path counts onto the standard product (m,k) ladder."""
     specs = [(3, 1), (5, 1), (3, 2), (3, 3), (5, 2), (3, 4), (5, 3)]
-    by_n: dict[int, CrfConfig] = {}
+    by_n: dict[int, WSCKFConfig] = {}
     for m, k in specs:
         n = product_path_count(noise_dim, k, lyons_degree=m)
         if n not in by_n:
-            by_n[n] = CrfConfig(label=f"prod-m{m}-k{k}", n_paths=n, k=k, lyons_degree=m)
-    out: list[CrfConfig] = []
+            by_n[n] = WSCKFConfig(label=f"prod-m{m}-k{k}", n_paths=n, k=k, lyons_degree=m)
+    out: list[WSCKFConfig] = []
     missing: list[int] = []
     for n in wanted:
         if n in by_n:
@@ -239,7 +239,7 @@ if _args.subjects.strip():
 else:
     SUBJECTS = sorted(list_subjects())
 
-CRF_CONFIGS = product_configs_for_paths(_parse_ints(_args.crf_paths))
+WSCKF_CONFIGS = product_configs_for_paths(_parse_ints(_args.wsckf_paths))
 ENKF_LIST = _parse_ints(_args.enkf)
 PF_LIST = _parse_ints(_args.pf)
 MLE_ENKF_PARTICLES = int(_args.mle_enkf_particles)
@@ -270,8 +270,8 @@ if str(_args.params_json).strip():
         _PRELOADED_THETA[int(_row["subject"])] = (float(_row["p3"]), float(_row["sigma_g"]))
     if not _PRELOADED_THETA:
         raise SystemExit(f"--params-json has no params: {_pj}")
-if not CRF_CONFIGS:
-    raise SystemExit("--crf-paths must be non-empty")
+if not WSCKF_CONFIGS:
+    raise SystemExit("--wsckf-paths must be non-empty")
 if not ENKF_LIST:
     raise SystemExit("--enkf must be non-empty")
 if not _args.skip_pf and not PF_LIST:
@@ -396,12 +396,12 @@ def run_subject(subject: int) -> tuple[dict, list[dict]]:
 
     drift, L, Qc, _, _ = _dyn(p3_hat, sg_hat)
 
-    def build_crf(cfg: CrfConfig):
+    def build_wsckf(cfg: WSCKFConfig):
         def get_init_params(_mi):
             return M0, CHOL_P0
 
         def get_dynamics(mi):
-            return crf_glucose_dynamics(drift, L, mi, DT)
+            return wsckf_glucose_dynamics(drift, L, mi, DT)
 
         def get_observations(mi):
             idx = mi if not hasattr(mi, "t_idx") else mi.t_idx
@@ -474,8 +474,8 @@ def run_subject(subject: int) -> tuple[dict, list[dict]]:
             f"NLL={nll:.4f}  CRPS={crps:.3f}  MAPE={mape:.2f}%  t={1e3*wall_s:.0f}ms"
         )
 
-    for cfg in CRF_CONFIGS:
-        filt = build_crf(cfg)
+    for cfg in WSCKF_CONFIGS:
+        filt = build_wsckf(cfg)
         t0 = time.perf_counter()
         st = _run(filt, mi)
         jax.block_until_ready(st.mean)
@@ -575,7 +575,7 @@ def main():
             if _PRELOADED_THETA
             else f"MLE iters={_args.mle_iters} (EnKF-{MLE_ENKF_PARTICLES})  "
         )
-        + f"WSC-KF product={[c.n_paths for c in CRF_CONFIGS]}  EnKF={ENKF_LIST}  "
+        + f"WSC-KF product={[c.n_paths for c in WSCKF_CONFIGS]}  EnKF={ENKF_LIST}  "
         f"PF={PF_LIST if not _args.skip_pf else []}  OUT_TAG={OUT_TAG!r}"
         + (
             f"  σ_G×={float(_args.sigma_g_scale):g}"
@@ -717,7 +717,7 @@ def main():
     fig.suptitle(
         f"AZT1D cohort Pareto: per-subject EnKF $\\hat\\theta_i$, then budget ladders\n"
         f"N={n_ok} subjects; $\\Delta t$={DT_ASSIM:g} min; "
-        f"WSC-KF product paths={[c.n_paths for c in CRF_CONFIGS]}; "
+        f"WSC-KF product paths={[c.n_paths for c in WSCKF_CONFIGS]}; "
         f"EnKF/PF={ENKF_LIST}",
         fontsize=11,
     )
@@ -771,7 +771,7 @@ def main():
     fig.suptitle(
         f"AZT1D cohort CRPS Pareto ($\\Delta t$={DT_ASSIM:g} min)\n"
         f"N={n_ok} subjects; "
-        f"WSC-KF paths={[c.n_paths for c in CRF_CONFIGS]}; "
+        f"WSC-KF paths={[c.n_paths for c in WSCKF_CONFIGS]}; "
         rf"bars = $\pm${err_scale:g} std",
         fontsize=11,
     )

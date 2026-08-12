@@ -33,7 +33,7 @@ Fixed calendar span (~7 d) at EnKF-calibrated \(\hat\theta\):
 ```bash
 uv run --extra experiments python experiments/AZT1D/run_pareto_assimilation.py \
     --deltas 5 --seeds 0,1,2 --span-min 10080 \
-    --crf-max-paths 4 --enkf 25,50,100,500 --pf 25,50,100,500
+    --wsckf-max-paths 4 --enkf 25,50,100,500 --pf 25,50,100,500
 ```
 
 Kept figure: `output/pareto_assimilation_dt5.png` (plus backing
@@ -46,7 +46,7 @@ Calibrate EnKF \(\hat\theta_i\) on each patient, then bakeoff filters at that
 
 ```bash
 uv run --extra experiments python experiments/AZT1D/run_cohort_calibrated.py \
-    --n-obs 2016 --mle-iters 25 --crf-paths 4 --enkf 25,500,1000 --pf 25,100,500
+    --n-obs 2016 --mle-iters 25 --wsckf-paths 4 --enkf 25,500,1000 --pf 25,100,500
 ```
 
 Kept figures: `output/cohort_calibrated_pareto.png` (NLL/MAPE),
@@ -57,7 +57,7 @@ For Δt = 20 min (every 4th 5-min sample; re-MLE + bakeoff):
 
 ```bash
 uv run --extra experiments python experiments/AZT1D/run_cohort_calibrated.py \
-    --dt-assim 20 --n-obs 2016 --mle-iters 25 --crf-paths 4 --enkf 25,500,1000 --pf 25,100,500
+    --dt-assim 20 --n-obs 2016 --mle-iters 25 --wsckf-paths 4 --enkf 25,500,1000 --pf 25,100,500
 ```
 
 Writes `cohort_calibrated_crps_dt20.png` (also refreshes `cohort_calibrated_crps.png`;

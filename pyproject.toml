@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "cubature-filtering"
 version = "0.1.0"
-description = "Cubature Recursive Filter for continuous-discrete nonlinear state estimation"
+description = "Wiener Space Cubature Kalman Filter for continuous-discrete nonlinear state estimation"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -34,7 +34,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["crf"]
+packages = ["wsckf"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

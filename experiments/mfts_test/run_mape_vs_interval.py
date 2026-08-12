@@ -4,24 +4,24 @@ Simulates **one** shared fine-grid truth trajectory, then for each assimilation
 interval ``Delta_t``:
 
 1. Subsamples observations from that truth
-2. Runs CD-EKF / CD-UKF / CD-EnKF / bootstrap PF / CRF
+2. Runs CD-EKF / CD-UKF / CD-EnKF / bootstrap PF / WSC-KF
 3. Reconstructs each filter's mean on the **same fine time grid** by integrating
    the filter drift between updates (filtered mean at observation times)
 4. Scores MAPEx / MAPEd on that fine grid
 5. Records predictive NLL (total and per observation) from each filter's cum. loglik
 6. Times each filter (median wall-clock, excl. JIT; default CD solver=rk4)
 
-Optional ``--k-proportional`` runs a recombined CRF with
+Optional ``--k-proportional`` runs a recombined WSC-KF with
 ``k = max(1, round(Δt / --k-ref-min))`` to test whether refining the Lyons
-macro-segment partition with Δt closes the CRF–EKF NLL gap at long intervals.
+macro-segment partition with Δt closes the WSC-KF–EKF NLL gap at long intervals.
 
 Run:
   python experiments/mfts_test/run_mape_vs_interval.py
   python experiments/mfts_test/run_mape_vs_interval.py --solver rk4
   python experiments/mfts_test/run_mape_vs_interval.py --deltas 0.25,0.5,1,2,5,10
-  python experiments/mfts_test/run_mape_vs_interval.py --crf-paths 2,12,35
+  python experiments/mfts_test/run_mape_vs_interval.py --wsckf-paths 2,12,35
   python experiments/mfts_test/run_mape_vs_interval.py --k-proportional \\
-      --k-ref-min 0.5 --crf-paths 2,35 --n-timing 2
+      --k-ref-min 0.5 --wsckf-paths 2,35 --n-timing 2
 
 Outputs:
   ``experiments/mfts_test/output/mape_vs_interval.png``
@@ -77,8 +77,8 @@ from experiments.cd_dynamax_mirror.filters import (
     run_cd_ukf,
 )
 from cuthbert import filter as run_filter
-from crf.library import default_recombined_num_paths
-from crf import build_filter
+from wsckf.library import default_recombined_num_paths
+from wsckf import build_filter
 
 from mfts_model import (
     MFTSParams,
@@ -109,22 +109,22 @@ _parser.add_argument(
     type=int,
     default=2,
     dest="cubature_order",
-    help="Fixed CRF Lyons macro-segment count k for CRF-P* (default 2; recombined)",
+    help="Fixed WSC-KF Lyons macro-segment count k for WSC-KF-P* (default 2; recombined)",
 )
 _parser.add_argument(
-    "--crf-paths",
+    "--wsckf-paths",
     type=str,
     default="2,12,35",
-    dest="crf_paths",
-    help="Comma-separated recombined path budgets for fixed-k CRF (default 2,12,35). "
-    "Each plotted as CRF-P{{n}}. Use 'default' for "
-    "default_recombined_num_paths(2, k). Empty string skips fixed-k CRF.",
+    dest="wsckf_paths",
+    help="Comma-separated recombined path budgets for fixed-k WSC-KF (default 2,12,35). "
+    "Each plotted as WSC-KF-P{{n}}. Use 'default' for "
+    "default_recombined_num_paths(2, k). Empty string skips fixed-k WSC-KF.",
 )
 _parser.add_argument(
     "--k-proportional",
     action="store_true",
     dest="k_proportional",
-    help="Also run recombined CRF with k=max(1, round(Δt / --k-ref-min)) "
+    help="Also run recombined WSC-KF with k=max(1, round(Δt / --k-ref-min)) "
     "and path budget default_recombined_num_paths(2, k) (tests cubature "
     "time-partition hypothesis).",
 )
@@ -148,7 +148,7 @@ _parser.add_argument(
     type=str,
     default="default",
     dest="k_prop_paths",
-    help="Path budget for k∝Δt CRF: 'default' or an integer override",
+    help="Path budget for k∝Δt WSC-KF: 'default' or an integer override",
 )
 _parser.add_argument(
     "--solver",
@@ -213,27 +213,27 @@ SIGMA_UKF = 1.0
 
 ENKF_PARTICLES = 250
 PF_PARTICLES = 1000
-CRF_MULTIDIM_PATHS = "recombined"
-CRF_KPROP_NAME = "CRF-k∝Δt"
+WSCKF_MULTIDIM_PATHS = "recombined"
+WSCKF_KPROP_NAME = "WSC-KF-k∝Δt"
 
-_DEFAULT_CRF_PATHS = default_recombined_num_paths(2, CUBATURE_ORDER)
-CRF_PATH_BUDGETS: list[int] = []
-for _tok in _args.crf_paths.split(","):
+_DEFAULT_WSCKF_PATHS = default_recombined_num_paths(2, CUBATURE_ORDER)
+WSCKF_PATH_BUDGETS: list[int] = []
+for _tok in _args.wsckf_paths.split(","):
     _tok = _tok.strip()
     if not _tok:
         continue
     if _tok.lower() == "default":
-        CRF_PATH_BUDGETS.append(_DEFAULT_CRF_PATHS)
+        WSCKF_PATH_BUDGETS.append(_DEFAULT_WSCKF_PATHS)
     else:
-        CRF_PATH_BUDGETS.append(int(_tok))
+        WSCKF_PATH_BUDGETS.append(int(_tok))
 _seen_paths: set[int] = set()
-CRF_PATH_BUDGETS = [
-    n for n in CRF_PATH_BUDGETS if not (n in _seen_paths or _seen_paths.add(n))
+WSCKF_PATH_BUDGETS = [
+    n for n in WSCKF_PATH_BUDGETS if not (n in _seen_paths or _seen_paths.add(n))
 ]
 
 
-def crf_label(n_paths: int) -> str:
-    return f"CRF-P{n_paths}"
+def wsckf_label(n_paths: int) -> str:
+    return f"WSC-KF-P{n_paths}"
 
 
 def k_for_delta(dt_min: float) -> int:
@@ -251,20 +251,20 @@ def kprop_num_paths(k: int) -> int:
 F1, F2 = 5.0, 5.0
 
 BASE_FILTER_NAMES = ("CD-EKF", "CD-UKF", "CD-EnKF", "PF")
-CRF_FILTER_NAMES = tuple(crf_label(n) for n in CRF_PATH_BUDGETS)
-KPROP_FILTER_NAMES = (CRF_KPROP_NAME,) if K_PROPORTIONAL else ()
-FILTER_NAMES = BASE_FILTER_NAMES + CRF_FILTER_NAMES + KPROP_FILTER_NAMES
+WSCKF_FILTER_NAMES = tuple(wsckf_label(n) for n in WSCKF_PATH_BUDGETS)
+KPROP_FILTER_NAMES = (WSCKF_KPROP_NAME,) if K_PROPORTIONAL else ()
+FILTER_NAMES = BASE_FILTER_NAMES + WSCKF_FILTER_NAMES + KPROP_FILTER_NAMES
 
-_CRF_PURPLES = ("#C4B0E0", "#9B7EBD", "#7A5CA3", "#6A4C93", "#4A2F6E", "#2F1A4A")
+_WSCKF_PURPLES = ("#C4B0E0", "#9B7EBD", "#7A5CA3", "#6A4C93", "#4A2F6E", "#2F1A4A")
 COLORS = {
     "CD-EKF": "#2E86AB",
     "CD-UKF": "#3DA35D",
     "CD-EnKF": "#F6AE2D",
     "PF": "#F24236",
-    CRF_KPROP_NAME: "#C44536",
+    WSCKF_KPROP_NAME: "#C44536",
 }
-for _i, _name in enumerate(CRF_FILTER_NAMES):
-    COLORS[_name] = _CRF_PURPLES[min(_i, len(_CRF_PURPLES) - 1)]
+for _i, _name in enumerate(WSCKF_FILTER_NAMES):
+    COLORS[_name] = _WSCKF_PURPLES[min(_i, len(_WSCKF_PURPLES) - 1)]
 
 
 def stack_estimates(m0_arr, means):
@@ -427,7 +427,7 @@ drift_enkf, L_enkf, _, _, _ = make_mfts_dynamics(
     F1=F1,
     F2=F2,
 )
-crf_drift, crf_L, _, _, _ = make_mfts_dynamics(
+wsckf_drift, wsckf_L, _, _, _ = make_mfts_dynamics(
     p,
     lambda_dist=LAMBDA_ENKF_PF,
     sigma_dist=SIGMA_EKF_ENKF_PF,
@@ -442,8 +442,8 @@ DRIFT_FOR_MAPE = {
     "CD-UKF": drift_ukf,
     "CD-EnKF": drift_enkf,
     "PF": drift_enkf,
-    **{name: crf_drift for name in CRF_FILTER_NAMES},
-    **({CRF_KPROP_NAME: crf_drift} if K_PROPORTIONAL else {}),
+    **{name: wsckf_drift for name in WSCKF_FILTER_NAMES},
+    **({WSCKF_KPROP_NAME: wsckf_drift} if K_PROPORTIONAL else {}),
 }
 
 
@@ -474,12 +474,12 @@ def run_filters_at_interval(
     final_ll: dict[str, float] = {}
     meta: dict = {"k_prop": None, "k_prop_paths": None}
 
-    def _run_crf(name: str, *, k: int, n_paths: int):
-        crf = build_filter(
+    def _run_wsckf(name: str, *, k: int, n_paths: int):
+        wsckf = build_filter(
             get_init_params=lambda mi: (m0, chol_P0),
             get_dynamics=lambda mi: (
-                lambda t, x: crf_drift(t, x),
-                lambda t, x: crf_L(t, x),
+                lambda t, x: wsckf_drift(t, x),
+                lambda t, x: wsckf_L(t, x),
             ),
             get_observations=lambda mi: (obs_fn, chol_R, ys[mi - 1]),
             noise_dim=2,
@@ -487,25 +487,25 @@ def run_filters_at_interval(
             integration_dt=dt0,
             cubature_order=k,
             num_paths=n_paths,
-            multidim_paths=CRF_MULTIDIM_PATHS,
+            multidim_paths=WSCKF_MULTIDIM_PATHS,
         )
-        jitted_crf = jit(run_filter, static_argnames=["filter_obj"])
-        crf_states, wall = time_call(
-            lambda f=jitted_crf, filt=crf: f(filt, model_inputs)
+        jitted_wsckf = jit(run_filter, static_argnames=["filter_obj"])
+        wsckf_states, wall = time_call(
+            lambda f=jitted_wsckf, filt=wsckf: f(filt, model_inputs)
         )
         times[name] = wall
-        estimates_obs[name] = stack_estimates(m0, crf_states.mean[1:])
-        final_ll[name] = float(crf_states.log_normalizing_constant[-1])
+        estimates_obs[name] = stack_estimates(m0, wsckf_states.mean[1:])
+        final_ll[name] = float(wsckf_states.log_normalizing_constant[-1])
 
-    for n_paths in CRF_PATH_BUDGETS:
-        _run_crf(crf_label(n_paths), k=CUBATURE_ORDER, n_paths=n_paths)
+    for n_paths in WSCKF_PATH_BUDGETS:
+        _run_wsckf(wsckf_label(n_paths), k=CUBATURE_ORDER, n_paths=n_paths)
 
     if K_PROPORTIONAL:
         k_prop = k_for_delta(dt_min)
         n_prop = kprop_num_paths(k_prop)
         meta["k_prop"] = k_prop
         meta["k_prop_paths"] = n_prop
-        _run_crf(CRF_KPROP_NAME, k=k_prop, n_paths=n_prop)
+        _run_wsckf(WSCKF_KPROP_NAME, k=k_prop, n_paths=n_prop)
 
     ekf_jit = jit(
         lambda: run_cd_ekf(
@@ -623,13 +623,13 @@ series = {
 
 print(f"Horizon={HORIZON_MIN:g} min | solver={SOLVER} | seed={SEED}")
 print(
-    f"CRF fixed-k: multidim={CRF_MULTIDIM_PATHS} | k={CUBATURE_ORDER} | "
-    f"path budgets={CRF_PATH_BUDGETS} "
-    f"(moment-safe default={_DEFAULT_CRF_PATHS})"
+    f"WSC-KF fixed-k: multidim={WSCKF_MULTIDIM_PATHS} | k={CUBATURE_ORDER} | "
+    f"path budgets={WSCKF_PATH_BUDGETS} "
+    f"(moment-safe default={_DEFAULT_WSCKF_PATHS})"
 )
 if K_PROPORTIONAL:
     print(
-        f"CRF k∝Δt: k=min({K_MAX}, max(1, round(Δt/{K_REF_MIN:g}))), "
+        f"WSC-KF k∝Δt: k=min({K_MAX}, max(1, round(Δt/{K_REF_MIN:g}))), "
         f"paths={_args.k_prop_paths!r} → "
         + ", ".join(
             f"Δt={d:g}→k={k_for_delta(d)}/P={kprop_num_paths(k_for_delta(d))}"
@@ -725,7 +725,7 @@ fig.savefig(nll_path, dpi=150, bbox_inches="tight")
 plt.close()
 
 # ---------------------------------------------------------------------------
-# Hypothesis test: NLL gap vs EKF grows with Δt for CRF (cubature truncation)
+# Hypothesis test: NLL gap vs EKF grows with Δt for WSC-KF (cubature truncation)
 # ---------------------------------------------------------------------------
 
 fig, ax = plt.subplots(figsize=(7.2, 4.6))

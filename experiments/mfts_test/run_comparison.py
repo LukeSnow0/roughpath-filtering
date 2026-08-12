@@ -1,6 +1,6 @@
-"""Compare cuthbert CRF vs cd_dynamax-style filters on the Nielsen four-tank (MFTS) benchmark.
+"""Compare cuthbert WSC-KF vs cd_dynamax-style filters on the Nielsen four-tank (MFTS) benchmark.
 
-Mirrors ``crf_vs_dynamax/run_comparison.py`` but uses the modified four-tank system from
+Mirrors ``wsckf_vs_dynamax/run_comparison.py`` but uses the modified four-tank system from
 Nielsen et al. (2022), Sec. IV (Azam 2015 geometry).
 
 Run:  python experiments/mfts_test/run_comparison.py
@@ -53,9 +53,9 @@ from experiments.cd_dynamax_mirror.filters import (
     run_cd_ukf,
 )
 from cuthbert import filter as run_filter  
-from crf.library import default_recombined_num_paths  
+from wsckf.library import default_recombined_num_paths  
 
-from crf import build_filter, CRFState
+from wsckf import build_filter, WSCKFState
 
 
 from mfts_model import (
@@ -74,7 +74,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # Nielsen MFTS benchmark settings (defaults from nielsen_mfts_filter_comparison.py)
 # ---------------------------------------------------------------------------
 
-_parser = argparse.ArgumentParser(description="CRF vs cd_dynamax filters on Nielsen MFTS")
+_parser = argparse.ArgumentParser(description="WSC-KF vs cd_dynamax filters on Nielsen MFTS")
 _parser.add_argument(
     "--seed",
     type=int,
@@ -86,13 +86,13 @@ _parser.add_argument(
     type=int,
     default=3,
     dest="cubature_order",
-    help="CRF Lyons macro-segment count k (Wiener cubature order)",
+    help="WSC-KF Lyons macro-segment count k (Wiener cubature order)",
 )
 _parser.add_argument(
     "--solver",
     choices=("rk4", "diffrax"),
     default="rk4",
-    help="Continuous-time integrator for CD filters (default: rk4, matched to CRF)",
+    help="Continuous-time integrator for CD filters (default: rk4, matched to WSC-KF)",
 )
 _args = _parser.parse_args()
 SEED = _args.seed
@@ -114,7 +114,7 @@ SIGMA_UKF = 1.0
 
 ENKF_PARTICLES = 250
 PF_PARTICLES = 1000
-CRF_NUM_PATHS = default_recombined_num_paths(2, CUBATURE_ORDER)
+WSCKF_NUM_PATHS = default_recombined_num_paths(2, CUBATURE_ORDER)
 
 F1, F2 = 5.0, 5.0
 N_TIMING = 5
@@ -124,7 +124,7 @@ COLORS = {
     "CD-UKF": "#3DA35D",
     "CD-EnKF": "#F6AE2D",
     "PF": "#F24236",
-    "CRF": "#6A4C93",
+    "WSC-KF": "#6A4C93",
 }
 
 
@@ -188,36 +188,36 @@ def stack_estimates(m0_arr, means):
 
 
 # ---------------------------------------------------------------------------
-# cuthbert CRF (EnKF/PF/CRF dynamics: lambda > 0 on disturbance states)
+# cuthbert WSC-KF (EnKF/PF/WSC-KF dynamics: lambda > 0 on disturbance states)
 # ---------------------------------------------------------------------------
-crf_drift, crf_L, _, _, _ = make_mfts_dynamics(
+wsckf_drift, wsckf_L, _, _, _ = make_mfts_dynamics(
     p, lambda_dist=LAMBDA_ENKF_PF, sigma_dist=SIGMA_EKF_ENKF_PF, bar_F3=bar_est, bar_F4=bar_est, F1=F1, F2=F2
 )
 
-crf = build_filter(
+wsckf = build_filter(
     get_init_params=lambda mi: (m0, chol_P0),
     get_dynamics=lambda mi: (
-        lambda t, x: crf_drift(t, x),
-        lambda t, x: crf_L(t, x),
+        lambda t, x: wsckf_drift(t, x),
+        lambda t, x: wsckf_L(t, x),
     ),
     get_observations=lambda mi: (obs_fn, chol_R, ys[mi - 1]),
     noise_dim=2,
     dt=dt,
     integration_dt=dt0,
     cubature_order=CUBATURE_ORDER,     # multidim_paths="recombined",
-    num_paths=CRF_NUM_PATHS,
+    num_paths=WSCKF_NUM_PATHS,
 )
 jitted_filter = jit(run_filter, static_argnames=["filter_obj"])
-crf_states, crf_time = time_call(lambda: jitted_filter(crf, model_inputs))
-crf_est = stack_estimates(m0, crf_states.mean[1:])
-crf_loglik = crf_states.log_normalizing_constant[1:]
+wsckf_states, wsckf_time = time_call(lambda: jitted_filter(wsckf, model_inputs))
+wsckf_est = stack_estimates(m0, wsckf_states.mean[1:])
+wsckf_loglik = wsckf_states.log_normalizing_constant[1:]
 
 
 # ---------------------------------------------------------------------------
 # cd_dynamax-style filters
 # ---------------------------------------------------------------------------
 # Moment-ODE predict (state_order="first") is stable on this plant benchmark.
-# Default ``--solver rk4`` matches the CRF integrator for fair wall-clock timing.
+# Default ``--solver rk4`` matches the WSC-KF integrator for fair wall-clock timing.
 ekf_jit = jit(
     lambda: run_cd_ekf(
         drift_ekf, obs_fn, L_ekf, Qc, R, m0, P0_j, ys, dt, dt0,
@@ -265,7 +265,7 @@ RESULTS = {
     "CD-UKF": dict(est=ukf_est, loglik=ukf_res.cum_loglik, time=ukf_time, color=COLORS["CD-UKF"]),
     "CD-EnKF": dict(est=enkf_est, loglik=enkf_res.cum_loglik, time=enkf_time, color=COLORS["CD-EnKF"]),
     "PF": dict(est=pf_est, loglik=pf_res.cum_loglik, time=pf_time, color=COLORS["PF"]),
-    "CRF": dict(est=crf_est, loglik=crf_loglik, time=crf_time, color=COLORS["CRF"]),
+    "WSC-KF": dict(est=wsckf_est, loglik=wsckf_loglik, time=wsckf_time, color=COLORS["WSC-KF"]),
 }
 
 for name, r in RESULTS.items():
@@ -377,5 +377,5 @@ for name, r in RESULTS.items():
         f"{float(r['loglik'][-1]):>12.1f} {r['time']:>10.2f}"
     )
 print("=" * 72)
-print(f"CRF Wiener paths P={CRF_NUM_PATHS}, cubature order k={CUBATURE_ORDER}")
+print(f"WSC-KF Wiener paths P={WSCKF_NUM_PATHS}, cubature order k={CUBATURE_ORDER}")
 print(f"Plots written to {OUTPUT_DIR}")

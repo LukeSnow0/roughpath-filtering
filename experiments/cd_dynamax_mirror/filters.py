@@ -1,6 +1,6 @@
 """Faithful, dependency-light reimplementations of the cd_dynamax continuous-discrete
-nonlinear-Gaussian filters, for benchmarking against the cuthbert Cubature Recursive
-Filter (CRF).
+nonlinear-Gaussian filters, for benchmarking against the cuthbert Wiener Space
+Cubature Kalman Filter (WSC-KF).
 
 These mirror the algorithms in hd-UQ/cd_dynamax
 (``src/continuous_discrete_nonlinear_gaussian_ssm/inference_{ekf,ukf,enkf}.py``) but
@@ -10,7 +10,7 @@ equations and offer two continuous-time forecast backends via ``solver=``:
 * ``"diffrax"`` (default): matches cd_dynamax's ``diffrax_utils.diffeqsolve``
   (Dopri5 for moment/flow ODEs; Heun + VirtualBrownianTree for SDEs).
 * ``"rk4"``: fixed-step classical RK4 (ODEs) / RK4 with frozen Wiener increment per
-  step (SDEs), matching the CRF's integrator for fair wall-clock comparisons.
+  step (SDEs), matching the WSC-KF's integrator for fair wall-clock comparisons.
 
 Model (continuous-discrete, additive observation noise):
     dx = f(t, x) dt + L(t, x) dW,   Cov(dW) = Qc dt   (Itô by default)
@@ -19,10 +19,10 @@ Model (continuous-discrete, additive observation noise):
 EnKF / bootstrap PF forecast with ``solver="diffrax"`` (Heun) or ``"rk4"``
 (frozen-Wiener RK4) is Stratonovich-type. When ``sde_form="ito"`` (default), the
 drift is converted via the standard Itô→Stratonovich correction before those
-integrators — matching CRF ``sde_form="ito"``.
+integrators — matching WSC-KF ``sde_form="ito"``.
 
 All filters use a **predict-then-update** loop so their observation times line up with
-the cuthbert CRF: forecast over ``[t_k, t_{k+1}]`` then assimilate ``y_k``.
+the cuthbert WSC-KF: forecast over ``[t_k, t_{k+1}]`` then assimilate ``y_k``.
 
 References:
     Sarkka (2006), *Recursive Bayesian inference on stochastic differential equations*.
@@ -40,7 +40,7 @@ import jax.numpy as jnp
 import jax.random as jr
 from jax import jacfwd, jacrev, lax, vmap
 
-from crf.library.conversions import ito_to_stratonovich_drift
+from wsckf.library.conversions import ito_to_stratonovich_drift
 
 Vector = jax.Array
 Matrix = jax.Array
@@ -221,7 +221,7 @@ def integrate(
 ) -> object:
     """Continuous-time forecast integrator used by all CD filters.
     ``solver="diffrax"``: Dopri5 (ODE) / Heun+VBT (SDE), matching cd_dynamax.
-    ``solver="rk4"``: fixed-step RK4, matched to the CRF integrator for fair timing.
+    ``solver="rk4"``: fixed-step RK4, matched to the WSC-KF integrator for fair timing.
     Returns a ``ys`` pytree with a leading length-1 time axis (``SaveAt(t1=True)``
     convention). Treat ``solver`` as a static argument when JIT-compiling callers.
     """
@@ -554,7 +554,7 @@ def _enkf_forecast(
 
     Heun / frozen-Wiener RK4 are Stratonovich-type. For ``sde_form="ito"`` the
     Itô drift is converted before integration so the continuous law matches the
-    Itô model (same convention as CRF ``sde_form="ito"``).
+    Itô model (same convention as WSC-KF ``sde_form="ito"``).
     """
 
     def diffusion_mat(t, y):

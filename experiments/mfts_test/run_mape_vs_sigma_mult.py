@@ -50,8 +50,8 @@ import matplotlib.pyplot as plt
 jax.config.update("jax_enable_x64", True)
 
 from cuthbert import filter as run_filter
-from crf import build_filter
-from crf.library import product_path_count
+from wsckf import build_filter
+from wsckf.library import product_path_count
 from cd_dynamax_mirror.filters import (
     UKFParams,
     run_bootstrap_pf,
@@ -146,10 +146,10 @@ def main():
     ap.add_argument("--eval-dt", type=float, default=0.05, dest="eval_dt")
     ap.add_argument("--horizon", type=float, default=30.0, help="horizon [min]")
     ap.add_argument(
-        "--crf-paths",
+        "--wsckf-paths",
         type=str,
         default="4,9",
-        dest="crf_paths",
+        dest="wsckf_paths",
         help="comma-separated product path counts (e.g. 4,9)",
     )
     ap.add_argument("--enkf", type=int, default=100, help="EnKF particles; 0=skip")
@@ -163,21 +163,21 @@ def main():
     if not scales or not seeds:
         raise SystemExit("need nonempty --scales and --seeds")
 
-    crf_path_list = _parse_ints(args.crf_paths)
-    crf_cfgs: list[tuple[int, int, int]] = []  # (n_paths, lyons_degree, cubature_order)
-    for n_paths in crf_path_list:
+    wsckf_path_list = _parse_ints(args.wsckf_paths)
+    wsckf_cfgs: list[tuple[int, int, int]] = []  # (n_paths, lyons_degree, cubature_order)
+    for n_paths in wsckf_path_list:
         if n_paths not in PATH_TO_CFG:
             raise SystemExit(
-                f"--crf-paths entry {n_paths} not in product ladder "
+                f"--wsckf-paths entry {n_paths} not in product ladder "
                 f"{sorted(PATH_TO_CFG)}"
             )
         lyons_degree, cubature_order = PATH_TO_CFG[n_paths]
         n_expect = product_path_count(2, cubature_order, lyons_degree=lyons_degree)
         if n_expect != n_paths:
             raise SystemExit(f"config mismatch: expect {n_expect} paths for m,k")
-        crf_cfgs.append((n_paths, lyons_degree, cubature_order))
-    if not crf_cfgs:
-        raise SystemExit("need at least one --crf-paths entry")
+        wsckf_cfgs.append((n_paths, lyons_degree, cubature_order))
+    if not wsckf_cfgs:
+        raise SystemExit("need at least one --wsckf-paths entry")
 
     HORIZON_MIN = float(args.horizon)
     DT_TRUTH = 0.015
@@ -224,7 +224,7 @@ def main():
     print(
         f"MFTS MAPE vs σ×  multiplicative g(F), Fc={F_NOISE_SCALE:g}, "
         f"σ0={SIGMA0:g}, Δt={dt_min:g} min, n_obs={n_obs}, "
-        f"WSC paths={[n for n, _, _ in crf_cfgs]}, seeds={seeds}, scales={scales}",
+        f"WSC paths={[n for n, _, _ in wsckf_cfgs]}, seeds={seeds}, scales={scales}",
         flush=True,
     )
 
@@ -322,7 +322,7 @@ def main():
             chol_R = jnp.linalg.cholesky(R)
 
             # --- WSC-KF (product ladder path counts) ---
-            for n_paths, lyons_degree, cubature_order in crf_cfgs:
+            for n_paths, lyons_degree, cubature_order in wsckf_cfgs:
                 filt = build_filter(
                     get_init_params=lambda mi: (m0, chol_P0),
                     get_dynamics=lambda mi: (

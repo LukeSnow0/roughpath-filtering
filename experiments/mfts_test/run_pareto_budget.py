@@ -1,6 +1,6 @@
 """Fixed-Δt cost–accuracy Pareto over exact cubature path counts and particles.
 
-CRF uses **product** Lyons–Victoir constructions so the path count is exact
+WSC-KF uses **product** Lyons–Victoir constructions so the path count is exact
 (no recombined collapse). Default ladder for ``d=2``:
 
   m=3,k=1 → 4 | m=5,k=1 → 9 | m=3,k=2 → 16 | m=3,k=3 → 64 | m=5,k=2 → 81
@@ -70,8 +70,8 @@ from experiments.cd_dynamax_mirror.filters import (
     run_cd_ukf,
 )
 from cuthbert import filter as run_filter
-from crf import build_filter
-from crf.library import product_path_count
+from wsckf import build_filter
+from wsckf.library import product_path_count
 
 from mfts_model import (
     MFTSParams,
@@ -107,10 +107,10 @@ def _parse_ints(s: str) -> list[int]:
 
 
 @dataclass(frozen=True)
-class CrfConfig:
-    """Exact-count CRF Wiener construction."""
+class WSCKFConfig:
+    """Exact-count WSC-KF Wiener construction."""
 
-    family: str  # "CRF-product" | "CRF-LV"
+    family: str  # "WSC-KF-product" | "WSC-KF-LV"
     label: str
     n_paths: int
     k: int = 1
@@ -118,7 +118,7 @@ class CrfConfig:
     method: str = "product"  # product | lv
 
 
-def default_product_ladder(noise_dim: int = 2, max_paths: int = 100) -> list[CrfConfig]:
+def default_product_ladder(noise_dim: int = 2, max_paths: int = 100) -> list[WSCKFConfig]:
     """Exact product path counts up to ``max_paths`` (sorted by n_paths)."""
     specs = [
         (3, 1),
@@ -129,7 +129,7 @@ def default_product_ladder(noise_dim: int = 2, max_paths: int = 100) -> list[Crf
         (3, 4),
         (5, 3),
     ]
-    configs: list[CrfConfig] = []
+    configs: list[WSCKFConfig] = []
     seen: set[int] = set()
     for m, k in specs:
         n = product_path_count(noise_dim, k, lyons_degree=m)
@@ -137,8 +137,8 @@ def default_product_ladder(noise_dim: int = 2, max_paths: int = 100) -> list[Crf
             continue
         seen.add(n)
         configs.append(
-            CrfConfig(
-                family="CRF-product",
+            WSCKFConfig(
+                family="WSC-KF-product",
                 label=f"prod-m{m}-k{k}",
                 n_paths=n,
                 k=k,
@@ -149,14 +149,14 @@ def default_product_ladder(noise_dim: int = 2, max_paths: int = 100) -> list[Crf
     return sorted(configs, key=lambda c: c.n_paths)
 
 
-def lv_configs(noise_dim: int = 2) -> list[CrfConfig]:
+def lv_configs(noise_dim: int = 2) -> list[WSCKFConfig]:
     if precompute_lv_paths is None:
         raise SystemExit("--include-lv requires lyons_victoir_paths in multiplicative_noise_test")
     # Counts from Stroud / GH×Bernoulli (see lyons_victoir_paths.describe).
     counts = {3: 2 * noise_dim, 5: (3**noise_dim) * 2}
     return [
-        CrfConfig(
-            family="CRF-LV",
+        WSCKFConfig(
+            family="WSC-KF-LV",
             label=f"LV-m{m}",
             n_paths=counts[m],
             k=1,
@@ -184,10 +184,10 @@ _parser.add_argument(
 )
 _parser.add_argument("--eval-dt", type=float, default=0.05, dest="eval_dt")
 _parser.add_argument(
-    "--crf-max-paths",
+    "--wsckf-max-paths",
     type=int,
     default=100,
-    dest="crf_max_paths",
+    dest="wsckf_max_paths",
     help="Include product (m,k) configs with exact path count ≤ this (default 100)",
 )
 _parser.add_argument(
@@ -309,17 +309,17 @@ else:
     OUT_TAG = ("_" + "_".join(parts)) if parts else ""
 ENKF_PARTICLE_LIST = _parse_ints(_args.enkf)
 PF_PARTICLE_LIST = _parse_ints(_args.pf)
-CRF_CONFIGS = default_product_ladder(2, max_paths=_args.crf_max_paths)
+WSCKF_CONFIGS = default_product_ladder(2, max_paths=_args.wsckf_max_paths)
 if _args.include_lv:
-    CRF_CONFIGS = sorted(CRF_CONFIGS + lv_configs(2), key=lambda c: (c.n_paths, c.family))
+    WSCKF_CONFIGS = sorted(WSCKF_CONFIGS + lv_configs(2), key=lambda c: (c.n_paths, c.family))
 ONLY_FAMILIES: Optional[set[str]] = None
 if _args.only.strip():
     ONLY_FAMILIES = {s.strip() for s in _args.only.split(",") if s.strip()}
 if not SEEDS:
     raise SystemExit("--seeds must list at least one seed")
 if ONLY_FAMILIES is None:
-    if not CRF_CONFIGS:
-        raise SystemExit("No CRF configs (raise --crf-max-paths?)")
+    if not WSCKF_CONFIGS:
+        raise SystemExit("No WSC-KF configs (raise --wsckf-max-paths?)")
     if not ENKF_PARTICLE_LIST or not PF_PARTICLE_LIST:
         raise SystemExit("--enkf / --pf must list at least one particle count")
 if _args.append and _args.merge:
@@ -411,14 +411,14 @@ COLORS = {
     "CD-CKF": "#3DA35D",  # green
     "CD-EnKF": "#D97706",  # amber-orange (away from PF red / UKF yellow)
     "PF": "#F24236",
-    "CRF-product": "#6A4C93",
-    "CRF-LV": "#C44536",
+    "WSC-KF-product": "#6A4C93",
+    "WSC-KF-LV": "#C44536",
 }
 
 # Legend / axis display names (CSV family keys stay stable).
 DISPLAY_NAME = {
-    "CRF-product": "WS-CKF",
-    "CRF-LV": "WS-CKF-LV",
+    "WSC-KF-product": "WSC-KF",
+    "WSC-KF-LV": "WSC-KF-LV",
     "CD-EKF": "CD-EKF",
     "CD-UKF-fine": "CD-UKF (fine)",
     "CD-UKF-coarse": "CD-UKF (coarse)",
@@ -429,7 +429,7 @@ DISPLAY_NAME = {
 
 # Vertical label offsets (points) per family — keep curves readable on log-x.
 _LABEL_OFFSET = {
-    "CRF-product": (0, 7),
+    "WSC-KF-product": (0, 7),
     "CD-EnKF": (0, -10),
     "PF": (0, 7),
 }
@@ -581,7 +581,7 @@ print(
     f"σ×={SIGMA_SCALE:g}, mape={MAPE_MODE}, "
     f"λ_ekf={LAMBDA_EKF_UKF:g}, λ_ens={LAMBDA_ENKF_PF:g}, "
     f"seeds={SEEDS}, "
-    f"CRF configs={[c.label + f'({c.n_paths})' for c in CRF_CONFIGS]}"
+    f"WSC-KF configs={[c.label + f'({c.n_paths})' for c in WSCKF_CONFIGS]}"
 )
 
 raw_rows: list[dict] = []
@@ -632,7 +632,7 @@ def score(
     )
 
 
-def build_crf(cfg: CrfConfig, m0, chol_P0, chol_R, ys):
+def build_wsckf(cfg: WSCKFConfig, m0, chol_P0, chol_R, ys):
     wiener_paths = None
     if cfg.method == "lv":
         assert precompute_lv_paths is not None
@@ -690,17 +690,17 @@ for seed in SEEDS:
     chol_P0 = jnp.linalg.cholesky(P0_j)
     chol_R = jnp.linalg.cholesky(R)
 
-    # CRF exact-count configs
-    for cfg in CRF_CONFIGS:
+    # WSC-KF exact-count configs
+    for cfg in WSCKF_CONFIGS:
         if not _want(cfg.family):
             continue
         if cfg.method == "product":
             n_expect = product_path_count(2, cfg.k, lyons_degree=cfg.lyons_degree)
             if n_expect != cfg.n_paths:
                 raise RuntimeError(f"config mismatch: {cfg} vs product count {n_expect}")
-        crf = build_crf(cfg, m0, chol_P0, chol_R, ys)
+        wsckf = build_wsckf(cfg, m0, chol_P0, chol_R, ys)
         jitted = jit(run_filter, static_argnames=["filter_obj"])
-        states, wall = time_call(lambda f=jitted, filt=crf: f(filt, model_inputs))
+        states, wall = time_call(lambda f=jitted, filt=wsckf: f(filt, model_inputs))
         score(
             cfg.family,
             cfg.label,
@@ -999,13 +999,13 @@ with open(csv_path, "w", newline="") as f:
         writer.writerow({"delta_t_min": dt_min, "n_obs": n_obs, **rec})
 
 # ---------------------------------------------------------------------------
-# Plot mean ± std Pareto (CRF-LV omitted from figure; kept in CSV)
+# Plot mean ± std Pareto (WSC-KF-LV omitted from figure; kept in CSV)
 # ---------------------------------------------------------------------------
 
 
 def _annotate_nodes(ax, fam, pts, xs, ys):
     """Label multi-budget nodes with path/particle count (EKF/UKF/CKF via legend)."""
-    if fam in ("CD-EKF", "CD-UKF-fine", "CD-UKF-coarse", "CD-CKF", "CRF-product"):
+    if fam in ("CD-EKF", "CD-UKF-fine", "CD-UKF-coarse", "CD-CKF", "WSC-KF-product"):
         return
     color = COLORS.get(fam, "#333333")
     base_dx, base_dy = _LABEL_OFFSET.get(fam, (0, 6))
@@ -1032,15 +1032,15 @@ def _annotate_nodes(ax, fam, pts, xs, ys):
 
 
 BAND_SCALE = 0.3  # visual width of shaded ±σ band
-# Additive: single moment-safe WS-CKF point. Multiplicative: full product ladder
+# Additive: single moment-safe WSC-KF point. Multiplicative: full product ladder
 # so path-order / Lévy-area effects are visible on the Pareto.
-WS_CKF_PLOT_BUDGETS: set[int] | None = (
+WSC_KF_PLOT_BUDGETS: set[int] | None = (
     None if NOISE_MODE == "multiplicative" else {4}
 )
 # Keep 25 / 1000 in CSV; omit from figure for a cleaner mid-range Pareto.
 PARTICLE_PLOT_HIDE_BUDGETS = {25, 1000}
 plot_families = [
-    "CRF-product",
+    "WSC-KF-product",
     "CD-EnKF",
     "PF",
     "CD-EKF",
@@ -1052,8 +1052,8 @@ plot_families = [
 
 def _plot_pts_for_family(fam: str) -> list[dict]:
     pts = [r for r in summary if r["family"] == fam]
-    if fam == "CRF-product" and WS_CKF_PLOT_BUDGETS is not None:
-        pts = [r for r in pts if r["budget"] in WS_CKF_PLOT_BUDGETS]
+    if fam == "WSC-KF-product" and WSC_KF_PLOT_BUDGETS is not None:
+        pts = [r for r in pts if r["budget"] in WSC_KF_PLOT_BUDGETS]
     elif fam in ("CD-EnKF", "PF"):
         pts = [r for r in pts if r["budget"] not in PARTICLE_PLOT_HIDE_BUDGETS]
     return pts
@@ -1072,7 +1072,7 @@ def _plot_pareto_metric(metric: str, ylabel: str, title: str, out_name: str) -> 
         ystd = np.asarray([r[f"{metric}_std"] for r in pts]) * BAND_SCALE
         all_xs.extend(xs.tolist())
         color = COLORS.get(fam, "#333333")
-        if fam == "CRF-product":
+        if fam == "WSC-KF-product":
             marker = "*"
         elif fam in ("CD-EKF", "CD-UKF-fine", "CD-UKF-coarse", "CD-CKF"):
             marker = "s"
@@ -1157,7 +1157,7 @@ def _plot_pareto_mapex_maped(out_name: str, title: str = "") -> str:
         xs = np.asarray([1e3 * r["time_s_mean"] for r in pts])
         all_xs.extend(xs.tolist())
         color = COLORS.get(fam, "#333333")
-        if fam == "CRF-product":
+        if fam == "WSC-KF-product":
             marker = "*"
         elif fam in ("CD-EKF", "CD-UKF-fine", "CD-UKF-coarse", "CD-CKF"):
             marker = "s"
@@ -1260,10 +1260,10 @@ def _plot_pareto_mapex_maped(out_name: str, title: str = "") -> str:
     return out_path
 
 
-_ws_ckf_budgets = (
+_wsc_kf_budgets = (
     "ladder"
-    if WS_CKF_PLOT_BUDGETS is None
-    else ",".join(str(b) for b in sorted(WS_CKF_PLOT_BUDGETS))
+    if WSC_KF_PLOT_BUDGETS is None
+    else ",".join(str(b) for b in sorted(WSC_KF_PLOT_BUDGETS))
 )
 _noise_note = "multiplicative $g(F)$" if NOISE_MODE == "multiplicative" else "additive"
 if abs(SIGMA_SCALE - 1.0) > 1e-12:
@@ -1276,7 +1276,7 @@ _mape_note = "obs-time MAPE" if MAPE_MODE == "obs" else "fine-grid MAPE"
 _title_suffix = (
     rf"at $\Delta t={dt_min:g}$ min, {_noise_note}, {_mape_note} "
     rf"(mean±{BAND_SCALE:g}$\sigma$ over {n_seeds_total} seeds; "
-    rf"WS-CKF paths = {_ws_ckf_budgets})"
+    rf"WSC-KF paths = {_wsc_kf_budgets})"
 )
 mape_plot_path = _plot_pareto_mapex_maped(
     f"pareto_budget_vs_mape{OUT_TAG}.png",

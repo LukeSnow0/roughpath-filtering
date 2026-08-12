@@ -6,7 +6,7 @@ Mirrors ``l63_test/run_pareto_budget_smoke.py`` with Brownian dim d=2.
 Run:
   uv run --extra experiments python experiments/heston_test/run_pareto_budget.py
   uv run --extra experiments python experiments/heston_test/run_pareto_budget.py \\
-      --seeds 0,1,2,3,4,5,6,7,8 --crf-max-paths 64
+      --seeds 0,1,2,3,4,5,6,7,8 --wsckf-max-paths 64
 
 Outputs:
   ``experiments/heston_test/output/pareto_budget_vs_rmse.png``
@@ -55,8 +55,8 @@ from cd_dynamax_mirror.filters import (
     run_cd_ukf,
 )
 from cuthbert import filter as run_filter
-from crf import build_filter
-from crf.library import product_path_count
+from wsckf import build_filter
+from wsckf.library import product_path_count
 from heston_model import (
     HestonParams,
     init_estimate,
@@ -85,22 +85,22 @@ def _parse_ints(s: str) -> list[int]:
 
 
 @dataclass(frozen=True)
-class CrfConfig:
+class WSCKFConfig:
     label: str
     lyons_degree: int
     k: int
     n_paths: int
-    family: str = "CRF-product"
+    family: str = "WSC-KF-product"
 
 
-def default_crf_configs(noise_dim: int = 2, max_paths: int = 16) -> list[CrfConfig]:
+def default_wsckf_configs(noise_dim: int = 2, max_paths: int = 16) -> list[WSCKFConfig]:
     """Exact product path counts up to ``max_paths`` (sorted by n_paths).
 
     For d=2: (m,k) → P = (2^k)^2 for m=3, (3^k)^2 for m=5, so
     4, 9, 16, 64, 81, 256, ...
     """
     specs = [(3, 1), (5, 1), (3, 2), (3, 3), (5, 2), (3, 4), (5, 3)]
-    configs: list[CrfConfig] = []
+    configs: list[WSCKFConfig] = []
     seen: set[int] = set()
     for m, k in specs:
         n = product_path_count(noise_dim, k, lyons_degree=m)
@@ -108,7 +108,7 @@ def default_crf_configs(noise_dim: int = 2, max_paths: int = 16) -> list[CrfConf
             continue
         seen.add(n)
         configs.append(
-            CrfConfig(
+            WSCKFConfig(
                 label=f"prod-m{m}-k{k}",
                 lyons_degree=m,
                 k=k,
@@ -136,11 +136,11 @@ _parser.add_argument("--eval-dt", type=float, default=0.005, dest="eval_dt")
 _parser.add_argument("--enkf", type=str, default="25,50,100")
 _parser.add_argument("--pf", type=str, default="50,100,200")
 _parser.add_argument(
-    "--crf-max-paths",
+    "--wsckf-max-paths",
     type=int,
     default=16,
-    dest="crf_max_paths",
-    help="Include exact product WS-CKF configs with P ≤ this (d=2: 4,9,16,64,…)",
+    dest="wsckf_max_paths",
+    help="Include exact product WSC-KF configs with P ≤ this (d=2: 4,9,16,64,…)",
 )
 _parser.add_argument(
     "--obs-std",
@@ -196,9 +196,9 @@ XI = float(_args.xi)
 DIFF_SCALE = float(_args.diff_scale)
 OUT_TAG = f"_{_args.tag}" if _args.tag.strip() else ""
 RMSE_COMP = str(_args.rmse_comp)
-CRF_CONFIGS = default_crf_configs(2, max_paths=int(_args.crf_max_paths))
-if not CRF_CONFIGS:
-    raise SystemExit(f"no CRF configs from --crf-max-paths={_args.crf_max_paths}")
+WSCKF_CONFIGS = default_wsckf_configs(2, max_paths=int(_args.wsckf_max_paths))
+if not WSCKF_CONFIGS:
+    raise SystemExit(f"no WSC-KF configs from --wsckf-max-paths={_args.wsckf_max_paths}")
 
 PARAMS = HestonParams(meas_std=OBS_STD, xi=XI, diff_scale=DIFF_SCALE)
 f_drift, L_fn, Qc_fn, h_obs, R = make_heston_dynamics(PARAMS)
@@ -225,14 +225,14 @@ COLORS = {
     "CD-CKF": "#3DA35D",
     "CD-EnKF": "#F6AE2D",
     "PF": "#F24236",
-    "CRF-product": "#6A4C93",
-    "CRF-m3": "#6A4C93",
-    "CRF-m5": "#C77DFF",
+    "WSC-KF-product": "#6A4C93",
+    "WSC-KF-m3": "#6A4C93",
+    "WSC-KF-m5": "#C77DFF",
 }
 DISPLAY_NAME = {
-    "CRF-product": "WS-CKF",
-    "CRF-m3": "WS-CKF m=3",
-    "CRF-m5": "WS-CKF m=5",
+    "WSC-KF-product": "WSC-KF",
+    "WSC-KF-m3": "WSC-KF m=3",
+    "WSC-KF-m5": "WSC-KF m=5",
     "CD-EKF": "CD-EKF (coarse)",
     "CD-EKF-fine": "CD-EKF (fine)",
     "CD-UKF": "CD-UKF (coarse)",
@@ -244,9 +244,9 @@ DISPLAY_NAME = {
 _LABEL_OFFSET = {
     "CD-EnKF": (0, -10),
     "PF": (0, 7),
-    "CRF-product": (0, 8),
-    "CRF-m3": (0, 8),
-    "CRF-m5": (0, -9),
+    "WSC-KF-product": (0, 8),
+    "WSC-KF-m3": (0, 8),
+    "WSC-KF-m5": (0, -9),
 }
 
 
@@ -337,7 +337,7 @@ print(
     f"κ={PARAMS.kappa:g}, θ={PARAMS.theta:g}, ξ={PARAMS.xi:g}, ρ={PARAMS.rho:g}, "
     f"diff_scale={PARAMS.diff_scale:g}, obs_std={OBS_STD:g}, rmse={RMSE_COMP}, "
     f"seeds={SEEDS}, "
-    f"CRF={[c.label + f'({c.n_paths})' for c in CRF_CONFIGS]}"
+    f"WSC-KF={[c.label + f'({c.n_paths})' for c in WSCKF_CONFIGS]}"
 )
 
 RAW_FIELDS = ["delta_t", "n_obs", "horizon", "seed", "family", "label", "budget", "rmse", "time_s"]
@@ -372,7 +372,7 @@ def _have(seed: int, family: str, label: str, budget: int) -> bool:
 seeds_to_run = [
     s
     for s in SEEDS
-    if any(not _have(s, c.family, c.label, c.n_paths) for c in CRF_CONFIGS)
+    if any(not _have(s, c.family, c.label, c.n_paths) for c in WSCKF_CONFIGS)
     or not _have(s, "CD-EKF", "EKF-coarse", 0)
     or not _have(s, "CD-EKF-fine", "EKF-fine", 0)
     or not _have(s, "CD-UKF", "UKF-coarse", 0)
@@ -418,13 +418,13 @@ for seed in seeds_to_run:
             f"RMSE[{RMSE_COMP}]={err:6.4f}  time={1e3 * wall:7.1f} ms"
         )
 
-    for cfg in CRF_CONFIGS:
+    for cfg in WSCKF_CONFIGS:
         if _have(seed, cfg.family, cfg.label, cfg.n_paths):
             continue
         n_expect = product_path_count(noise_dim, cfg.k, lyons_degree=cfg.lyons_degree)
         if n_expect != cfg.n_paths:
             raise RuntimeError(f"path count mismatch {cfg}")
-        crf = build_filter(
+        wsckf = build_filter(
             get_init_params=lambda mi: (m0, chol_P0),
             get_dynamics=lambda mi: (f_drift, L_fn),
             get_observations=lambda mi: (
@@ -438,11 +438,11 @@ for seed in seeds_to_run:
             cubature_order=cfg.k,
             lyons_degree=cfg.lyons_degree,
             multidim_paths="product",
-            # Heston drift is Itô; CRF kernels are Stratonovich (same as AZT1D/MFTS).
+            # Heston drift is Itô; WSC-KF kernels are Stratonovich (same as AZT1D/MFTS).
             sde_form="ito",
         )
         jitted = jit(run_filter, static_argnames=["filter_obj"])
-        states, wall = time_call(lambda f=jitted, filt=crf: f(filt, model_inputs))
+        states, wall = time_call(lambda f=jitted, filt=wsckf: f(filt, model_inputs))
         score(
             cfg.family,
             cfg.label,
@@ -609,10 +609,10 @@ def _annotate_nodes(ax, fam, pts, xs, ys):
 
 
 fig, ax = plt.subplots(figsize=(7.5, 4.5))
-# Split WS-CKF by Lyons degree (m=3 vs m=5), matching L-overlay colors.
+# Split WSC-KF by Lyons degree (m=3 vs m=5), matching L-overlay colors.
 plot_groups: list[tuple[str, str, Callable[[dict], bool]]] = [
-    ("WS-CKF m=3", "CRF-m3", lambda r: r["family"] == "CRF-product" and "-m3-" in r["label"]),
-    ("WS-CKF m=5", "CRF-m5", lambda r: r["family"] == "CRF-product" and "-m5-" in r["label"]),
+    ("WSC-KF m=3", "WSC-KF-m3", lambda r: r["family"] == "WSC-KF-product" and "-m3-" in r["label"]),
+    ("WSC-KF m=5", "WSC-KF-m5", lambda r: r["family"] == "WSC-KF-product" and "-m5-" in r["label"]),
     ("CD-EnKF", "CD-EnKF", lambda r: r["family"] == "CD-EnKF"),
     ("PF", "PF", lambda r: r["family"] == "PF"),
     ("CD-EKF (coarse)", "CD-EKF", lambda r: r["family"] == "CD-EKF"),
@@ -623,17 +623,17 @@ plot_groups: list[tuple[str, str, Callable[[dict], bool]]] = [
 ]
 all_xs: list[float] = []
 n_seeds = len({r["seed"] for r in raw_rows})
-crf_path_note = ",".join(str(c.n_paths) for c in CRF_CONFIGS)
+wsckf_path_note = ",".join(str(c.n_paths) for c in WSCKF_CONFIGS)
 _square = {
     "CD-EKF (coarse)",
     "CD-EKF (fine)",
     "CD-UKF (coarse)",
     "CD-UKF (fine)",
     "CD-CKF",
-    "WS-CKF m=3",
-    "WS-CKF m=5",
+    "WSC-KF m=3",
+    "WSC-KF m=5",
 }
-_markers = {"WS-CKF m=3": "s", "WS-CKF m=5": "D"}
+_markers = {"WSC-KF m=3": "s", "WSC-KF m=5": "D"}
 for disp, color_key, pred in plot_groups:
     pts = [r for r in summary if pred(r)]
     if not pts:
@@ -679,7 +679,7 @@ ax.set_title(
     rf"Heston Pareto at $\Delta t={dt:g}$, $\xi={PARAMS.xi:g}$, "
     rf"$L$-scale={PARAMS.diff_scale:g}, $\rho={PARAMS.rho:g}$ "
     rf"(mean±{BAND_SCALE:g}$\sigma$ over {n_seeds} seeds; "
-    rf"horizon={HORIZON:g}; WS-CKF P∈{{{crf_path_note}}}{_rmse_note})",
+    rf"horizon={HORIZON:g}; WSC-KF P∈{{{wsckf_path_note}}}{_rmse_note})",
     fontsize=11,
 )
 fig.tight_layout()

@@ -1,4 +1,4 @@
-"""Compare CRF / EKF / UKF / EnKF / PF as InTaSet calibration engines.
+"""Compare WSC-KF / EKF / UKF / EnKF / PF as InTaSet calibration engines.
 
 Pipeline (train prefix only; no holdout leakage into θ̂)
 -------------------------------------------------------
@@ -24,7 +24,7 @@ Run:
 Outputs under ``experiments/mfts_test/intaset_real/output/``:
   calib_engines_summary.csv, calib_engines_trace.png,
   calib_engines_heldout.png, calib_engines_timing.png,
-  calibrated_params_<engine>.json
+  calibrated_params_<engine_slug>.json  (e.g. wsckf, ekf; hyphens stripped)
 """
 
 from __future__ import annotations
@@ -60,8 +60,8 @@ import matplotlib.pyplot as plt
 jax.config.update("jax_enable_x64", True)
 
 from cuthbert import filter as run_filter
-from crf import build_filter
-from crf.library import default_recombined_num_paths
+from wsckf import build_filter
+from wsckf.library import default_recombined_num_paths
 from experiments.cd_dynamax_mirror.filters import (
     UKFParams,
     run_bootstrap_pf,
@@ -105,15 +105,15 @@ _parser.add_argument(
     type=float,
     default=0.5,
     dest="k_ref_min",
-    help="Target CRF macro-segment length [min]; k=min(--k-max, round(Δt/k_ref))",
+    help="Target WSC-KF macro-segment length [min]; k=min(--k-max, round(Δt/k_ref))",
 )
 _parser.add_argument("--k-max", type=int, default=8, dest="k_max")
 _parser.add_argument(
-    "--crf-paths",
+    "--wsckf-paths",
     type=str,
     default="default",
-    dest="crf_paths",
-    help="Recombined CRF path budget: 'default' or an integer",
+    dest="wsckf_paths",
+    help="Recombined WSC-KF path budget: 'default' or an integer",
 )
 _parser.add_argument("--enkf-particles", type=int, default=100, dest="enkf_particles")
 _parser.add_argument("--pf-particles", type=int, default=100, dest="pf_particles")
@@ -127,16 +127,16 @@ _parser.add_argument(
     "--only",
     type=str,
     default="",
-    help="Comma subset of engines: CRF,EKF,UKF,EnKF,PF",
+    help="Comma subset of engines: WSC-KF,EKF,UKF,EnKF,PF",
 )
 _args = _parser.parse_args()
 
 DT0 = float(_args.dt0)
 SOLVER = "rk4"
-CRF_K = min(int(_args.k_max), max(1, int(round(float(_args.delta) / float(_args.k_ref_min)))))
-_tok = _args.crf_paths.strip().lower()
-CRF_N = (
-    default_recombined_num_paths(2, CRF_K)
+WSCKF_K = min(int(_args.k_max), max(1, int(round(float(_args.delta) / float(_args.k_ref_min)))))
+_tok = _args.wsckf_paths.strip().lower()
+WSCKF_N = (
+    default_recombined_num_paths(2, WSCKF_K)
     if _tok in ("", "default")
     else max(1, int(_tok))
 )
@@ -272,8 +272,8 @@ print(
     f"meas_std0={meas0:.3f} (was {p_ol.meas_std:.3f})  sigma_u={p_ol.sigma_u:.3g}"
 )
 print(
-    f"  CRF recombined k={CRF_K} (Δt/{_args.k_ref_min:g}, max={_args.k_max}) "
-    f"→ {CRF_N}p  EnKF={ENKF_P}  PF={PF_P}  refEnKF={REF_P}"
+    f"  WSC-KF recombined k={WSCKF_K} (Δt/{_args.k_ref_min:g}, max={_args.k_max}) "
+    f"→ {WSCKF_N}p  EnKF={ENKF_P}  PF={PF_P}  refEnKF={REF_P}"
 )
 
 
@@ -349,7 +349,7 @@ def _mi(theta: jnp.ndarray, n_obs: int) -> MInputs:
     )
 
 
-def build_crf(ys, t_fine, u_fine, *, checkpoint_steps: bool):
+def build_wsckf(ys, t_fine, u_fine, *, checkpoint_steps: bool):
     t_j = jnp.asarray(t_fine)
     u_j = jnp.asarray(u_fine)
 
@@ -372,8 +372,8 @@ def build_crf(ys, t_fine, u_fine, *, checkpoint_steps: bool):
         noise_dim=2,
         dt=DT,
         integration_dt=DT0,
-        cubature_order=CRF_K,
-        num_paths=CRF_N,
+        cubature_order=WSCKF_K,
+        num_paths=WSCKF_N,
         multidim_paths="recombined",
         sde_form="ito",
         checkpoint_steps=checkpoint_steps,
@@ -381,16 +381,16 @@ def build_crf(ys, t_fine, u_fine, *, checkpoint_steps: bool):
 
 
 _run = jit(run_filter, static_argnames=["filter_obj"])
-CRF_TRAIN_CKPT = build_crf(YS_TRAIN, T_TRAIN, U_TRAIN, checkpoint_steps=True)
-CRF_TRAIN = build_crf(YS_TRAIN, T_TRAIN, U_TRAIN, checkpoint_steps=False)
-CRF_FULL = build_crf(YS_FULL, T_FULL, U_FULL, checkpoint_steps=False)
+WSCKF_TRAIN_CKPT = build_wsckf(YS_TRAIN, T_TRAIN, U_TRAIN, checkpoint_steps=True)
+WSCKF_TRAIN = build_wsckf(YS_TRAIN, T_TRAIN, U_TRAIN, checkpoint_steps=False)
+WSCKF_FULL = build_wsckf(YS_FULL, T_FULL, U_FULL, checkpoint_steps=False)
 
 _key_enkf = jr.PRNGKey(_args.seed + 17)
 _key_pf = jr.PRNGKey(_args.seed + 31)
 
 
-def crf_train_ll(theta):
-    return _run(CRF_TRAIN_CKPT, _mi(theta, N_TRAIN)).log_normalizing_constant[-1]
+def wsckf_train_ll(theta):
+    return _run(WSCKF_TRAIN_CKPT, _mi(theta, N_TRAIN)).log_normalizing_constant[-1]
 
 
 def ekf_ll_on(ys, t_fine, u_fine, theta):
@@ -444,10 +444,10 @@ def pf_train_ll(theta):
 
 
 ENGINES: dict[str, dict] = {
-    "CRF": {
+    "WSC-KF": {
         "color": "#6A4C93",
-        "vg": jit(value_and_grad(crf_train_ll)),
-        "fwd": jit(lambda th: _run(CRF_TRAIN, _mi(th, N_TRAIN)).log_normalizing_constant[-1]),
+        "vg": jit(value_and_grad(wsckf_train_ll)),
+        "fwd": jit(lambda th: _run(WSCKF_TRAIN, _mi(th, N_TRAIN)).log_normalizing_constant[-1]),
     },
     "EKF": {
         "color": "#2E86AB",
@@ -504,8 +504,8 @@ def ref_enkf_heldout(theta: np.ndarray) -> tuple[float, float]:
 
 def self_heldout(name: str, theta: np.ndarray) -> float:
     th = jnp.asarray(theta)
-    if name == "CRF":
-        cum = _run(CRF_FULL, _mi(th, N_OBS)).log_normalizing_constant
+    if name == "WSC-KF":
+        cum = _run(WSCKF_FULL, _mi(th, N_OBS)).log_normalizing_constant
         return heldout_nll_per_obs(cum, N_TRAIN, N_OBS)
     if name == "EKF":
         return heldout_nll_per_obs(
@@ -692,8 +692,10 @@ def main():
                 "sigma_u": p.sigma_u,
             }
         )
+        # Sanitize engine name for filenames (e.g. "WSC-KF" -> "wsckf").
+        engine_slug = "".join(ch for ch in name.lower() if ch.isalnum())
         save_params(
-            os.path.join(OUTPUT_DIR, f"calibrated_params_{name.lower()}.json"),
+            os.path.join(OUTPUT_DIR, f"calibrated_params_{engine_slug}.json"),
             p,
             meta={
                 "engine": name,

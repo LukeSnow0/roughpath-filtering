@@ -1,12 +1,12 @@
-# Cubature Recursive Filter
+# Wiener Space Cubature Kalman Filter
 
-A **Cubature Recursive Filter (CRF)** for continuous-discrete nonlinear state
+A **Wiener Space Cubature Kalman Filter (WSC-KF)** for continuous-discrete nonlinear state
 estimation: a deterministic, Gaussian filtering method that propagates spatial
 cubature nodes along Wiener-space cubature paths through a Stratonovich SDE,
 without Jacobians or Monte Carlo sampling.
 
-The installable library lives in [`crf/`](crf/). The [`experiments/`](experiments/)
-directory contains benchmark and real-data scripts that compare the CRF against
+The installable library lives in [`wsckf/`](wsckf/). The [`experiments/`](experiments/)
+directory contains benchmark and real-data scripts that compare the WSC-KF against
 standard continuous-discrete estimators (CD-EKF, CD-UKF, CD-EnKF, bootstrap PF)
 on shared observation sequences, reporting tracking accuracy, marginal
 log-likelihood, and runtime.
@@ -46,8 +46,8 @@ Optional extras:
 
 **Dependencies:** [cuthbert](https://pypi.org/project/cuthbert/) and
 **cuthbertlib** provide the generic filtering interface (`cuthbert.inference.Filter`,
-`cuthbert.filter`); CRF predict/update kernels live in this repo under
-`crf`. Both are installed automatically by `pip install -e .`.
+`cuthbert.filter`); WSC-KF predict/update kernels live in this repo under
+`wsckf`. Both are installed automatically by `pip install -e .`.
 This project currently pins `cuthbert` / `cuthbertlib` to `>=0.0.12,<0.0.14`
 (API change in `0.0.14`).
 
@@ -80,10 +80,10 @@ Define three model callbacks, build a filter, and run it with cuthbert:
 import jax.numpy as jnp
 from cuthbert import filter as run_filter
 
-from crf import (
-    CRFState,
-    GetCRFDynamics,
-    GetCRFObservations,
+from wsckf import (
+    WSCKFState,
+    GetWSCKFDynamics,
+    GetWSCKFObservations,
     GetInitParams,
     build_filter,
 )
@@ -106,7 +106,7 @@ filter_obj = build_filter(
 )
 
 states = run_filter(filter_obj, model_inputs)
-final: CRFState = states[-1]
+final: WSCKFState = states[-1]
 print(final.mean, final.log_normalizing_constant)
 ```
 
@@ -114,16 +114,16 @@ print(final.mean, final.log_normalizing_constant)
 
 | Import | Purpose |
 | --- | --- |
-| `crf.build_filter` | Build a `cuthbert.inference.Filter` for your model |
-| `crf.CRFState` | Filter state: `mean`, `chol_cov`, `log_normalizing_constant`, … |
-| `crf.GetInitParams`, `GetCRFDynamics`, `GetCRFObservations` | Callback type contracts |
-| `crf.library.predict`, `update`, `precompute_cubature_paths`, … | Lower-level kernels (advanced) |
-| `crf.library.ito_to_stratonovich_dynamics`, `wrap_ito_dynamics` | Ito → Stratonovich drift conversion |
-| `crf.library.select_multidim_paths`, `product_path_count` | Path-method heuristics (advanced) |
+| `wsckf.build_filter` | Build a `cuthbert.inference.Filter` for your model |
+| `wsckf.WSCKFState` | Filter state: `mean`, `chol_cov`, `log_normalizing_constant`, … |
+| `wsckf.GetInitParams`, `GetWSCKFDynamics`, `GetWSCKFObservations` | Callback type contracts |
+| `wsckf.library.predict`, `update`, `precompute_cubature_paths`, … | Lower-level kernels (advanced) |
+| `wsckf.library.ito_to_stratonovich_dynamics`, `wrap_ito_dynamics` | Ito → Stratonovich drift conversion |
+| `wsckf.library.select_multidim_paths`, `product_path_count` | Path-method heuristics (advanced) |
 
-The CRF integrates a **Stratonovich** SDE internally. Pass ``sde_form="ito"`` if
+The WSC-KF integrates a **Stratonovich** SDE internally. Pass ``sde_form="ito"`` if
 your ``get_dynamics`` callback is written in Ito form — the drift correction is
-applied automatically inside :func:`crf.build_filter`:
+applied automatically inside :func:`wsckf.build_filter`:
 
 ```python
 filter_obj = build_filter(
@@ -140,12 +140,12 @@ For Stratonovich models (or constant diffusion, where Ito = Stratonovich), omit
 ``sde_form`` or use the default ``sde_form="stratonovich"``.
 
 Low-level helpers ``ito_to_stratonovich_dynamics`` and ``wrap_ito_dynamics`` remain
-available in ``crf.library`` for advanced use. See
+available in ``wsckf.library`` for advanced use. See
 [`examples/ito_ou_1d.py`](examples/ito_ou_1d.py) and
 [`examples/linear_gaussian_1d.py`](examples/linear_gaussian_1d.py).
 
-See [`crf/filter/README.md`](crf/filter/README.md) and
-[`crf/library/README.md`](crf/library/README.md) for detail.
+See [`wsckf/filter/README.md`](wsckf/filter/README.md) and
+[`wsckf/library/README.md`](wsckf/library/README.md) for detail.
 
 **Runnable example:** a self-contained 1D Ornstein–Uhlenbeck script lives in
 [`examples/linear_gaussian_1d.py`](examples/linear_gaussian_1d.py):
@@ -155,7 +155,7 @@ pip install -e .
 python examples/linear_gaussian_1d.py
 ```
 
-The CRF maintains a Gaussian posterior (mean + Cholesky covariance). Its predict
+The WSC-KF maintains a Gaussian posterior (mean + Cholesky covariance). Its predict
 step propagates spatial cubature nodes along deterministic Wiener-space cubature
 paths; the update is a square-root sigma-point Kalman correction. Wiener path
 construction defaults to ``multidim_paths="auto"``:
@@ -167,12 +167,12 @@ construction defaults to ``multidim_paths="auto"``:
   ``default_recombined_num_paths`` when ``num_paths=None``
 
 Override explicitly when benchmarking, e.g.
-``from crf.library import select_multidim_paths, product_path_count``.
+``from wsckf.library import select_multidim_paths, product_path_count``.
 
 ## Experiments
 
 After `pip install -e ".[experiments]"` (or `uv sync --extra experiments`),
-run benchmarks from the repo root. Experiment code imports the library (`crf`)
+run benchmarks from the repo root. Experiment code imports the library (`wsckf`)
 and shared baselines (`experiments.cd_dynamax_mirror`).
 
 ### Core synthetic benchmarks
@@ -207,7 +207,7 @@ python experiments/mfts_test/run_comparison.py --seed 42 --cubature-order 3
 | Flag | Description |
 | --- | --- |
 | `--seed` | RNG seed for truth simulation and stochastic filters (default 100) |
-| `--cubature-order` | CRF Lyons macro-segment count *k* (default 3) |
+| `--cubature-order` | WSC-KF Lyons macro-segment count *k* (default 3) |
 
 Outputs: `experiments/mfts_test/output/` (tank heights, disturbance flows, MAPE
 bars, cumulative log-likelihood, runtime). Related scripts also include Pareto
@@ -278,7 +278,7 @@ algorithm figures for talks / exposition.
 | **CD-UKF** | Continuous-discrete unscented Kalman filter (stable UT) |
 | **CD-EnKF** | Perturbed-observation ensemble Kalman filter |
 | **PF** | Bootstrap particle filter |
-| **CRF** | Cubature Recursive Filter (this work) |
+| **WSC-KF** | Wiener Space Cubature Kalman Filter (this work) |
 
 Baseline filters live in [`experiments/cd_dynamax_mirror/filters.py`](experiments/cd_dynamax_mirror/filters.py):
 faithful, dependency-light reimplementations of the
@@ -294,12 +294,12 @@ moment-ODE variants are unstable on that chaotic, sparsely observed problem.
 
 ```
 cubature-filtering/
-├── crf/                         # Installable library
-│   ├── __init__.py              # Public API: build_filter, CRFState, types
+├── wsckf/                         # Installable library
+│   ├── __init__.py              # Public API: build_filter, WSCKFState, types
 │   ├── library/                 # Wiener cubature paths + Ito/Stratonovich helpers
 │   │   ├── cubature_paths.py
 │   │   └── conversions.py
-│   └── filter/                  # High-level CRF + predict/update kernels
+│   └── filter/                  # High-level WSC-KF + predict/update kernels
 │       ├── cubature_filter.py
 │       ├── filtering.py
 │       └── types.py

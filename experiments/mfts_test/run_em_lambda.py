@@ -1,21 +1,21 @@
 """Gradient filter-MLE for MFTS ``λ``, compared apples-to-apples across filters.
 
-Shared setup for CRF / CD-EKF / CD-UKF / CD-EnKF / bootstrap PF:
+Shared setup for WSC-KF / CD-EKF / CD-UKF / CD-EnKF / bootstrap PF:
   same truth, matched F̄ schedule, same ``dt``/``dt0``, ``m0,P0,R``, ``λ₀``,
   same outer MLE budget.
 
 Gradients
 ---------
-* All filters — plain pathwise ``jax.value_and_grad`` (no CRF checkpoint / ODE adjoint).
-  CRF uses uncheckpointed scan VJP; EnKF/PF use a fixed RNG key (reparameterized noise).
+* All filters — plain pathwise ``jax.value_and_grad`` (no WSC-KF checkpoint / ODE adjoint).
+  WSC-KF uses uncheckpointed scan VJP; EnKF/PF use a fixed RNG key (reparameterized noise).
 
 Panels
 ------
-1. ``L(λ)`` (CRF once; EnKF/PF: mean ± std over seeds)
+1. ``L(λ)`` (WSC-KF once; EnKF/PF: mean ± std over seeds)
 2. MLE ``λ̂`` traces (all methods via plain AD)
 3. Plain-AD VJP cost vs series length ``N_obs``
 4. Peak RSS of one grad vs inner RK4 steps (fixed ``Δt``, ``N_obs``):
-   CRF ckpt ODE adjoint vs CD-EKF / CD-UKF pathwise VJP (memory probe only)
+   WSC-KF ckpt ODE adjoint vs CD-EKF / CD-UKF pathwise VJP (memory probe only)
 
 Run:
   python experiments/mfts_test/run_em_lambda.py
@@ -71,8 +71,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 from cuthbert import filter as run_filter
-from crf import build_filter
-from crf.library import default_recombined_num_paths
+from wsckf import build_filter
+from wsckf.library import default_recombined_num_paths
 from experiments.cd_dynamax_mirror.filters import (
     UKFParams,
     run_bootstrap_pf,
@@ -97,7 +97,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # ---------------------------------------------------------------------------
 
 _parser = argparse.ArgumentParser(
-    description="Filter MLE / sensitivity for MFTS λ (CRF vs EKF/UKF/EnKF/PF)"
+    description="Filter MLE / sensitivity for MFTS λ (WSC-KF vs EKF/UKF/EnKF/PF)"
 )
 _parser.add_argument("--seed", type=int, default=100)
 _parser.add_argument(
@@ -125,7 +125,7 @@ _parser.add_argument(
     "--skip-stochastic",
     action="store_true",
     dest="skip_stochastic",
-    help="Skip EnKF/PF (faster; keeps CRF-AD / CRF-FD / EKF / UKF)",
+    help="Skip EnKF/PF (faster; keeps WSC-KF-AD / WSC-KF-FD / EKF / UKF)",
 )
 _parser.add_argument(
     "--skip-adjoint-scaling",
@@ -142,7 +142,7 @@ _parser.add_argument(
     "--only-memory",
     action="store_true",
     dest="only_memory",
-    help="Only run the CRF-ckpt vs EKF/UKF peak-RSS vs N_steps plot",
+    help="Only run the WSC-KF-ckpt vs EKF/UKF peak-RSS vs N_steps plot",
 )
 _parser.add_argument(
     "--only-timing",
@@ -187,18 +187,18 @@ GRAD_CLIP_ALPHA = 50.0  # clip |∂L/∂α| for stochastic FD M-steps
 ALPHA_MIN = float(np.log(1e-6))
 ALPHA_MAX = float(np.log(5.0))
 
-CRF_NUM_PATHS = default_recombined_num_paths(2, CUBATURE_ORDER)
+WSCKF_NUM_PATHS = default_recombined_num_paths(2, CUBATURE_ORDER)
 
 COLORS = {
-    "CRF-AD": "#6A4C93",
-    "CRF-FD": "#9B5DE5",
+    "WSC-KF-AD": "#6A4C93",
+    "WSC-KF-FD": "#9B5DE5",
     "CD-EKF": "#2E86AB",
     "CD-UKF": "#3DA35D",
     "CD-EnKF": "#F6AE2D",
     "PF": "#F24236",
-    "CRF": "#6A4C93",  # alias for memory-probe labels
+    "WSC-KF": "#6A4C93",  # alias for memory-probe labels
 }
-AD_METHODS = ("CRF-AD", "CD-EKF", "CD-UKF", "CD-EnKF", "PF")
+AD_METHODS = ("WSC-KF-AD", "CD-EKF", "CD-UKF", "CD-EnKF", "PF")
 FD_METHODS = ()  # plain-AD run: no FD baselines in the MLE loop
 STOCH_METHODS = ("CD-EnKF", "PF")
 ALL_METHODS = AD_METHODS
@@ -228,16 +228,16 @@ def median_time(fn, *args, n: int = N_TIMING) -> float:
 
 
 def run_memory_scaling() -> list[dict]:
-    """Peak RSS vs N_steps: CRF ckpt ODE adjoint vs EKF/UKF pathwise VJP."""
-    print("\n=== Peak grad RSS vs inner RK4 steps (CRF ckpt vs EKF/UKF) ===")
+    """Peak RSS vs N_steps: WSC-KF ckpt ODE adjoint vs EKF/UKF pathwise VJP."""
+    print("\n=== Peak grad RSS vs inner RK4 steps (WSC-KF ckpt vs EKF/UKF) ===")
     # Hold assimilation interval and N_obs fixed; only refine dt0 = Δt / N_steps.
     probe = os.path.join(HERE, "grad_memory_probe.py")
     dt_mem = 30.0
     n_obs_mem = 32
     n_steps_grid = (50, 100, 200, 400, 800, 1600, 3200)
-    mem_methods = ("CRF-ckpt", "CD-EKF", "CD-UKF")
+    mem_methods = ("WSC-KF-ckpt", "CD-EKF", "CD-UKF")
     style = {
-        "CRF-ckpt": (COLORS["CRF"], "s-", "CRF ckpt ODE adjoint"),
+        "WSC-KF-ckpt": (COLORS["WSC-KF"], "s-", "WSC-KF ckpt ODE adjoint"),
         "CD-EKF": (COLORS["CD-EKF"], "^-", "CD-EKF VJP"),
         "CD-UKF": (COLORS["CD-UKF"], "v-", "CD-UKF VJP"),
     }
@@ -415,7 +415,7 @@ def _shift_dynamics(drift, diffusion, t0_abs: jnp.ndarray):
 # Filter log-likelihoods (shared objective family)
 # ---------------------------------------------------------------------------
 
-def build_crf(*, checkpoint_steps: bool, dt_=None, dt0_=None, ys_=None, n_obs_=None):
+def build_wsckf(*, checkpoint_steps: bool, dt_=None, dt0_=None, ys_=None, n_obs_=None):
     dt_ = dt if dt_ is None else dt_
     dt0_ = dt0 if dt0_ is None else dt0_
     ys_ = ys if ys_ is None else ys_
@@ -440,7 +440,7 @@ def build_crf(*, checkpoint_steps: bool, dt_=None, dt0_=None, ys_=None, n_obs_=N
         dt=dt_,
         integration_dt=dt0_,
         cubature_order=CUBATURE_ORDER,
-        num_paths=CRF_NUM_PATHS,
+        num_paths=WSCKF_NUM_PATHS,
         checkpoint_steps=checkpoint_steps,
         sde_form="ito",
     )
@@ -453,20 +453,20 @@ def model_inputs_for(lam: jnp.ndarray, n_obs_: int = N_OBS) -> StepInputs:
     )
 
 
-crf_scan = build_crf(checkpoint_steps=False)
-crf_ckpt = build_crf(checkpoint_steps=True)
-_run_crf_scan = jit(run_filter, static_argnames=["filter_obj"])
-_run_crf_ckpt = jit(run_filter, static_argnames=["filter_obj"])
+wsckf_scan = build_wsckf(checkpoint_steps=False)
+wsckf_ckpt = build_wsckf(checkpoint_steps=True)
+_run_wsckf_scan = jit(run_filter, static_argnames=["filter_obj"])
+_run_wsckf_ckpt = jit(run_filter, static_argnames=["filter_obj"])
 
 
-def crf_loglik(lam: jnp.ndarray, *, checkpoint: bool = True) -> jnp.ndarray:
-    filt = crf_ckpt if checkpoint else crf_scan
-    run = _run_crf_ckpt if checkpoint else _run_crf_scan
+def wsckf_loglik(lam: jnp.ndarray, *, checkpoint: bool = True) -> jnp.ndarray:
+    filt = wsckf_ckpt if checkpoint else wsckf_scan
+    run = _run_wsckf_ckpt if checkpoint else _run_wsckf_scan
     return run(filt, model_inputs_for(lam)).log_normalizing_constant[-1]
 
 
-def crf_states(lam: jnp.ndarray):
-    return _run_crf_ckpt(crf_ckpt, model_inputs_for(lam))
+def wsckf_states(lam: jnp.ndarray):
+    return _run_wsckf_ckpt(wsckf_ckpt, model_inputs_for(lam))
 
 
 def ekf_loglik(lam: jnp.ndarray, *, dt_=None, dt0_=None, ys_=None) -> jnp.ndarray:
@@ -518,10 +518,10 @@ def pf_loglik(lam: jnp.ndarray, key, *, dt_=None, dt0_=None, ys_=None) -> jnp.nd
 
 
 # Jitted pathwise value_and_grad on α = log(λ)
-# CRF-AD uses plain scan VJP (no checkpointed ODE adjoint).
-crf_vg_scan = jit(value_and_grad(lambda a: crf_loglik(jnp.exp(a), checkpoint=False)))
-crf_vg = crf_vg_scan  # alias: MLE / checks use plain AD
-crf_vg_ckpt = jit(value_and_grad(lambda a: crf_loglik(jnp.exp(a), checkpoint=True)))
+# WSC-KF-AD uses plain scan VJP (no checkpointed ODE adjoint).
+wsckf_vg_scan = jit(value_and_grad(lambda a: wsckf_loglik(jnp.exp(a), checkpoint=False)))
+wsckf_vg = wsckf_vg_scan  # alias: MLE / checks use plain AD
+wsckf_vg_ckpt = jit(value_and_grad(lambda a: wsckf_loglik(jnp.exp(a), checkpoint=True)))
 ekf_vg = jit(value_and_grad(lambda a: ekf_loglik(jnp.exp(a))))
 ukf_vg = jit(value_and_grad(lambda a: ukf_loglik(jnp.exp(a))))
 enkf_vg = jit(value_and_grad(lambda a: enkf_loglik(jnp.exp(a), key_enkf_em)))
@@ -551,8 +551,8 @@ def fd_value_and_grad_alpha(
 
 
 def ad_value_and_grad(name: str, alpha: jnp.ndarray):
-    if name == "CRF-AD":
-        return crf_vg(alpha)
+    if name == "WSC-KF-AD":
+        return wsckf_vg(alpha)
     if name == "CD-EKF":
         return ekf_vg(alpha)
     if name == "CD-UKF":
@@ -565,8 +565,8 @@ def ad_value_and_grad(name: str, alpha: jnp.ndarray):
 
 
 def fd_ll_fn(name: str, key=None):
-    if name == "CRF-FD":
-        return lambda lam: crf_loglik(lam)
+    if name == "WSC-KF-FD":
+        return lambda lam: wsckf_loglik(lam)
     if name == "CD-EnKF":
         return lambda lam: _enkf_ll_jit(lam, key)
     if name == "PF":
@@ -576,8 +576,8 @@ def fd_ll_fn(name: str, key=None):
 
 def loglik_scalar(name: str, lam: float, key=None) -> float:
     lam_j = jnp.asarray(lam, dtype=jnp.float64)
-    if name in ("CRF-AD", "CRF-FD", "CRF"):
-        return float(crf_loglik(lam_j))
+    if name in ("WSC-KF-AD", "WSC-KF-FD", "WSC-KF"):
+        return float(wsckf_loglik(lam_j))
     if name == "CD-EKF":
         return float(ekf_loglik(lam_j))
     if name == "CD-UKF":
@@ -597,9 +597,9 @@ if ONLY_TIMING:
     print("\n=== Skipping sensitivity / MLE (--only-timing) ===")
     lam_final = float("nan")
     L_final = float("nan")
-    lam_star_crf = float("nan")
+    lam_star_wsckf = float("nan")
     lam_moment0 = float("nan")
-    em_traces = {"CRF-AD": [{"lambda_after": float("nan"), "loglik": float("nan")}]}
+    em_traces = {"WSC-KF-AD": [{"lambda_after": float("nan"), "loglik": float("nan")}]}
     rss_before_em = peak_rss_mb()
     L_by_method = {}
     methods_plot: list[str] = []
@@ -639,7 +639,7 @@ else:
 
     alpha_warm = jnp.log(jnp.asarray(0.05, dtype=jnp.float64))
 
-    for vg in (crf_vg, ekf_vg, ukf_vg):
+    for vg in (wsckf_vg, ekf_vg, ukf_vg):
 
         jax.block_until_ready(vg(alpha_warm))
 
@@ -651,7 +651,7 @@ else:
 
 
 
-    for name in ("CRF-AD", "CD-EKF", "CD-UKF"):
+    for name in ("WSC-KF-AD", "CD-EKF", "CD-UKF"):
 
         vals = []
 
@@ -708,19 +708,19 @@ else:
 
 
 
-    # CRF gradient check (pathwise vs FD)
+    # WSC-KF gradient check (pathwise vs FD)
 
-    print("  CRF ∂L/∂λ AD vs FD (spot checks):")
+    print("  WSC-KF ∂L/∂λ AD vs FD (spot checks):")
 
     for lam in (1e-3, 0.05, 0.1, 1.0):
 
         a = jnp.log(jnp.asarray(lam, dtype=jnp.float64))
 
-        _, g_a = crf_vg(a)
+        _, g_a = wsckf_vg(a)
 
         g_ad = float(g_a) / lam
 
-        _, g_fd_a = fd_value_and_grad_alpha(lambda x: crf_loglik(x), a, eps=1e-4)
+        _, g_fd_a = fd_value_and_grad_alpha(lambda x: wsckf_loglik(x), a, eps=1e-4)
 
         g_fd = float(g_fd_a) / lam
 
@@ -736,7 +736,7 @@ else:
 
     for name in sens_plot:
 
-        label = "CRF" if name == "CRF-AD" else name
+        label = "WSC-KF" if name == "WSC-KF-AD" else name
 
         ax.plot(lam_grid, L_by_method[name], color=COLORS[name], lw=2.0, label=label)
 
@@ -768,7 +768,7 @@ else:
 
 
 
-    lam_star_crf = float(lam_grid[int(np.argmax(L_by_method["CRF-AD"]))])
+    lam_star_wsckf = float(lam_grid[int(np.argmax(L_by_method["WSC-KF-AD"]))])
 
 
 
@@ -830,7 +830,7 @@ else:
 
                 eps = FD_EPS_ALPHA_PF if name == "PF" else FD_EPS_ALPHA
 
-                clip = None if name == "CRF-FD" else GRAD_CLIP_ALPHA
+                clip = None if name == "WSC-KF-FD" else GRAD_CLIP_ALPHA
 
                 L, g_alpha = fd_value_and_grad_alpha(
 
@@ -896,13 +896,13 @@ else:
 
 
 
-    # Moment diagnostic from CRF filtered means at λ0
+    # Moment diagnostic from WSC-KF filtered means at λ0
 
-    crf_means = np.asarray(crf_states(jnp.asarray(LAMBDA0, dtype=jnp.float64)).mean)
+    wsckf_means = np.asarray(wsckf_states(jnp.asarray(LAMBDA0, dtype=jnp.float64)).mean)
 
-    times_min = np.arange(crf_means.shape[0]) * (HORIZON_MIN / N_OBS)
+    times_min = np.arange(wsckf_means.shape[0]) * (HORIZON_MIN / N_OBS)
 
-    F = crf_means[:, 4:6]
+    F = wsckf_means[:, 4:6]
 
     bar = np.stack([np.asarray(bar_F_schedule_jax(t)) * np.ones(2) for t in times_min])
 
@@ -992,42 +992,42 @@ else:
 
 
 
-    lam_final = em_traces["CRF-AD"][-1]["lambda_after"]
+    lam_final = em_traces["WSC-KF-AD"][-1]["lambda_after"]
 
-    L_final = em_traces["CRF-AD"][-1]["loglik"]
+    L_final = em_traces["WSC-KF-AD"][-1]["loglik"]
 
 
 
 # ---------------------------------------------------------------------------
-# 3. Gradient cost: plain pathwise AD (no CRF checkpoint/adjoint)
+# 3. Gradient cost: plain pathwise AD (no WSC-KF checkpoint/adjoint)
 # ---------------------------------------------------------------------------
 
-print("\n=== Gradient cost (plain pathwise AD; CRF scan, no ckpt/adjoint) ===")
+print("\n=== Gradient cost (plain pathwise AD; WSC-KF scan, no ckpt/adjoint) ===")
 alpha_bench = jnp.log(jnp.asarray(0.05, dtype=jnp.float64))
 
-jax.block_until_ready(crf_vg_scan(alpha_bench))
-jax.block_until_ready(crf_vg_ckpt(alpha_bench))
+jax.block_until_ready(wsckf_vg_scan(alpha_bench))
+jax.block_until_ready(wsckf_vg_ckpt(alpha_bench))
 jax.block_until_ready(ekf_vg(alpha_bench))
 jax.block_until_ready(ukf_vg(alpha_bench))
 
-fwd_t = median_time(lambda: crf_loglik(jnp.exp(alpha_bench), checkpoint=True))
-scan_t = median_time(lambda: crf_vg_scan(alpha_bench))
-ckpt_t = median_time(lambda: crf_vg_ckpt(alpha_bench))
+fwd_t = median_time(lambda: wsckf_loglik(jnp.exp(alpha_bench), checkpoint=True))
+scan_t = median_time(lambda: wsckf_vg_scan(alpha_bench))
+ckpt_t = median_time(lambda: wsckf_vg_ckpt(alpha_bench))
 ekf_t = median_time(lambda: ekf_vg(alpha_bench))
 ukf_t = median_time(lambda: ukf_vg(alpha_bench))
 
-(_, g_scan), (_, g_ckpt) = crf_vg_scan(alpha_bench), crf_vg_ckpt(alpha_bench)
+(_, g_scan), (_, g_ckpt) = wsckf_vg_scan(alpha_bench), wsckf_vg_ckpt(alpha_bench)
 _, g_ekf = ekf_vg(alpha_bench)
 _, g_ukf = ukf_vg(alpha_bench)
 
-crf_fd_t = median_time(
-    lambda: fd_value_and_grad_alpha(fd_ll_fn("CRF-FD"), alpha_bench, eps=FD_EPS_ALPHA)
+wsckf_fd_t = median_time(
+    lambda: fd_value_and_grad_alpha(fd_ll_fn("WSC-KF-FD"), alpha_bench, eps=FD_EPS_ALPHA)
 )
 
-print(f"  Forward CRF:                  {fwd_t:.4f}s")
-print(f"  CRF-AD VJP (scan):            {scan_t:.4f}s  (∂α={float(g_scan):+.4f})")
-print(f"  CRF-AD VJP (ckpt):            {ckpt_t:.4f}s  (∂α={float(g_ckpt):+.4f})")
-print(f"  CRF-FD (2× forward):          {crf_fd_t:.4f}s")
+print(f"  Forward WSC-KF:                  {fwd_t:.4f}s")
+print(f"  WSC-KF-AD VJP (scan):            {scan_t:.4f}s  (∂α={float(g_scan):+.4f})")
+print(f"  WSC-KF-AD VJP (ckpt):            {ckpt_t:.4f}s  (∂α={float(g_ckpt):+.4f})")
+print(f"  WSC-KF-FD (2× forward):          {wsckf_fd_t:.4f}s")
 print(f"  CD-EKF VJP:                   {ekf_t:.4f}s  (∂α={float(g_ekf):+.4f})")
 print(f"  CD-UKF VJP:                   {ukf_t:.4f}s  (∂α={float(g_ukf):+.4f})")
 
@@ -1042,12 +1042,12 @@ if not SKIP_STOCHASTIC:
     print(f"  CD-EnKF FD (2× forward):      {enkf_fd_t:.4f}s")
     print(f"  PF FD (2× forward):           {pf_fd_t:.4f}s")
 print(
-    "  Scaling plot: plain VJP for CRF/EKF/UKF/EnKF/PF (fixed key for stochastic)."
+    "  Scaling plot: plain VJP for WSC-KF/EKF/UKF/EnKF/PF (fixed key for stochastic)."
 )
 
 adjoint_scale_rows: list[dict] = []
 if not SKIP_ADJOINT_SCALING:
-    # Plain pathwise AD on every filter (CRF scan — no checkpointed ODE adjoint).
+    # Plain pathwise AD on every filter (WSC-KF scan — no checkpointed ODE adjoint).
     print("  Grad cost vs N_obs (plain pathwise AD, fixed Δt, dt0)...")
     dt_s = dt  # same assimilation interval as the main MLE run
     dt0_s = dt0
@@ -1069,12 +1069,12 @@ if not SKIP_ADJOINT_SCALING:
         )
         ys_s = jnp.asarray(ys_np_s)
 
-        filt_s = build_crf(
+        filt_s = build_wsckf(
             checkpoint_steps=False, dt_=dt_s, dt0_=dt0_s, ys_=ys_s, n_obs_=n_obs_s,
         )
         run_s = jit(run_filter, static_argnames=["filter_obj"])
 
-        def ll_crf_scan(alpha_, _fs=filt_s, _rs=run_s, _n=n_obs_s):
+        def ll_wsckf_scan(alpha_, _fs=filt_s, _rs=run_s, _n=n_obs_s):
             st = _rs(_fs, model_inputs_for(jnp.exp(alpha_), _n))
             return st.log_normalizing_constant[-1]
 
@@ -1084,13 +1084,13 @@ if not SKIP_ADJOINT_SCALING:
         def ll_ukf(alpha_, _ys=ys_s):
             return ukf_loglik(jnp.exp(alpha_), dt_=dt_s, dt0_=dt0_s, ys_=_ys)
 
-        vg_crf_s = jit(value_and_grad(ll_crf_scan))
+        vg_wsckf_s = jit(value_and_grad(ll_wsckf_scan))
         vg_ekf_s = jit(value_and_grad(ll_ekf))
         vg_ukf_s = jit(value_and_grad(ll_ukf))
-        for vg in (vg_crf_s, vg_ekf_s, vg_ukf_s):
+        for vg in (vg_wsckf_s, vg_ekf_s, vg_ukf_s):
             jax.block_until_ready(vg(alpha_bench))
 
-        t_crf = median_time(lambda: vg_crf_s(alpha_bench), n=max(2, N_TIMING))
+        t_wsckf = median_time(lambda: vg_wsckf_s(alpha_bench), n=max(2, N_TIMING))
         t_ekf = median_time(lambda: vg_ekf_s(alpha_bench), n=max(2, N_TIMING))
         t_ukf = median_time(lambda: vg_ukf_s(alpha_bench), n=max(2, N_TIMING))
 
@@ -1098,7 +1098,7 @@ if not SKIP_ADJOINT_SCALING:
             n_obs=n_obs_s,
             n_sub=n_sub,
             horizon_min=horizon_min_s,
-            t_crf_scan=t_crf,
+            t_wsckf_scan=t_wsckf,
             t_ekf=t_ekf,
             t_ukf=t_ukf,
         )
@@ -1132,14 +1132,14 @@ if not SKIP_ADJOINT_SCALING:
             extra = f"  EnKF-AD {row['t_enkf_ad']:.3f}s  PF-AD {row['t_pf_ad']:.3f}s"
         print(
             f"    N_obs={n_obs_s:3d}  (T={horizon_min_s:.1f} min):  "
-            f"CRF-AD {t_crf:.3f}s  EKF {t_ekf:.3f}s  UKF {t_ukf:.3f}s{extra}"
+            f"WSC-KF-AD {t_wsckf:.3f}s  EKF {t_ekf:.3f}s  UKF {t_ukf:.3f}s{extra}"
         )
 
     if adjoint_scale_rows:
         fig, ax = plt.subplots(figsize=(7.6, 4.4))
         ns = [r["n_obs"] for r in adjoint_scale_rows]
-        ax.plot(ns, [r["t_crf_scan"] for r in adjoint_scale_rows], "s-",
-                color=COLORS["CRF-AD"], label="CRF-AD (plain VJP)")
+        ax.plot(ns, [r["t_wsckf_scan"] for r in adjoint_scale_rows], "s-",
+                color=COLORS["WSC-KF-AD"], label="WSC-KF-AD (plain VJP)")
         ax.plot(ns, [r["t_ekf"] for r in adjoint_scale_rows], "^-",
                 color=COLORS["CD-EKF"], label="CD-EKF VJP")
         ax.plot(ns, [r["t_ukf"] for r in adjoint_scale_rows], "v-",
@@ -1156,7 +1156,7 @@ if not SKIP_ADJOINT_SCALING:
         ax.grid(True, alpha=0.25, which="both")
         ax.set_title(
             f"Plain pathwise AD grad cost vs series length\n"
-            f"(no CRF checkpoint/adjoint; Δt={dt_s:g}s, dt0={dt0_s:g}s, {n_sub} RK4 steps/Δt)"
+            f"(no WSC-KF checkpoint/adjoint; Δt={dt_s:g}s, dt0={dt0_s:g}s, {n_sub} RK4 steps/Δt)"
         )
         fig.tight_layout()
         fig.savefig(
@@ -1171,9 +1171,9 @@ if ONLY_TIMING:
         w = csv.writer(f)
         w.writerow(["section", "key", "value"])
         w.writerow(["setup", "mode", "plain_pathwise_ad"])
-        w.writerow(["timing", "crf_forward_s", fwd_t])
-        w.writerow(["timing", "crf_vjp_scan_s", scan_t])
-        w.writerow(["timing", "crf_vjp_ckpt_s", ckpt_t])
+        w.writerow(["timing", "wsckf_forward_s", fwd_t])
+        w.writerow(["timing", "wsckf_vjp_scan_s", scan_t])
+        w.writerow(["timing", "wsckf_vjp_ckpt_s", ckpt_t])
         w.writerow(["timing", "ekf_vjp_s", ekf_t])
         w.writerow(["timing", "ukf_vjp_s", ukf_t])
         for r in adjoint_scale_rows:
@@ -1185,7 +1185,7 @@ if ONLY_TIMING:
 
 
 # ---------------------------------------------------------------------------
-# 4. Peak RSS vs N_steps (CRF ckpt ODE adjoint vs EKF/UKF VJP)
+# 4. Peak RSS vs N_steps (WSC-KF ckpt ODE adjoint vs EKF/UKF VJP)
 # ---------------------------------------------------------------------------
 
 memory_rows: list[dict] = []
@@ -1205,18 +1205,18 @@ with open(summary_path, "w", newline="") as f:
     w.writerow(["setup", "lambda0", LAMBDA0])
     w.writerow(["setup", "n_obs", N_OBS])
     w.writerow(["setup", "cubature_order", CUBATURE_ORDER])
-    w.writerow(["setup", "num_paths", CRF_NUM_PATHS])
+    w.writerow(["setup", "num_paths", WSCKF_NUM_PATHS])
     w.writerow(["setup", "enkf_particles", ENKF_PARTICLES])
     w.writerow(["setup", "pf_particles", PF_PARTICLES])
     w.writerow(["setup", "skip_stochastic", SKIP_STOCHASTIC])
-    w.writerow(["result", "crf_lambda_hat", lam_final])
-    w.writerow(["result", "crf_loglik_final", L_final])
-    w.writerow(["result", "crf_lambda_grid_argmax", lam_star_crf])
+    w.writerow(["result", "wsckf_lambda_hat", lam_final])
+    w.writerow(["result", "wsckf_loglik_final", L_final])
+    w.writerow(["result", "wsckf_lambda_grid_argmax", lam_star_wsckf])
     w.writerow(["result", "moment_mstep_lambda0", lam_moment0])
-    w.writerow(["timing", "crf_forward_s", fwd_t])
-    w.writerow(["timing", "crf_vjp_scan_s", scan_t])
-    w.writerow(["timing", "crf_vjp_ckpt_s", ckpt_t])
-    w.writerow(["timing", "crf_fd_s", crf_fd_t])
+    w.writerow(["timing", "wsckf_forward_s", fwd_t])
+    w.writerow(["timing", "wsckf_vjp_scan_s", scan_t])
+    w.writerow(["timing", "wsckf_vjp_ckpt_s", ckpt_t])
+    w.writerow(["timing", "wsckf_fd_s", wsckf_fd_t])
     w.writerow(["timing", "ekf_vjp_s", ekf_t])
     w.writerow(["timing", "ukf_vjp_s", ukf_t])
     w.writerow(["timing", "enkf_fd_s", enkf_fd_t])
@@ -1254,7 +1254,7 @@ for name in methods_plot:
     )
 print("=" * 72)
 print(
-    f"λ_true={LAMBDA_TRUE}  λ0={LAMBDA0}  CRF P={CRF_NUM_PATHS} k={CUBATURE_ORDER}  "
+    f"λ_true={LAMBDA_TRUE}  λ0={LAMBDA0}  WSC-KF P={WSCKF_NUM_PATHS} k={CUBATURE_ORDER}  "
     f"N_obs={N_OBS}"
 )
 print(f"Wrote plots + {summary_path}")

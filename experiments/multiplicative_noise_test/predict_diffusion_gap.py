@@ -1,4 +1,4 @@
-"""Isolating the state-dependent (multiplicative) diffusion gap: CRF vs CD-EKF/UKF/CKF.
+"""Isolating the state-dependent (multiplicative) diffusion gap: WSC-KF vs CD-EKF/UKF/CKF.
 
 We compare the *predict* (time-update) step only, over a single assimilation
 interval of length ``delta``, on a scalar geometric-Brownian-motion (GBM) SDE
@@ -14,7 +14,7 @@ GBM is the clean isolating case:
 * The diffusion ``sigma*x`` is genuinely multiplicative, and ``b(x)^2 = sigma^2 x^2``
   is *quadratic*, so E[b^2] = sigma^2 (m^2 + P) depends on the state variance P.
   The CD moment-ODE filters freeze the diffusion at the mean (add sigma^2 m^2),
-  missing the ``sigma^2 P`` contribution; the CRF integrates sigma*x along the
+  missing the ``sigma^2 P`` contribution; the WSC-KF integrates sigma*x along the
   actual propagated state, capturing it.  CD-CKF (spherical-radial) and CD-UKF
   share this freeze, so they do not escape the gap relative to CD-EKF here.
 * The predicted moments over a Gaussian prior have a **closed form**, giving an
@@ -46,7 +46,7 @@ import matplotlib.pyplot as plt
 
 jax.config.update("jax_enable_x64", True)
 
-# --- Make the CRF package and the cd_dynamax_mirror baselines importable -------
+# --- Make the WSC-KF package and the cd_dynamax_mirror baselines importable -------
 EXPERIMENTS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 ROOT_DIR = os.path.abspath(os.path.join(EXPERIMENTS_DIR, ".."))
 sys.path.insert(0, EXPERIMENTS_DIR)
@@ -54,7 +54,7 @@ sys.path.insert(0, ROOT_DIR)
 
 from cd_dynamax_mirror.filters import UKFParams, _ekf_predict, _ukf_predict, _ukf_weights
 
-from crf.library import ito_to_stratonovich_dynamics, precompute_cubature_paths, predict
+from wsckf.library import ito_to_stratonovich_dynamics, precompute_cubature_paths, predict
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -67,7 +67,7 @@ SIGMA = 0.6
 M0 = 1.0
 P0 = 0.25  # initial state variance (std 0.5); drives the sigma^2 * P0 gap
 
-CUBATURE_ORDER = 3  # CRF Lyons macro-segments (k); 3^k = 27 paths in 1D
+CUBATURE_ORDER = 3  # WSC-KF Lyons macro-segments (k); 3^k = 27 paths in 1D
 INNER_DT = 0.005  # inner RK4 step; kept small so discretization error << closure error
 MC_SAMPLES = 2_000_000
 
@@ -87,7 +87,7 @@ def qc_fn(t, x):
     return jnp.eye(1)
 
 
-# CRF integrates in Stratonovich form; convert the Ito drift once.
+# WSC-KF integrates in Stratonovich form; convert the Ito drift once.
 strat_drift, strat_diffusion = ito_to_stratonovich_dynamics(ito_drift, diffusion)
 
 
@@ -111,7 +111,7 @@ def mc_moments(delta: float, rng: np.random.Generator):
 # ---------------------------------------------------------------------------
 # Filter predict steps (single interval [0, delta])
 # ---------------------------------------------------------------------------
-def crf_predict(delta: float):
+def wsckf_predict(delta: float):
     n_inner = max(1, int(round(delta / INNER_DT)))
     integration_dt = delta / n_inner
     ts, path_values, path_weights = precompute_cubature_paths(
@@ -171,7 +171,7 @@ def main():
     for d in deltas:
         ex_m, ex_v = exact_moments(d)
         mc_m, mc_v = mc_moments(d, rng)
-        crf_m, crf_v = crf_predict(d)
+        wsckf_m, wsckf_v = wsckf_predict(d)
         ekf_m, ekf_v = ekf_predict(d)
         ukf_m, ukf_v = ukf_predict(d)
         ckf_m, ckf_v = ckf_predict(d)
@@ -180,7 +180,7 @@ def main():
                 delta=d,
                 exact_mean=ex_m, exact_var=ex_v,
                 mc_mean=mc_m, mc_var=mc_v,
-                crf_mean=crf_m, crf_var=crf_v,
+                wsckf_mean=wsckf_m, wsckf_var=wsckf_v,
                 ekf_mean=ekf_m, ekf_var=ekf_v,
                 ukf_mean=ukf_m, ukf_var=ukf_v,
                 ckf_mean=ckf_m, ckf_var=ckf_v,
@@ -191,19 +191,19 @@ def main():
         return abs(a - b) / abs(b)
 
     # ----- console summary -----
-    print(f"GBM  mu={MU}  sigma={SIGMA}  m0={M0}  P0={P0}  (CRF k={CUBATURE_ORDER})")
+    print(f"GBM  mu={MU}  sigma={SIGMA}  m0={M0}  P0={P0}  (WSC-KF k={CUBATURE_ORDER})")
     print("MC validates the closed form (rel err of MC vs exact var, largest delta):")
     print(f"  {rel(rows[-1]['mc_var'], rows[-1]['exact_var']):.2e}\n")
     hdr = (
         f"{'delta':>7} | {'exact var':>10} | "
-        f"{'CRF':>9} {'CD-EKF':>9} {'CD-UKF':>9} {'CD-CKF':>9}  (rel err in var)"
+        f"{'WSC-KF':>9} {'CD-EKF':>9} {'CD-UKF':>9} {'CD-CKF':>9}  (rel err in var)"
     )
     print(hdr)
     print("-" * len(hdr))
     for r in rows:
         print(
             f"{r['delta']:7.3f} | {r['exact_var']:10.4f} | "
-            f"{rel(r['crf_var'], r['exact_var']):9.2e} "
+            f"{rel(r['wsckf_var'], r['exact_var']):9.2e} "
             f"{rel(r['ekf_var'], r['exact_var']):9.2e} "
             f"{rel(r['ukf_var'], r['exact_var']):9.2e} "
             f"{rel(r['ckf_var'], r['exact_var']):9.2e}"
@@ -219,25 +219,25 @@ def main():
     # ----- plot -----
     d_arr = np.array([r["delta"] for r in rows])
     var_err = {
-        "CRF (Wiener cubature)": np.array([rel(r["crf_var"], r["exact_var"]) for r in rows]),
+        "WSC-KF (Wiener cubature)": np.array([rel(r["wsckf_var"], r["exact_var"]) for r in rows]),
         "CD-EKF (moment ODE)": np.array([rel(r["ekf_var"], r["exact_var"]) for r in rows]),
         "CD-UKF (moment ODE)": np.array([rel(r["ukf_var"], r["exact_var"]) for r in rows]),
         "CD-CKF (moment ODE)": np.array([rel(r["ckf_var"], r["exact_var"]) for r in rows]),
     }
     mean_err = {
-        "CRF (Wiener cubature)": np.array([rel(r["crf_mean"], r["exact_mean"]) for r in rows]),
+        "WSC-KF (Wiener cubature)": np.array([rel(r["wsckf_mean"], r["exact_mean"]) for r in rows]),
         "CD-EKF (moment ODE)": np.array([rel(r["ekf_mean"], r["exact_mean"]) for r in rows]),
         "CD-UKF (moment ODE)": np.array([rel(r["ukf_mean"], r["exact_mean"]) for r in rows]),
         "CD-CKF (moment ODE)": np.array([rel(r["ckf_mean"], r["exact_mean"]) for r in rows]),
     }
     colors = {
-        "CRF (Wiener cubature)": "C2",
+        "WSC-KF (Wiener cubature)": "C2",
         "CD-EKF (moment ODE)": "C3",
         "CD-UKF (moment ODE)": "C0",
         "CD-CKF (moment ODE)": "#2E86AB",
     }
     markers = {
-        "CRF (Wiener cubature)": "o",
+        "WSC-KF (Wiener cubature)": "o",
         "CD-EKF (moment ODE)": "s",
         "CD-UKF (moment ODE)": "^",
         "CD-CKF (moment ODE)": "D",
@@ -264,7 +264,7 @@ def main():
     axm.legend()
 
     fig.suptitle(
-        f"CRF vs CD moment-ODE predict on GBM  "
+        f"WSC-KF vs CD moment-ODE predict on GBM  "
         f"dx = {MU}x dt + {SIGMA}x dW,  x(0)~N({M0},{P0})",
         fontsize=12,
     )

@@ -1,4 +1,4 @@
-"""Algorithm-in-one-picture: Cubature Recursive Filter pipeline.
+"""Algorithm-in-one-picture: Wiener Space Cubature Kalman Filter pipeline.
 
 Four-step horizontal diagram for talks:
   1. Gaussian posterior
@@ -299,7 +299,7 @@ def main() -> None:
     ax.text(
         0.5,
         0.94,
-        "Cubature Recursive Filter — one cycle",
+        "Wiener Space Cubature Kalman Filter — one cycle",
         transform=ax.transAxes,
         ha="center",
         va="top",

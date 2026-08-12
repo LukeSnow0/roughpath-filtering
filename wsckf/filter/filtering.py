@@ -1,6 +1,6 @@
-"""Implements the Cubature Recursive Filter (CRF) predict and update steps.
+"""Implements the Wiener Space Cubature Kalman Filter (WSC-KF) predict and update steps.
 
-The CRF treats the filtering distribution as **Gaussian** (mean + Cholesky
+The WSC-KF treats the filtering distribution as **Gaussian** (mean + Cholesky
 covariance) but performs the *predict* step by propagating spatial cubature
 nodes along a small set of deterministic Wiener-space cubature paths through the
 nonlinear Stratonovich SDE, with **no Jacobian and no Monte-Carlo sampling**.
@@ -155,7 +155,7 @@ def predict(
     *,
     checkpoint_steps: bool = False,
 ) -> Tuple[Array, Array, Array, Array]:
-    """CRF predict: propagate cubature nodes along Wiener paths, collapse to moments.
+    """WSC-KF predict: propagate cubature nodes along Wiener paths, collapse to moments.
 
     Args:
         mean: Filtering mean from the previous step, shape ``(x_dim,)``.

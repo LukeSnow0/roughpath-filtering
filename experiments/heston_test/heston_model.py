@@ -35,7 +35,7 @@ class HestonParams:
 
 
 def make_heston_dynamics(p: HestonParams):
-    """Return ``(drift, L, Qc, obs, R)`` for CD / CRF filters."""
+    """Return ``(drift, L, Qc, obs, R)`` for CD / WSC-KF filters."""
     mu, kappa, theta, xi, rho = p.mu, p.kappa, p.theta, p.xi, p.rho
     v_eps = p.v_eps
     diff_scale = p.diff_scale

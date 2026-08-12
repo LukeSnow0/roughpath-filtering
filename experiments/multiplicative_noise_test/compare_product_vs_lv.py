@@ -50,7 +50,7 @@ for p in (EXPERIMENTS_DIR, ROOT_DIR, HERE):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from crf.library import ito_to_stratonovich_dynamics, precompute_cubature_paths, predict
+from wsckf.library import ito_to_stratonovich_dynamics, precompute_cubature_paths, predict
 from lyons_victoir_paths import precompute_lv_paths
 
 OUTPUT_DIR = os.path.join(HERE, "output")

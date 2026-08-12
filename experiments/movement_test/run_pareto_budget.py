@@ -2,13 +2,13 @@
 
 Protocol
 --------
-* Shared parameters ``(τ_v, σ_v)`` fixed at the CRF/EnKF consensus MLE from
+* Shared parameters ``(τ_v, σ_v)`` fixed at the WSC-KF/EnKF consensus MLE from
   ``run_movement_mle.py`` (defaults ``τ_v=0.75``, ``σ_v=2.6``). No per-budget
   refit — isolates SDE-propagator efficiency.
 * Filter the full track; score **held-out NLL / obs** on the suffix after a
   train warmup prefix (default 70% / 30%).
-* Fair wall-clock: CRF product Lyons paths vs **RK4** EnKF (match integrators).
-* EnKF averaged over RNG seeds (stochastic likelihood); CRF/EKF are deterministic.
+* Fair wall-clock: WSC-KF product Lyons paths vs **RK4** EnKF (match integrators).
+* EnKF averaged over RNG seeds (stochastic likelihood); WSC-KF/EKF are deterministic.
 
 Primary plot: wall-clock (ms) vs held-out NLL/obs.
 
@@ -16,7 +16,7 @@ Run:
   uv run --extra experiments python experiments/movement_test/run_pareto_budget.py
   uv run --extra experiments python experiments/movement_test/run_pareto_budget.py \\
       --n-obs 600 --holdout-frac 0.3 --enkf 25,50,100,200,500 \\
-      --crf-max-paths 81 --n-timing 3
+      --wsckf-max-paths 81 --n-timing 3
 
 Outputs under ``experiments/movement_test/output/``:
   ``pareto_budget_vs_nll.png``
@@ -56,8 +56,8 @@ import matplotlib.pyplot as plt
 jax.config.update("jax_enable_x64", True)
 
 from cuthbert import filter as run_filter
-from crf import build_filter
-from crf.library import product_path_count
+from wsckf import build_filter
+from wsckf.library import product_path_count
 from cd_dynamax_mirror.filters import run_cd_ekf, run_cd_enkf
 
 from movement_data import load_duck_track
@@ -87,7 +87,7 @@ def _parse_ints(s: str) -> list[int]:
 
 
 @dataclass(frozen=True)
-class CrfConfig:
+class WSCKFConfig:
     family: str
     label: str
     n_paths: int
@@ -96,9 +96,9 @@ class CrfConfig:
     method: str = "product"  # product | recombined
 
 
-def default_product_ladder(noise_dim: int = 2, max_paths: int = 81) -> list[CrfConfig]:
+def default_product_ladder(noise_dim: int = 2, max_paths: int = 81) -> list[WSCKFConfig]:
     specs = [(3, 1), (5, 1), (3, 2), (3, 3), (5, 2), (3, 4), (5, 3)]
-    configs: list[CrfConfig] = []
+    configs: list[WSCKFConfig] = []
     seen: set[int] = set()
     for m, k in specs:
         n = product_path_count(noise_dim, k, lyons_degree=m)
@@ -106,8 +106,8 @@ def default_product_ladder(noise_dim: int = 2, max_paths: int = 81) -> list[CrfC
             continue
         seen.add(n)
         configs.append(
-            CrfConfig(
-                family="CRF-product",
+            WSCKFConfig(
+                family="WSC-KF-product",
                 label=f"prod-m{m}-k{k}",
                 n_paths=n,
                 k=k,
@@ -118,10 +118,10 @@ def default_product_ladder(noise_dim: int = 2, max_paths: int = 81) -> list[CrfC
     return sorted(configs, key=lambda c: c.n_paths)
 
 
-def recombined_configs(budgets: list[int], k: int = 3) -> list[CrfConfig]:
+def recombined_configs(budgets: list[int], k: int = 3) -> list[WSCKFConfig]:
     return [
-        CrfConfig(
-            family="CRF-recombined",
+        WSCKFConfig(
+            family="WSC-KF-recombined",
             label=f"rec-P{n}",
             n_paths=n,
             k=k,
@@ -149,21 +149,21 @@ _parser.add_argument(
     type=float,
     default=0.75,
     dest="tau_v",
-    help="Fixed τ_v (h); default ≈ CRF/EnKF consensus MLE",
+    help="Fixed τ_v (h); default ≈ WSC-KF/EnKF consensus MLE",
 )
 _parser.add_argument(
     "--sigma-v",
     type=float,
     default=2.6,
     dest="sigma_v",
-    help="Fixed σ_v (km/h); default ≈ CRF/EnKF consensus MLE",
+    help="Fixed σ_v (km/h); default ≈ WSC-KF/EnKF consensus MLE",
 )
 _parser.add_argument("--dt0", type=float, default=0.1, help="inner RK4 step (hours)")
 _parser.add_argument(
-    "--crf-max-paths",
+    "--wsckf-max-paths",
     type=int,
     default=81,
-    dest="crf_max_paths",
+    dest="wsckf_max_paths",
     help="Include product (m,k) configs with exact path count ≤ this",
 )
 _parser.add_argument(
@@ -202,7 +202,7 @@ _parser.add_argument(
 _parser.add_argument(
     "--skip-recombined",
     action="store_true",
-    help="Omit CRF-recombined ladder",
+    help="Omit WSC-KF-recombined ladder",
 )
 _args = _parser.parse_args()
 
@@ -215,10 +215,10 @@ DT0 = float(_args.dt0)
 TAU_V = float(_args.tau_v)
 SIGMA_V = float(_args.sigma_v)
 
-CRF_CONFIGS = default_product_ladder(2, max_paths=_args.crf_max_paths)
+WSCKF_CONFIGS = default_product_ladder(2, max_paths=_args.wsckf_max_paths)
 if not _args.skip_recombined and _args.recombined.strip():
-    CRF_CONFIGS = sorted(
-        CRF_CONFIGS + recombined_configs(_parse_ints(_args.recombined), k=3),
+    WSCKF_CONFIGS = sorted(
+        WSCKF_CONFIGS + recombined_configs(_parse_ints(_args.recombined), k=3),
         key=lambda c: (c.family, c.n_paths),
     )
 
@@ -250,7 +250,7 @@ print(
     f"θ*=(τ_v={TAU_V:g}, σ_v={SIGMA_V:g})  solver={SOLVER}"
 )
 print(
-    f"CRF configs={[c.label + f'({c.n_paths})' for c in CRF_CONFIGS]}  "
+    f"WSC-KF configs={[c.label + f'({c.n_paths})' for c in WSCKF_CONFIGS]}  "
     f"EnKF particles={ENKF_PARTICLE_LIST}  enkf_seeds={ENKF_SEEDS}"
 )
 
@@ -258,7 +258,7 @@ print(
 def heldout_nll_per_obs(cum_ll, n_train: int, n_obs: int) -> float:
     """Incremental NLL on obs[n_train:] from a cumulative loglik array.
 
-    CRF ``log_normalizing_constant`` has length ``n_obs+1`` (index 0 = prior).
+    WSC-KF ``log_normalizing_constant`` has length ``n_obs+1`` (index 0 = prior).
     CD filters ``cum_loglik`` has length ``n_obs`` (index ``i`` = after obs ``i``).
     """
     ll = np.asarray(cum_ll, dtype=np.float64)
@@ -315,7 +315,7 @@ def score(
     )
 
 
-def build_crf(cfg: CrfConfig):
+def build_wsckf(cfg: WSCKFConfig):
     model_inputs = jnp.arange(N_OBS + 1)
 
     def get_init_params(_mi):
@@ -349,15 +349,15 @@ def build_crf(cfg: CrfConfig):
 # ---------------------------------------------------------------------------
 # Run ladder
 # ---------------------------------------------------------------------------
-_run_crf = jit(run_filter, static_argnames=["filter_obj"])
+_run_wsckf = jit(run_filter, static_argnames=["filter_obj"])
 
-for cfg in CRF_CONFIGS:
+for cfg in WSCKF_CONFIGS:
     if cfg.method == "product":
         n_expect = product_path_count(2, cfg.k, lyons_degree=cfg.lyons_degree)
         if n_expect != cfg.n_paths:
             raise RuntimeError(f"config mismatch: {cfg} vs product count {n_expect}")
-    filt, mi = build_crf(cfg)
-    states, wall = time_call(lambda f=filt, m=mi: _run_crf(f, m))
+    filt, mi = build_wsckf(cfg)
+    states, wall = time_call(lambda f=filt, m=mi: _run_wsckf(f, m))
     score(
         cfg.family,
         cfg.label,
@@ -535,24 +535,24 @@ with open(CSV_PATH, "w", newline="") as f:
 # Plot
 # ---------------------------------------------------------------------------
 COLORS = {
-    "CRF-product": "#2ca02c",
-    "CRF-recombined": "#98df8a",
+    "WSC-KF-product": "#2ca02c",
+    "WSC-KF-recombined": "#98df8a",
     "CD-EnKF": "#1f77b4",
     "CD-EKF": "#d62728",
 }
 MARKERS = {
-    "CRF-product": "*",
-    "CRF-recombined": "P",
+    "WSC-KF-product": "*",
+    "WSC-KF-recombined": "P",
     "CD-EnKF": "o",
     "CD-EKF": "s",
 }
 DISPLAY = {
-    "CRF-product": "CRF (product)",
-    "CRF-recombined": "CRF (recombined)",
+    "WSC-KF-product": "WSC-KF (product)",
+    "WSC-KF-recombined": "WSC-KF (recombined)",
     "CD-EnKF": "CD-EnKF",
     "CD-EKF": "CD-EKF",
 }
-PLOT_ORDER = ["CRF-product", "CRF-recombined", "CD-EnKF", "CD-EKF"]
+PLOT_ORDER = ["WSC-KF-product", "WSC-KF-recombined", "CD-EnKF", "CD-EKF"]
 BAND_SCALE = 0.5
 
 

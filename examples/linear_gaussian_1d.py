@@ -1,4 +1,4 @@
-"""Minimal CRF example: 1D Ornstein–Uhlenbeck process with linear observations.
+"""Minimal WSC-KF example: 1D Ornstein–Uhlenbeck process with linear observations.
 
 Model (Stratonovich):
     dx = -kappa * x dt + sigma dW
@@ -16,7 +16,7 @@ import jax.numpy as jnp
 from cuthbert import filter as run_filter
 from jax import jit
 
-from crf import build_filter
+from wsckf import build_filter
 
 jax.config.update("jax_enable_x64", True)
 

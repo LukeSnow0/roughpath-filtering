@@ -1,6 +1,6 @@
-# Cubature Recursive Filter (CRF)
+# Wiener Space Cubature Kalman Filter (WSC-KF)
 
-This sub-repository provides modular functions for the Cubature Recursive Filter.
+This sub-repository provides modular functions for the Wiener Space Cubature Kalman Filter.
 
 The core functions are:
 
@@ -15,7 +15,7 @@ cubature paths and weights. These depend only on the assimilation interval, the
 Brownian dimension and the cubature order, so they are precomputed once and
 treated as static constants by the JAX kernels.
 
-The CRF treats the filtering distribution as Gaussian (like the EKF/EnKF) but,
+The WSC-KF treats the filtering distribution as Gaussian (like the EKF/EnKF) but,
 unlike the EKF, requires no Jacobian of the dynamics, and unlike the EnKF/PF,
 uses a small set of *deterministic* cubature paths rather than Monte-Carlo
 samples. Two multidimensional path constructions are available: `product`

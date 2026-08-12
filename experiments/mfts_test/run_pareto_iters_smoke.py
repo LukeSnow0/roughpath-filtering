@@ -1,7 +1,7 @@
-"""Smoke test: iterated EKF / UKF / CRF Pareto (wall-clock vs MAPE).
+"""Smoke test: iterated EKF / UKF / WSC-KF Pareto (wall-clock vs MAPE).
 
 Sweeps measurement-update iterations at fixed Δt with one seed and a small
-product CRF (9 paths). Intentionally cheap vs ``run_pareto_budget.py``.
+product WSC-KF (9 paths). Intentionally cheap vs ``run_pareto_budget.py``.
 
 Run:
   uv run --extra experiments python experiments/mfts_test/run_pareto_iters_smoke.py
@@ -45,7 +45,7 @@ jax.config.update("jax_enable_x64", True)
 
 from experiments.cd_dynamax_mirror.filters import UKFParams, run_cd_ekf, run_cd_ukf
 from cuthbert import filter as run_filter
-from crf import build_filter
+from wsckf import build_filter
 
 from mfts_model import (
     MFTSParams,
@@ -58,7 +58,7 @@ from mfts_model import (
 OUTPUT_DIR = os.path.join(HERE, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-_parser = argparse.ArgumentParser(description="Smoke Pareto: iterated EKF/UKF/CRF")
+_parser = argparse.ArgumentParser(description="Smoke Pareto: iterated EKF/UKF/WSC-KF")
 _parser.add_argument("--seed", type=int, default=100)
 _parser.add_argument("--delta", type=float, default=1.0)
 _parser.add_argument("--iters", type=str, default="1,2,3,5")
@@ -76,11 +76,11 @@ DT_TRUTH = 0.015
 DT_FILTER = 0.15
 LAMBDA_SIM, SIGMA_SIM = 0.1, 5.0
 LAMBDA_EKF_UKF, SIGMA_EKF = 0.0, 5.0
-LAMBDA_CRF, SIGMA_CRF = 2.0e-3, 5.0
+LAMBDA_WSCKF, SIGMA_WSCKF = 2.0e-3, 5.0
 SIGMA_UKF = 1.0
 F1, F2 = 5.0, 5.0
 
-COLORS = {"EKF": "#2E86AB", "UKF": "#3DA35D", "CRF": "#6A4C93"}
+COLORS = {"EKF": "#2E86AB", "UKF": "#3DA35D", "WSC-KF": "#6A4C93"}
 
 
 def time_call(fn, *args):
@@ -190,8 +190,8 @@ drift_ukf, L_ukf, _, _, _ = make_mfts_dynamics(
     p, lambda_dist=LAMBDA_EKF_UKF, sigma_dist=SIGMA_UKF,
     bar_F3=bar_est, bar_F4=bar_est, F1=F1, F2=F2,
 )
-drift_crf, L_crf, _, _, _ = make_mfts_dynamics(
-    p, lambda_dist=LAMBDA_CRF, sigma_dist=SIGMA_CRF,
+drift_wsckf, L_wsckf, _, _, _ = make_mfts_dynamics(
+    p, lambda_dist=LAMBDA_WSCKF, sigma_dist=SIGMA_WSCKF,
     bar_F3=bar_est, bar_F4=bar_est, F1=F1, F2=F2,
 )
 
@@ -234,10 +234,10 @@ for n_iter in ITERS:
     res, wall = time_call(ukf_jit)
     score("UKF", n_iter, stack_estimates(m0, res.means), float(res.cum_loglik[-1]), wall, drift_ukf)
 
-    # Exact product CRF: m=5, k=1 → 9 paths
-    crf = build_filter(
+    # Exact product WSC-KF: m=5, k=1 → 9 paths
+    wsckf = build_filter(
         get_init_params=lambda mi: (m0, chol_P0),
-        get_dynamics=lambda mi: (lambda t, x: drift_crf(t, x), lambda t, x: L_crf(t, x)),
+        get_dynamics=lambda mi: (lambda t, x: drift_wsckf(t, x), lambda t, x: L_wsckf(t, x)),
         get_observations=lambda mi: (obs_fn, chol_R, ys[mi - 1]),
         noise_dim=2,
         dt=dt,
@@ -247,15 +247,15 @@ for n_iter in ITERS:
         multidim_paths="product",
         num_iter=n_iter,
     )
-    crf_jit = jit(run_filter, static_argnames=["filter_obj"])
-    states, wall = time_call(lambda f=crf_jit, filt=crf: f(filt, model_inputs))
+    wsckf_jit = jit(run_filter, static_argnames=["filter_obj"])
+    states, wall = time_call(lambda f=wsckf_jit, filt=wsckf: f(filt, model_inputs))
     score(
-        "CRF",
+        "WSC-KF",
         n_iter,
         stack_estimates(m0, states.mean[1:]),
         float(states.log_normalizing_constant[-1]),
         wall,
-        drift_crf,
+        drift_wsckf,
     )
 
 csv_path = os.path.join(OUTPUT_DIR, "pareto_iters_smoke.csv")
@@ -271,7 +271,7 @@ with open(csv_path, "w", newline="") as f:
 fig, axes = plt.subplots(1, 2, figsize=(10, 4.2), sharex=True)
 all_xs = []
 for ax, metric, ylabel in zip(axes, ("mapex", "maped"), ("MAPEx [%]", "MAPEd [%]")):
-    for fam in ("EKF", "UKF", "CRF"):
+    for fam in ("EKF", "UKF", "WSC-KF"):
         pts = sorted([r for r in rows if r["family"] == fam], key=lambda r: r["num_iter"])
         xs = [1e3 * r["time_s"] for r in pts]
         ys = [r[metric] for r in pts]
@@ -287,7 +287,7 @@ if all_xs:
 axes[0].legend(fontsize=9, loc="best")
 fig.suptitle(
     rf"Smoke: iterated update Pareto at $\Delta t={DELTA_T_MIN:g}$ min "
-    rf"(seed={SEED}; CRF product 9 paths)",
+    rf"(seed={SEED}; WSC-KF product 9 paths)",
     fontsize=11,
 )
 fig.tight_layout()

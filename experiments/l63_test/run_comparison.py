@@ -1,12 +1,12 @@
-"""Compare the Cubature Recursive Filter (CRF) against cd_dynamax-style
+"""Compare the Wiener Space Cubature Kalman Filter (WSC-KF) against cd_dynamax-style
 continuous-discrete filters (CD-EKF, CD-UKF, CD-EnKF) and a bootstrap particle filter,
 on a stochastic Lorenz-63 tracking problem.
 
-- The CRF is built with the filter structure
-  (``crf.filter.cubature_filter.build_filter``)
+- The WSC-KF is built with the filter structure
+  (``wsckf.filter.cubature_filter.build_filter``)
 - The competing filters are cd_dynamax-style continuous-discrete nonlinear-Gaussian
   filters (see ``experiments/cd_dynamax_mirror/filters.py``). Default ``--solver rk4``
-  matches the CRF integrator for fair wall-clock timing; use ``--solver diffrax``
+  matches the WSC-KF integrator for fair wall-clock timing; use ``--solver diffrax``
   for Dopri5 / Heun+VBT.
 
 Run:  python3 experiments/l63_test/run_comparison.py
@@ -57,28 +57,28 @@ from cd_dynamax_mirror.filters import (
     run_cd_ukf,
 )
 from cuthbert import filter as run_filter  
-from crf import build_filter, CRFState
-from crf.library import default_recombined_num_paths
+from wsckf import build_filter, WSCKFState
+from wsckf.library import default_recombined_num_paths
 
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 _parser = argparse.ArgumentParser(
-    description="CRF vs cd_dynamax filters on stochastic Lorenz-63"
+    description="WSC-KF vs cd_dynamax filters on stochastic Lorenz-63"
 )
 _parser.add_argument(
     "--solver",
     choices=("rk4", "diffrax"),
     default="rk4",
-    help="Continuous-time integrator for CD filters (default: rk4, matched to CRF)",
+    help="Continuous-time integrator for CD filters (default: rk4, matched to WSC-KF)",
 )
 _parser.add_argument(
     "--cubature-order",
     type=int,
     default=2,
     dest="cubature_order",
-    help="CRF Lyons macro-segment count k (default 2; recombined)",
+    help="WSC-KF Lyons macro-segment count k (default 2; recombined)",
 )
 _parser.add_argument(
     "--num-paths",
@@ -93,7 +93,7 @@ SOLVER = _args.solver
 CUBATURE_ORDER = _args.cubature_order
 
 # ---------------------------------------------------------------------------
-# Lorenz-63 stochastic model (matching Cuthbert_CRF.py)
+# Lorenz-63 stochastic model (matching Cuthbert_WSCKF.py)
 # ---------------------------------------------------------------------------
 lorenz_sigma = 10.0
 lorenz_rho = 28.0
@@ -108,12 +108,12 @@ obs_std = 0.3
 x_dim = 3
 y_dim = 1
 noise_dim = x_dim
-CRF_NUM_PATHS = (
+WSCKF_NUM_PATHS = (
     int(_args.num_paths)
     if _args.num_paths is not None
     else default_recombined_num_paths(noise_dim, CUBATURE_ORDER)
 )
-CRF_MULTIDIM_PATHS = "recombined"
+WSCKF_MULTIDIM_PATHS = "recombined"
 
 
 def lorenz_drift(x):
@@ -211,9 +211,9 @@ def time_call(fn, *args):
 
 
 # ---------------------------------------------------------------------------
-#CRF
+#WSC-KF
 # ---------------------------------------------------------------------------
-crf = build_filter(
+wsckf = build_filter(
     get_init_params=lambda mi: (m0, chol_P0),
     get_dynamics=lambda mi: (
         lambda t, x: lorenz_drift(x),
@@ -224,13 +224,13 @@ crf = build_filter(
     dt=dt,
     integration_dt=dt_inner,
     cubature_order=CUBATURE_ORDER,
-    num_paths=CRF_NUM_PATHS,
-    multidim_paths=CRF_MULTIDIM_PATHS,
+    num_paths=WSCKF_NUM_PATHS,
+    multidim_paths=WSCKF_MULTIDIM_PATHS,
 )
 jitted_filter = jit(run_filter, static_argnames=["filter_obj"])
-crf_states, crf_time = time_call(lambda: jitted_filter(crf, model_inputs))
-crf_means = crf_states.mean[1:]
-crf_loglik = crf_states.log_normalizing_constant[1:]
+wsckf_states, wsckf_time = time_call(lambda: jitted_filter(wsckf, model_inputs))
+wsckf_means = wsckf_states.mean[1:]
+wsckf_loglik = wsckf_states.log_normalizing_constant[1:]
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +286,7 @@ RESULTS = {
     "CD-UKF": dict(means=ukf_res.means, loglik=ukf_res.cum_loglik, time=ukf_time, color="#3DA35D"),
     "CD-EnKF": dict(means=enkf_res.means, loglik=enkf_res.cum_loglik, time=enkf_time, color="#F6AE2D"),
     "PF": dict(means=pf_res.means, loglik=pf_res.cum_loglik, time=pf_time, color="#F24236"),
-    "CRF": dict(means=crf_means, loglik=crf_loglik, time=crf_time, color="#6A4C93"),
+    "WSC-KF": dict(means=wsckf_means, loglik=wsckf_loglik, time=wsckf_time, color="#6A4C93"),
 }
 
 
@@ -313,7 +313,7 @@ for i, ax in enumerate(axes):
     ax.grid(True, alpha=0.2)
 axes[0].legend(loc="upper right", fontsize=9, ncol=6)
 axes[2].set_xlabel("Time", fontsize=13)
-fig.suptitle("CRF vs cd_dynamax filters — Lorenz-63 tracking", fontsize=14)
+fig.suptitle("WSC-KF vs cd_dynamax filters — Lorenz-63 tracking", fontsize=14)
 fig.tight_layout()
 fig.savefig(os.path.join(OUTPUT_DIR, "trajectories.png"), dpi=150, bbox_inches="tight")
 plt.close()
@@ -389,7 +389,7 @@ for name, r in RESULTS.items():
     )
 print("=" * 64)
 print(
-    f"CRF: multidim={CRF_MULTIDIM_PATHS} | k={CUBATURE_ORDER} | "
-    f"num_paths budget={CRF_NUM_PATHS}"
+    f"WSC-KF: multidim={WSCKF_MULTIDIM_PATHS} | k={CUBATURE_ORDER} | "
+    f"num_paths budget={WSCKF_NUM_PATHS}"
 )
 print(f"Plots written to {OUTPUT_DIR}")

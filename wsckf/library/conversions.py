@@ -1,6 +1,6 @@
-"""SDE form conversions for use with the Stratonovich CRF kernels.
+"""SDE form conversions for use with the Stratonovich WSC-KF kernels.
 
-The CRF predict step integrates a Stratonovich SDE,
+The WSC-KF predict step integrates a Stratonovich SDE,
 
     dx = f_S(t, x) dt + G(t, x) o dW.
 
@@ -22,10 +22,10 @@ from typing import TYPE_CHECKING, Tuple
 import jax
 from jax import numpy as jnp
 
-from crf.filter.filtering import DiffusionFn, DriftFn
+from wsckf.filter.filtering import DiffusionFn, DriftFn
 
 if TYPE_CHECKING:
-    from crf.filter.types import GetCRFDynamics
+    from wsckf.filter.types import GetWSCKFDynamics
 
 
 def ito_to_stratonovich_drift(
@@ -70,10 +70,10 @@ def ito_to_stratonovich_dynamics(
     return ito_to_stratonovich_drift(ito_drift_fn, diffusion_fn), diffusion_fn
 
 
-def wrap_ito_dynamics(get_dynamics: GetCRFDynamics) -> GetCRFDynamics:
+def wrap_ito_dynamics(get_dynamics: GetWSCKFDynamics) -> GetWSCKFDynamics:
     """Wrap a ``get_dynamics`` callback that returns Ito ``(drift, diffusion)``.
 
-    Returns a callback suitable for :func:`crf.build_filter`, whose drift is
+    Returns a callback suitable for :func:`wsckf.build_filter`, whose drift is
     the Stratonovich correction of the supplied Ito drift.
     """
 

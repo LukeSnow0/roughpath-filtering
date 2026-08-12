@@ -45,16 +45,16 @@ Maximize each filter’s **train-prefix** marginal log-likelihood of the GPS ser
 
 | Filter | Forecast | Role in this study |
 |--------|----------|--------------------|
-| **CRF** | Deterministic Wiener cubature through the SDE | Primary; pathwise AD via checkpointed ODE adjoint |
-| **CD-EnKF** | Particles through the SDE (RK4 or Diffrax) | Agrees with CRF on \(\hat\theta\); stochastic / ensemble likelihood |
+| **WSC-KF** | Deterministic Wiener cubature through the SDE | Primary; pathwise AD via checkpointed ODE adjoint |
+| **CD-EnKF** | Particles through the SDE (RK4 or Diffrax) | Agrees with WSC-KF on \(\hat\theta\); stochastic / ensemble likelihood |
 | **CD-EKF** | Gaussian moment ODEs | Different optimum (closure bias under multiplicative \(g(v)\)) |
 | CD-UKF / bootstrap PF | — | UKF often NaNs; PF degenerates on long tracks (not in joint harness) |
 
-**Fair timing baseline:** match integrators — CRF vs **RK4** EnKF (similar wall time). **Diffrax** EnKF is ~10× slower; that is a deployment cost, not the scientific comparison.
+**Fair timing baseline:** match integrators — WSC-KF vs **RK4** EnKF (similar wall time). **Diffrax** EnKF is ~10× slower; that is a deployment cost, not the scientific comparison.
 
 ## Main findings (N = 600, `MALL 825 M`)
 
-- **CRF ≈ EnKF:** \(\hat\tau_v\sim 0.75\,\mathrm{h}\), \(\hat\sigma_v\sim 2.5\)–\(2.8\,\mathrm{km/h}\) (same high-likelihood ridge; historically from full-track fits).
+- **WSC-KF ≈ EnKF:** \(\hat\tau_v\sim 0.75\,\mathrm{h}\), \(\hat\sigma_v\sim 2.5\)–\(2.8\,\mathrm{km/h}\) (same high-likelihood ridge; historically from full-track fits).
 - **EKF differs:** shorter \(\tau_v\), larger \(\sigma_v\) / implied \(\sigma_0\) — moment closure mishandles state-dependent diffusion.
 - Real-data accuracy column: **train-fit \(\hat\theta\) → held-out NLL under ref EnKF** (`movement_heldout_compare.png`). Twin / simulation recovery remains the absolute-\(\theta\) check.
 
@@ -84,13 +84,13 @@ Outputs: `movement_lobo_compare.png`, `movement_lobo_summary.csv`, `movement_lob
 
 ## Paths vs particles Pareto
 
-Fixed-\(\theta^\*\) cost–accuracy curve (no per-budget refit). Default \(\theta^\*\) is the CRF/EnKF consensus from the MLE run; score **held-out NLL / obs** on a suffix of the track; fair wall-clock vs **RK4** EnKF. This is *propagator* efficiency, not train-MLE accuracy (see MLE held-out above).
+Fixed-\(\theta^\*\) cost–accuracy curve (no per-budget refit). Default \(\theta^\*\) is the WSC-KF/EnKF consensus from the MLE run; score **held-out NLL / obs** on a suffix of the track; fair wall-clock vs **RK4** EnKF. This is *propagator* efficiency, not train-MLE accuracy (see MLE held-out above).
 
 ```bash
 uv run --extra experiments python experiments/movement_test/run_pareto_budget.py
 uv run --extra experiments python experiments/movement_test/run_pareto_budget.py \
     --n-obs 600 --holdout-frac 0.3 --enkf 25,50,100,200,500 \
-    --crf-max-paths 81 --n-timing 3
+    --wsckf-max-paths 81 --n-timing 3
 ```
 
 Outputs: `pareto_budget_vs_nll.png` (held-out + full-track NLL panels), `pareto_budget_vs_nll.csv`, `pareto_budget_vs_nll_raw.csv`.

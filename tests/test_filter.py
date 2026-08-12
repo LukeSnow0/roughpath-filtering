@@ -1,11 +1,11 @@
-"""Tests for CRF construction and a small end-to-end filtering run."""
+"""Tests for WSC-KF construction and a small end-to-end filtering run."""
 
 import jax.numpy as jnp
 import pytest
 from cuthbert import filter as run_filter
 from jax import jit
 
-from crf import build_filter
+from wsckf import build_filter
 
 
 def _linear_gaussian_1d_filter(*, sde_form: str = "stratonovich"):
@@ -76,7 +76,7 @@ def test_build_filter_rejects_invalid_arguments(kwargs, match):
 
 
 def test_linear_gaussian_1d_regression():
-    """End-to-end CRF run matches the reference output from the example script."""
+    """End-to-end WSC-KF run matches the reference output from the example script."""
     filter_obj, ys = _linear_gaussian_1d_filter()
     model_inputs = jnp.arange(ys.shape[0] + 1)
     states = jit(run_filter, static_argnames=["filter_obj"])(filter_obj, model_inputs)

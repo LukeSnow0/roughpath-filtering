@@ -2,7 +2,7 @@
 
 We use an Ornstein-Uhlenbeck *velocity* model with a weak home-range spring and
 **speed-dependent (multiplicative) diffusion** -- the state-dependent-diffusion
-structure that distinguishes the CRF from the moment-ODE Gaussian filters.
+structure that distinguishes the WSC-KF from the moment-ODE Gaussian filters.
 
 State (per individual):  s = [x, y, vx, vy]
     positions x, y in km (mean-centred UTM);  velocities vx, vy in km/h;  t in h.

@@ -1,4 +1,4 @@
-"""Filter-MLE of InTaSet Johansson parameters via CRF / CD-EKF / CD-EnKF.
+"""Filter-MLE of InTaSet Johansson parameters via WSC-KF / CD-EKF / CD-EnKF.
 
 Maximises the continuous–discrete filter predictive log-likelihood over
 
@@ -14,7 +14,7 @@ Train / holdout (default)
 * After fitting, score each ``θ̂`` by a **shared reference EnKF** on the full
   train+holdout window (train as warmup; held-out NLL/obs from the suffix).
 
-Compares CRF-AD, CD-EKF-AD, and CD-EnKF-AD (fixed RNG) under a shared Adam
+Compares WSC-KF-AD, CD-EKF-AD, and CD-EnKF-AD (fixed RNG) under a shared Adam
 outer loop.
 
 Run:
@@ -62,8 +62,8 @@ import matplotlib.pyplot as plt
 jax.config.update("jax_enable_x64", True)
 
 from cuthbert import filter as run_filter
-from crf import build_filter
-from crf.library import product_path_count
+from wsckf import build_filter
+from wsckf.library import product_path_count
 from experiments.cd_dynamax_mirror.filters import run_cd_ekf, run_cd_enkf
 
 from intaset_io import load_named, window_trajectory
@@ -82,7 +82,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ---------------------------------------------------------------------------
 _parser = argparse.ArgumentParser(
-    description="InTaSet filter-MLE of (k_pump, γ, a_out) via CRF / EKF / EnKF"
+    description="InTaSet filter-MLE of (k_pump, γ, a_out) via WSC-KF / EKF / EnKF"
 )
 _parser.add_argument("--source", type=str, default="4T-M2-train")
 _parser.add_argument(
@@ -124,7 +124,7 @@ _parser.add_argument("--seed", type=int, default=0)
 _parser.add_argument(
     "--skip-stochastic",
     action="store_true",
-    help="Skip EnKF (CRF + EKF only)",
+    help="Skip EnKF (WSC-KF + EKF only)",
 )
 _parser.add_argument(
     "--cold-start",
@@ -138,9 +138,9 @@ REF_ENKF_PARTICLES = int(_args.ref_enkf_particles)
 N_TIMING = int(_args.n_timing)
 DT0 = float(_args.dt0)
 SOLVER = "rk4"
-CRF_K = int(_args.cubature_order)
-CRF_M = int(_args.lyons_degree)
-CRF_N_PATHS = product_path_count(2, CRF_K, lyons_degree=CRF_M)
+WSCKF_K = int(_args.cubature_order)
+WSCKF_M = int(_args.lyons_degree)
+WSCKF_N_PATHS = product_path_count(2, WSCKF_K, lyons_degree=WSCKF_M)
 
 
 def _parse_ints(s: str) -> list[int]:
@@ -287,7 +287,7 @@ print(
     f"Δt={_args.delta:g} min ({DT:g}s)  dt0={DT0:g}s"
 )
 print(
-    f"  CRF product m={CRF_M} k={CRF_K} → {CRF_N_PATHS} paths;  "
+    f"  WSC-KF product m={WSCKF_M} k={WSCKF_K} → {WSCKF_N_PATHS} paths;  "
     f"EnKF fit={ENKF_PARTICLES}p  ref={REF_ENKF_PARTICLES}p"
 )
 print(
@@ -366,7 +366,7 @@ def _mi(theta: jnp.ndarray, n_obs: int) -> MInputs:
     )
 
 
-def build_crf(ys, t_fine, u_fine, *, checkpoint_steps: bool):
+def build_wsckf(ys, t_fine, u_fine, *, checkpoint_steps: bool):
     t_j = jnp.asarray(t_fine, dtype=jnp.float64)
     u_j = jnp.asarray(u_fine, dtype=jnp.float64)
 
@@ -387,8 +387,8 @@ def build_crf(ys, t_fine, u_fine, *, checkpoint_steps: bool):
         noise_dim=2,
         dt=DT,
         integration_dt=DT0,
-        cubature_order=CRF_K,
-        lyons_degree=CRF_M,
+        cubature_order=WSCKF_K,
+        lyons_degree=WSCKF_M,
         multidim_paths="product",
         sde_form="ito",
         checkpoint_steps=checkpoint_steps,
@@ -397,18 +397,18 @@ def build_crf(ys, t_fine, u_fine, *, checkpoint_steps: bool):
 
 _run = jit(run_filter, static_argnames=["filter_obj"])
 
-CRF_TRAIN = build_crf(YS_TRAIN, T_FINE_TRAIN, U_FINE_TRAIN, checkpoint_steps=False)
-CRF_TRAIN_CKPT = build_crf(YS_TRAIN, T_FINE_TRAIN, U_FINE_TRAIN, checkpoint_steps=True)
-CRF_FULL = build_crf(YS_FULL, T_FINE_FULL, U_FINE_FULL, checkpoint_steps=False)
+WSCKF_TRAIN = build_wsckf(YS_TRAIN, T_FINE_TRAIN, U_FINE_TRAIN, checkpoint_steps=False)
+WSCKF_TRAIN_CKPT = build_wsckf(YS_TRAIN, T_FINE_TRAIN, U_FINE_TRAIN, checkpoint_steps=True)
+WSCKF_FULL = build_wsckf(YS_FULL, T_FINE_FULL, U_FINE_FULL, checkpoint_steps=False)
 
 
-def crf_train_loglik(theta, *, checkpoint=True):
-    filt = CRF_TRAIN_CKPT if checkpoint else CRF_TRAIN
+def wsckf_train_loglik(theta, *, checkpoint=True):
+    filt = WSCKF_TRAIN_CKPT if checkpoint else WSCKF_TRAIN
     return _run(filt, _mi(theta, N_TRAIN)).log_normalizing_constant[-1]
 
 
-def crf_full_cum(theta):
-    return _run(CRF_FULL, _mi(theta, N_OBS)).log_normalizing_constant
+def wsckf_full_cum(theta):
+    return _run(WSCKF_FULL, _mi(theta, N_OBS)).log_normalizing_constant
 
 
 def ekf_loglik_on(ys, t_fine, u_fine, theta):
@@ -503,15 +503,15 @@ def ref_enkf_heldout_nll(theta, *, n_particles: int, seeds: list[int]):
 
 
 # Gradients on train LL only.
-crf_vg = jit(
-    value_and_grad(lambda th: crf_train_loglik(th, checkpoint=True))
+wsckf_vg = jit(
+    value_and_grad(lambda th: wsckf_train_loglik(th, checkpoint=True))
 )
 ekf_vg = jit(value_and_grad(ekf_train_loglik))
 _enkf_key_ad = jr.PRNGKey(_args.seed + 17)
 enkf_vg = jit(
     value_and_grad(lambda th: enkf_train_loglik(th, _enkf_key_ad))
 )
-_crf_train_ll = jit(lambda th: crf_train_loglik(th, checkpoint=False))
+_wsckf_train_ll = jit(lambda th: wsckf_train_loglik(th, checkpoint=False))
 _ekf_train_ll = jit(ekf_train_loglik)
 _enkf_train_ll = jit(enkf_train_loglik)
 
@@ -578,18 +578,18 @@ def open_loop_mape(theta: np.ndarray, *, train: bool) -> float:
 # ---------------------------------------------------------------------------
 def main():
     stochastic = not _args.skip_stochastic
-    methods = ["CRF-AD", "CD-EKF"]
+    methods = ["WSC-KF-AD", "CD-EKF"]
     if stochastic:
         methods.append("CD-EnKF")
 
     # ---- timing ----
     print(f"\n=== Median wall time (n={N_TIMING}, N_train={N_TRAIN}) ===")
-    t_crf_fwd = median_time(lambda: _crf_train_ll(THETA0))
-    t_crf_ad = median_time(lambda: crf_vg(THETA0))
+    t_wsckf_fwd = median_time(lambda: _wsckf_train_ll(THETA0))
+    t_wsckf_ad = median_time(lambda: wsckf_vg(THETA0))
     t_ekf_fwd = median_time(lambda: _ekf_train_ll(THETA0))
     t_ekf_ad = median_time(lambda: ekf_vg(THETA0))
-    print(f"  CRF forward:     {t_crf_fwd:.4f}s")
-    print(f"  CRF-AD:          {t_crf_ad:.4f}s")
+    print(f"  WSC-KF forward:     {t_wsckf_fwd:.4f}s")
+    print(f"  WSC-KF-AD:          {t_wsckf_ad:.4f}s")
     print(f"  CD-EKF forward:  {t_ekf_fwd:.4f}s")
     print(f"  CD-EKF-AD:       {t_ekf_ad:.4f}s")
     t_enkf_fwd = t_enkf_ad = float("nan")
@@ -606,7 +606,7 @@ def main():
     walls: dict[str, float] = {}
     hats: dict[str, np.ndarray] = {}
 
-    for name, vg in (("CRF-AD", crf_vg), ("CD-EKF", ekf_vg)):
+    for name, vg in (("WSC-KF-AD", wsckf_vg), ("CD-EKF", ekf_vg)):
         t0 = time.perf_counter()
         th_tr, ll_tr, th_hat = adam_mle(vg, THETA0_NP)
         walls[name] = time.perf_counter() - t0
@@ -636,7 +636,7 @@ def main():
     # Open-loop LS baseline (θ from calibration JSON, or defaults).
     th_ol = pack_theta(P0_CAL)
     ll_ol = {
-        "CRF-AD": float(_crf_train_ll(jnp.asarray(th_ol))),
+        "WSC-KF-AD": float(_wsckf_train_ll(jnp.asarray(th_ol))),
         "CD-EKF": float(_ekf_train_ll(jnp.asarray(th_ol))),
     }
     if stochastic:
@@ -680,7 +680,7 @@ def main():
         )
 
     # ---- Plots ----
-    colors = {"CRF-AD": "#6A4C93", "CD-EKF": "#2E86AB", "CD-EnKF": "#D97706"}
+    colors = {"WSC-KF-AD": "#6A4C93", "CD-EKF": "#2E86AB", "CD-EnKF": "#D97706"}
 
     fig, axes = plt.subplots(1, 2, figsize=(10.5, 4.2))
     ax = axes[0]
@@ -757,8 +757,8 @@ def main():
     fig, axes = plt.subplots(1, 2, figsize=(10.5, 4.0))
     ax = axes[0]
     timing_rows = [
-        ("CRF fwd", t_crf_fwd, colors["CRF-AD"]),
-        ("CRF-AD", t_crf_ad, colors["CRF-AD"]),
+        ("WSC-KF fwd", t_wsckf_fwd, colors["WSC-KF-AD"]),
+        ("WSC-KF-AD", t_wsckf_ad, colors["WSC-KF-AD"]),
         ("EKF fwd", t_ekf_fwd, colors["CD-EKF"]),
         ("EKF-AD", t_ekf_ad, colors["CD-EKF"]),
     ]
@@ -864,12 +864,12 @@ def main():
             ]
         )
         fwd = {
-            "CRF-AD": t_crf_fwd,
+            "WSC-KF-AD": t_wsckf_fwd,
             "CD-EKF": t_ekf_fwd,
             "CD-EnKF": t_enkf_fwd,
         }
         ads = {
-            "CRF-AD": t_crf_ad,
+            "WSC-KF-AD": t_wsckf_ad,
             "CD-EKF": t_ekf_ad,
             "CD-EnKF": t_enkf_ad,
         }
@@ -895,7 +895,7 @@ def main():
             )
     print(f"Wrote {summary_path}")
 
-    # Save CRF MLE params for downstream use.
+    # Save WSC-KF MLE params for downstream use.
     best_name = min(methods, key=lambda n: held[n][0])
     best_p = unpack_theta_np(hats[best_name])
     out_params = os.path.join(OUTPUT_DIR, "mle_params_best.json")

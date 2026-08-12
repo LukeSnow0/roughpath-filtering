@@ -14,7 +14,7 @@ Protocol (movement-test style)
 * Each ``θ̂`` is scored by a **shared reference EnKF** on the held-out suffix
   (full-track run; train is warmup). Self-likelihoods are diagnostics only.
 
-Compares CRF, CD-EKF, CD-UKF, CD-EnKF, PF (``--skip-stochastic`` drops EnKF/PF).
+Compares WSC-KF, CD-EKF, CD-UKF, CD-EnKF, PF (``--skip-stochastic`` drops EnKF/PF).
 
 Run:
   uv run --extra experiments python experiments/AZT1D/run_glucose_mle.py
@@ -59,7 +59,7 @@ import matplotlib.pyplot as plt
 jax.config.update("jax_enable_x64", True)
 
 from cuthbert import filter as run_filter
-from crf import build_filter
+from wsckf import build_filter
 from cd_dynamax_mirror.filters import (
     run_bootstrap_pf,
     run_cd_ekf,
@@ -68,7 +68,7 @@ from cd_dynamax_mirror.filters import (
 )
 
 from azt1d_data import load_azt1d_series
-from glucose_model import GlucoseParams, crf_glucose_dynamics, init_estimate, make_glucose_dynamics, mape_glucose
+from glucose_model import GlucoseParams, wsckf_glucose_dynamics, init_estimate, make_glucose_dynamics, mape_glucose
 
 OUTPUT_DIR = os.path.join(HERE, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -174,7 +174,7 @@ print(
     f"R^0.5={P.meas_std}"
 )
 print(
-    f"CRF recombined paths={_args.num_paths} k={_args.cubature_order}  "
+    f"WSC-KF recombined paths={_args.num_paths} k={_args.cubature_order}  "
     f"EnKF fit={ENKF_PARTICLES}p  PF fit={PF_PARTICLES}p  ref={REF_ENKF_PARTICLES}p"
 )
 
@@ -185,7 +185,7 @@ class MInputs(NamedTuple):
     sigma_g: jnp.ndarray
 
 
-def build_crf(ys, *, checkpoint_steps: bool):
+def build_wsckf(ys, *, checkpoint_steps: bool):
     def get_init_params(mi):
         return M0, CHOL_P0
 
@@ -198,7 +198,7 @@ def build_crf(ys, *, checkpoint_steps: bool):
             p3=mi.p3,
             sigma_g=mi.sigma_g,
         )
-        return crf_glucose_dynamics(drift, L, mi, DT)
+        return wsckf_glucose_dynamics(drift, L, mi, DT)
 
     def get_observations(mi):
         return OBS_FN, CHOL_R, ys[mi.t_idx - 1]
@@ -228,18 +228,18 @@ def _mi(p3, sigma_g, n_obs: int):
 
 _run = jit(run_filter, static_argnames=["filter_obj"])
 
-CRF_TRAIN = build_crf(YS_TRAIN, checkpoint_steps=False)
-CRF_TRAIN_CKPT = build_crf(YS_TRAIN, checkpoint_steps=True)
-CRF_FULL = build_crf(YS, checkpoint_steps=False)
+WSCKF_TRAIN = build_wsckf(YS_TRAIN, checkpoint_steps=False)
+WSCKF_TRAIN_CKPT = build_wsckf(YS_TRAIN, checkpoint_steps=True)
+WSCKF_FULL = build_wsckf(YS, checkpoint_steps=False)
 
 
-def crf_train_loglik(p3, sigma_g, *, checkpoint=True):
-    filt = CRF_TRAIN_CKPT if checkpoint else CRF_TRAIN
+def wsckf_train_loglik(p3, sigma_g, *, checkpoint=True):
+    filt = WSCKF_TRAIN_CKPT if checkpoint else WSCKF_TRAIN
     return _run(filt, _mi(p3, sigma_g, N_TRAIN)).log_normalizing_constant[-1]
 
 
-def crf_full_states(p3, sigma_g):
-    return _run(CRF_FULL, _mi(p3, sigma_g, N_OBS))
+def wsckf_full_states(p3, sigma_g):
+    return _run(WSCKF_FULL, _mi(p3, sigma_g, N_OBS))
 
 
 def _dyn(p3, sigma_g):
@@ -331,9 +331,9 @@ def _ll_from_theta(ll2, theta):
     return ll2(jnp.exp(theta[0]), jnp.exp(theta[1]))
 
 
-crf_vg = jit(
+wsckf_vg = jit(
     value_and_grad(
-        lambda th: _ll_from_theta(lambda a, b: crf_train_loglik(a, b, checkpoint=True), th)
+        lambda th: _ll_from_theta(lambda a, b: wsckf_train_loglik(a, b, checkpoint=True), th)
     )
 )
 ekf_vg = jit(value_and_grad(lambda th: _ll_from_theta(ekf_train_loglik, th)))
@@ -350,7 +350,7 @@ pf_vg = jit(
         lambda th: _ll_from_theta(lambda a, b: pf_train_loglik(a, b, _pf_key_ad), th)
     )
 )
-_crf_train_ll = jit(lambda a, b: crf_train_loglik(a, b, checkpoint=False))
+_wsckf_train_ll = jit(lambda a, b: wsckf_train_loglik(a, b, checkpoint=False))
 _ekf_train_ll = jit(ekf_train_loglik)
 _ukf_train_ll = jit(ukf_train_loglik)
 _enkf_train_ll = jit(enkf_train_loglik)
@@ -411,8 +411,8 @@ def main():
             samples.append(time.perf_counter() - t0)
         return float(np.median(samples))
 
-    print(f"  CRF fwd: {_med(lambda: _crf_train_ll(_args.p3_init, _args.sigma_g_init)):.3f}s")
-    print(f"  CRF-AD:  {_med(lambda: crf_vg(theta0)):.3f}s")
+    print(f"  WSC-KF fwd: {_med(lambda: _wsckf_train_ll(_args.p3_init, _args.sigma_g_init)):.3f}s")
+    print(f"  WSC-KF-AD:  {_med(lambda: wsckf_vg(theta0)):.3f}s")
     print(f"  EKF fwd: {_med(lambda: _ekf_train_ll(_args.p3_init, _args.sigma_g_init)):.3f}s")
     print(f"  EKF-AD:  {_med(lambda: ekf_vg(theta0)):.3f}s")
     if do_ukf:
@@ -433,7 +433,7 @@ def main():
     p3_axis = np.geomspace(5e-5, 5e-3, n_g)
     sg_axis = np.geomspace(0.3, 8.0, n_g)
     print(f"\n=== Train loglik grid ({n_g}×{n_g}) ===")
-    crf_Z = np.full((n_g, n_g), np.nan)
+    wsckf_Z = np.full((n_g, n_g), np.nan)
     ekf_Z = np.full((n_g, n_g), np.nan)
     ukf_Z = np.full((n_g, n_g), np.nan) if do_ukf else None
     enkf_Z = np.full((n_g, n_g), np.nan) if stochastic else None
@@ -441,7 +441,7 @@ def main():
     key_grid = jr.PRNGKey(_args.seed)
     for i, p3 in enumerate(p3_axis):
         for j, sg in enumerate(sg_axis):
-            crf_Z[i, j] = float(_crf_train_ll(p3, sg))
+            wsckf_Z[i, j] = float(_wsckf_train_ll(p3, sg))
             ekf_Z[i, j] = float(_ekf_train_ll(p3, sg))
             if do_ukf:
                 ukf_Z[i, j] = float(_ukf_train_ll(p3, sg))
@@ -451,9 +451,9 @@ def main():
         if (i + 1) % max(1, n_g // 4) == 0:
             print(f"  grid row {i + 1}/{n_g}")
 
-    crf_p3_g, crf_sg_g, crf_L = _grid_argmax(p3_axis, sg_axis, crf_Z)
+    wsckf_p3_g, wsckf_sg_g, wsckf_L = _grid_argmax(p3_axis, sg_axis, wsckf_Z)
     ekf_p3_g, ekf_sg_g, ekf_L = _grid_argmax(p3_axis, sg_axis, ekf_Z)
-    print(f"  CRF  grid-argmax: p3={crf_p3_g:.3e}  σ_G={crf_sg_g:.3f}  L={crf_L:.1f}")
+    print(f"  WSC-KF  grid-argmax: p3={wsckf_p3_g:.3e}  σ_G={wsckf_sg_g:.3f}  L={wsckf_L:.1f}")
     print(f"  EKF  grid-argmax: p3={ekf_p3_g:.3e}  σ_G={ekf_sg_g:.3f}  L={ekf_L:.1f}")
     if do_ukf:
         ukf_p3_g, ukf_sg_g, ukf_L = _grid_argmax(p3_axis, sg_axis, ukf_Z)
@@ -466,17 +466,17 @@ def main():
 
     print(f"\n=== Adam MLE on train ({_args.mle_iters} iters) ===")
     t0 = time.perf_counter()
-    crf_vg(theta0)
-    crf_compile = time.perf_counter() - t0
+    wsckf_vg(theta0)
+    wsckf_compile = time.perf_counter() - t0
     t0 = time.perf_counter()
-    crf_p3_tr, crf_sg_tr, crf_ll_tr = adam_mle_2d(crf_vg)
-    crf_mle_t = time.perf_counter() - t0
+    wsckf_p3_tr, wsckf_sg_tr, wsckf_ll_tr = adam_mle_2d(wsckf_vg)
+    wsckf_mle_t = time.perf_counter() - t0
     t0 = time.perf_counter()
     ekf_p3_tr, ekf_sg_tr, ekf_ll_tr = adam_mle_2d(ekf_vg)
     ekf_mle_t = time.perf_counter() - t0
     print(
-        f"  CRF-AD:  p̂3={crf_p3_tr[-1]:.3e}  σ̂_G={crf_sg_tr[-1]:.3f}  "
-        f"L={crf_ll_tr[-1]:.1f}  (compile={crf_compile:.1f}s, {crf_mle_t:.1f}s)"
+        f"  WSC-KF-AD:  p̂3={wsckf_p3_tr[-1]:.3e}  σ̂_G={wsckf_sg_tr[-1]:.3f}  "
+        f"L={wsckf_ll_tr[-1]:.1f}  (compile={wsckf_compile:.1f}s, {wsckf_mle_t:.1f}s)"
     )
     print(
         f"  EKF-AD:  p̂3={ekf_p3_tr[-1]:.3e}  σ̂_G={ekf_sg_tr[-1]:.3f}  "
@@ -526,7 +526,7 @@ def main():
     self_held = {}
     st = None
     theta = {
-        "CRF": (float(crf_p3_tr[-1]), float(crf_sg_tr[-1])),
+        "WSC-KF": (float(wsckf_p3_tr[-1]), float(wsckf_sg_tr[-1])),
         "EKF": (float(ekf_p3_tr[-1]), float(ekf_sg_tr[-1])),
     }
     if do_ukf:
@@ -549,10 +549,10 @@ def main():
             print(f"  ref-EnKF @ θ̂_{name:4s} = {mean:.4f} ± {std:.4f}")
 
         print("\n=== Self-score diagnostics (not for ranking) ===")
-        st = crf_full_states(*theta["CRF"])
-        self_held["CRF"] = heldout_nll_per_obs(st.log_normalizing_constant, N_TRAIN, N_OBS)
+        st = wsckf_full_states(*theta["WSC-KF"])
+        self_held["WSC-KF"] = heldout_nll_per_obs(st.log_normalizing_constant, N_TRAIN, N_OBS)
         self_held["EKF"] = heldout_nll_per_obs(ekf_loglik_on(YS, *theta["EKF"]), N_TRAIN, N_OBS)
-        print(f"  CRF  self = {self_held['CRF']:.4f}")
+        print(f"  WSC-KF  self = {self_held['WSC-KF']:.4f}")
         print(f"  EKF  self = {self_held['EKF']:.4f}")
         if do_ukf:
             self_held["UKF"] = heldout_nll_per_obs(
@@ -581,15 +581,15 @@ def main():
             print(f"  EnKF self = {self_held['EnKF']:.4f}")
             print(f"  PF   self = {self_held['PF']:.4f}")
     else:
-        st = crf_full_states(*theta["CRF"])
+        st = wsckf_full_states(*theta["WSC-KF"])
 
     g_hat = np.asarray(st.mean)[:, 0]
     cgm = series.cgm
-    mape_crf = mape_glucose(g_hat, cgm)
+    mape_wsckf = mape_glucose(g_hat, cgm)
 
     # ---- plots ----
     panel_specs = [
-        ("CRF", crf_Z, "C2", (crf_p3_g, crf_sg_g), theta["CRF"]),
+        ("WSC-KF", wsckf_Z, "C2", (wsckf_p3_g, wsckf_sg_g), theta["WSC-KF"]),
         ("CD-EKF", ekf_Z, "C3", (ekf_p3_g, ekf_sg_g), theta["EKF"]),
     ]
     if do_ukf:
@@ -634,7 +634,7 @@ def main():
     fig2, axes2 = plt.subplots(1, 2, figsize=(11.0, 4.6))
     ax = axes2[0]
     styles = [
-        ("CRF", crf_p3_tr, crf_sg_tr, "C2", "o-"),
+        ("WSC-KF", wsckf_p3_tr, wsckf_sg_tr, "C2", "o-"),
         ("EKF", ekf_p3_tr, ekf_sg_tr, "C3", "s-"),
     ]
     if do_ukf:
@@ -653,7 +653,7 @@ def main():
     ax.grid(alpha=0.3, which="both")
 
     ax = axes2[1]
-    ll_styles = [("CRF", crf_ll_tr, "C2", "o-"), ("EKF", ekf_ll_tr, "C3", "s-")]
+    ll_styles = [("WSC-KF", wsckf_ll_tr, "C2", "o-"), ("EKF", ekf_ll_tr, "C3", "s-")]
     if do_ukf:
         ll_styles.append(("UKF", ukf_ll_tr, "C4", "^-"))
     if stochastic:
@@ -684,13 +684,13 @@ def main():
         "-",
         lw=1.0,
         color="C2",
-        label=f"CRF @ train MLE (MAPE={mape_crf:.2f}%)",
+        label=f"WSC-KF @ train MLE (MAPE={mape_wsckf:.2f}%)",
     )
     if DO_HELDOUT:
         ax.axvline(t_h[N_TRAIN], color="C0", ls="--", lw=0.8, label="holdout start")
     ax.set_xlabel("time [h]")
     ax.set_ylabel("glucose [mg/dL]")
-    ax.set_title(f"AZT1D subject {series.subject}: CGM + CRF @ train MLE")
+    ax.set_title(f"AZT1D subject {series.subject}: CGM + WSC-KF @ train MLE")
     ax.legend(fontsize=8)
     ax.grid(alpha=0.3)
     fig3.tight_layout()
@@ -700,7 +700,7 @@ def main():
         fig4, axes4 = plt.subplots(1, 2, figsize=(11.0, 4.2))
         ax = axes4[0]
         compare = [
-            ("CRF", theta["CRF"], enkf_ref["CRF"], enkf_ref_std["CRF"], "#2ca02c", "o", crf_p3_tr, crf_sg_tr),
+            ("WSC-KF", theta["WSC-KF"], enkf_ref["WSC-KF"], enkf_ref_std["WSC-KF"], "#2ca02c", "o", wsckf_p3_tr, wsckf_sg_tr),
             ("EKF", theta["EKF"], enkf_ref["EKF"], enkf_ref_std["EKF"], "#d62728", "s", ekf_p3_tr, ekf_sg_tr),
         ]
         if do_ukf:
@@ -745,7 +745,7 @@ def main():
         fig4.savefig(os.path.join(OUTPUT_DIR, "glucose_heldout_compare.png"), dpi=150)
 
     train_ll = {
-        "CRF": float(crf_ll_tr[-1]),
+        "WSC-KF": float(wsckf_ll_tr[-1]),
         "EKF": float(ekf_ll_tr[-1]),
     }
     if do_ukf:
@@ -765,7 +765,7 @@ def main():
                 "ref_enkf_held_nll": enkf_ref.get(name, float("nan")),
                 "ref_enkf_held_std": enkf_ref_std.get(name, float("nan")),
                 "self_held_nll": self_held.get(name, float("nan")),
-                "mape_pct": mape_crf if name == "CRF" else float("nan"),
+                "mape_pct": mape_wsckf if name == "WSC-KF" else float("nan"),
             }
         )
 

@@ -1,7 +1,7 @@
 """Overlay Heston Pareto for L-scale ∈ {2,3,4}: mean RMSE with ±kσ bands.
 
 Reads raw CSVs from ``noise_hi_L2``, ``noise_hi`` (L=3), ``noise_hi_L4``.
-WS-CKF is split by Lyons degree: m=3 (P=4,16,64) vs m=5 (P=9,81).
+WSC-KF is split by Lyons degree: m=3 (P=4,16,64) vs m=5 (P=9,81).
 
 Run:
   uv run --extra experiments python experiments/heston_test/plot_pareto_L_overlay.py
@@ -36,18 +36,18 @@ SINGLE_X_HALF = 1.04
 PlotSeries = tuple[str, str, str, bool, Callable[[dict], bool]]
 PLOT_SERIES: list[PlotSeries] = [
     (
-        "WS-CKF m=3",
+        "WSC-KF m=3",
         "#6A4C93",
         "s",
         True,
-        lambda r: r["family"] == "CRF-product" and "-m3-" in r["label"],
+        lambda r: r["family"] == "WSC-KF-product" and "-m3-" in r["label"],
     ),
     (
-        "WS-CKF m=5",
+        "WSC-KF m=5",
         "#C77DFF",
         "D",
         True,
-        lambda r: r["family"] == "CRF-product" and "-m5-" in r["label"],
+        lambda r: r["family"] == "WSC-KF-product" and "-m5-" in r["label"],
     ),
     ("CD-EnKF", "#F6AE2D", "o", True, lambda r: r["family"] == "CD-EnKF"),
     ("PF", "#F24236", "o", True, lambda r: r["family"] == "PF"),
@@ -59,8 +59,8 @@ PLOT_SERIES: list[PlotSeries] = [
 _LABEL_OFFSET = {
     "CD-EnKF": (0, -10),
     "PF": (0, 7),
-    "WS-CKF m=3": (0, 8),
-    "WS-CKF m=5": (0, -9),
+    "WSC-KF m=3": (0, 8),
+    "WSC-KF m=5": (0, -9),
 }
 
 SERIES = [
@@ -198,7 +198,7 @@ def main():
     fig.suptitle(
         rf"Heston Pareto at $\Delta t={delta_t:g}$, $\xi=1$, $\rho=-0.7$ "
         rf"(mean±{BAND_SCALE:g}$\sigma$; horizon={horizon:g}; "
-        r"WS-CKF $m{=}3$: $P\in\{4,16,64\}$, $m{=}5$: $P\in\{9,81\}$)",
+        r"WSC-KF $m{=}3$: $P\in\{4,16,64\}$, $m{=}5$: $P\in\{9,81\}$)",
         fontsize=12,
         y=1.02,
     )

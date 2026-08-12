@@ -1,10 +1,10 @@
-"""Implements the high-level Cubature Recursive Filter (CRF).
+"""Implements the high-level Wiener Space Cubature Kalman Filter (WSC-KF).
 
-The CRF maintains a Gaussian filtering distribution (mean + Cholesky covariance).
+The WSC-KF maintains a Gaussian filtering distribution (mean + Cholesky covariance).
 Its predict step propagates spatial cubature nodes along a small set of
 deterministic Wiener-space cubature paths through the nonlinear Stratonovich SDE
 (no Jacobian, no Monte-Carlo), and its update is a square-root sigma-point Kalman
-update. See `crf.library` for the underlying kernels.
+update. See `wsckf.library` for the underlying kernels.
 
 References:
     Lyons & Victoir (2004), *Cubature on Wiener space*.
@@ -17,17 +17,17 @@ from typing import Literal, NamedTuple, Optional, Tuple
 from jax import eval_shape, lax, tree
 from jax import numpy as jnp
 
-from crf.filter.types import GetCRFDynamics, GetCRFObservations, GetInitParams
+from wsckf.filter.types import GetWSCKFDynamics, GetWSCKFObservations, GetInitParams
 from cuthbert.inference import Filter
 from cuthbert.utils import dummy_tree_like
-from crf.library import predict, update, precompute_cubature_paths
-from crf.filter.filtering import spatial_cubature_nodes
-from crf.library.conversions import wrap_ito_dynamics
+from wsckf.library import predict, update, precompute_cubature_paths
+from wsckf.filter.filtering import spatial_cubature_nodes
+from wsckf.library.conversions import wrap_ito_dynamics
 from cuthbertlib.types import Array, ArrayTree, ArrayTreeLike, KeyArray, ScalarArray
 
 
-class CRFState(NamedTuple):
-    """Cubature Recursive Filter state."""
+class WSCKFState(NamedTuple):
+    """Wiener Space Cubature Kalman Filter state."""
 
     mean: Array
     chol_cov: Array
@@ -45,8 +45,8 @@ class CRFState(NamedTuple):
 
 def build_filter(
     get_init_params: GetInitParams,
-    get_dynamics: GetCRFDynamics,
-    get_observations: GetCRFObservations,
+    get_dynamics: GetWSCKFDynamics,
+    get_observations: GetWSCKFObservations,
     noise_dim: int,
     dt: float,
     integration_dt: float = 0.01,
@@ -63,7 +63,7 @@ def build_filter(
     wiener_paths: Optional[Tuple[Array, Array, Array]] = None,
     num_iter: int = 1,
 ) -> Filter:
-    """Builds a Cubature Recursive Filter object.
+    """Builds a Wiener Space Cubature Kalman Filter object.
 
     The Wiener cubature paths depend only on ``dt``, ``noise_dim`` and the
     cubature settings, so they are precomputed once here (host-side) and closed
@@ -93,23 +93,23 @@ def build_filter(
         candidate_factor: Candidate-pool scaling for recombination.
         recombination_degree: Target moment degree for recombination (not Lyons ``m``).
         sde_form: Whether ``get_dynamics`` supplies Ito or Stratonovich drift.
-            The CRF always integrates in Stratonovich form; Ito drifts are
+            The WSC-KF always integrates in Stratonovich form; Ito drifts are
             corrected internally. Constant diffusion needs no correction.
         checkpoint_steps: If ``True``, rematerialize each inner RK4 step under
             reverse-mode AD. Frozen cubature Wiener paths make the predict step a
             pure ODE, so this enables memory-efficient ODE adjoints through the
-            filter likelihood (see :func:`crf.library.integrate_stratonovich_cde`).
+            filter likelihood (see :func:`wsckf.library.integrate_stratonovich_cde`).
         lyons_degree: Explicit Lyons–Victoir degree ``m ∈ {3, 5}``. Default
             ``5`` matches the repo's standard three-path 1D formula.
         wiener_paths: Optional precomputed ``(ts, path_values, path_weights)``
             arrays. When set, library cubature construction is skipped (used for
             experiment-side path builders such as explicit multi-D LV).
-        num_iter: Number of measurement-update iterations (iterated CRF).
+        num_iter: Number of measurement-update iterations (iterated WSC-KF).
             ``1`` is the standard single update; ``>1`` re-linearizes with
             spatial cubature about the current estimate.
 
     Returns:
-        Filter object for the CRF.
+        Filter object for the WSC-KF.
 
     Raises:
         ValueError: If ``noise_dim`` or ``dt`` is not positive, or ``sde_form``
@@ -171,21 +171,21 @@ def init_prepare(
     model_inputs: ArrayTreeLike,
     get_init_params: GetInitParams,
     key: KeyArray | None = None,
-) -> CRFState:
-    """Prepare the initial state for the CRF.
+) -> WSCKFState:
+    """Prepare the initial state for the WSC-KF.
 
     Args:
         model_inputs: Model inputs.
         get_init_params: Function to get ``(m0, chol_P0)`` from model inputs.
-        key: JAX random key - not used (the CRF is deterministic).
+        key: JAX random key - not used (the WSC-KF is deterministic).
 
     Returns:
-        Initial CRF state.
+        Initial WSC-KF state.
     """
     model_inputs = tree.map(lambda x: jnp.asarray(x), model_inputs)
     m0, chol_P0 = get_init_params(model_inputs)
 
-    return CRFState(
+    return WSCKFState(
         mean=m0,
         chol_cov=chol_P0,
         model_inputs=model_inputs,
@@ -199,8 +199,8 @@ def filter_prepare(
     model_inputs: ArrayTreeLike,
     get_init_params: GetInitParams,
     key: KeyArray | None = None,
-) -> CRFState:
-    """Prepare a state for a CRF step.
+) -> WSCKFState:
+    """Prepare a state for a WSC-KF step.
 
     Just passes through the model inputs with a dummy mean and covariance of the
     correct shape (inferred from ``get_init_params``).
@@ -209,10 +209,10 @@ def filter_prepare(
         model_inputs: Model inputs.
         get_init_params: Function to get ``(m0, chol_P0)`` from model inputs.
             Only used to infer the shape of the mean and covariance.
-        key: JAX random key - not used (the CRF is deterministic).
+        key: JAX random key - not used (the WSC-KF is deterministic).
 
     Returns:
-        Prepared CRF state with dummy mean and covariance.
+        Prepared WSC-KF state with dummy mean and covariance.
     """
     model_inputs = tree.map(lambda x: jnp.asarray(x), model_inputs)
     dummy_mean_struct = eval_shape(lambda mi: get_init_params(mi)[0], model_inputs)
@@ -221,7 +221,7 @@ def filter_prepare(
         jnp.empty(dummy_mean.shape + dummy_mean.shape[-1:], dtype=dummy_mean.dtype)
     )
 
-    return CRFState(
+    return WSCKFState(
         mean=dummy_mean,
         chol_cov=dummy_chol_cov,
         model_inputs=model_inputs,
@@ -232,22 +232,22 @@ def filter_prepare(
 
 
 def filter_combine(
-    state_1: CRFState,
-    state_2: CRFState,
-    get_dynamics: GetCRFDynamics,
-    get_observations: GetCRFObservations,
+    state_1: WSCKFState,
+    state_2: WSCKFState,
+    get_dynamics: GetWSCKFDynamics,
+    get_observations: GetWSCKFObservations,
     ts: Array,
     path_values: Array,
     path_weights: Array,
     checkpoint_steps: bool = False,
     num_iter: int = 1,
-) -> CRFState:
-    """Combine the previous CRF state with the prepared state for the current step.
+) -> WSCKFState:
+    """Combine the previous WSC-KF state with the prepared state for the current step.
 
-    Implements the CRF predict (cubature propagation) + update (square-root
+    Implements the WSC-KF predict (cubature propagation) + update (square-root
     sigma-point Kalman) cycle. ``num_iter>1`` repeats the measurement update
     with spatial cubature re-linearization about the current estimate (iterated
-    CRF), matching the IEKF/IUKF pattern used by the CD baselines.
+    WSC-KF), matching the IEKF/IUKF pattern used by the CD baselines.
     """
     drift_fn, diffusion_fn = get_dynamics(state_2.model_inputs)
     predicted_mean, predicted_chol_cov, samples, weights = predict(
@@ -287,7 +287,7 @@ def filter_combine(
     )
 
     S = chol_S @ chol_S.T
-    return CRFState(
+    return WSCKFState(
         mean=updated_mean,
         chol_cov=updated_chol_cov,
         model_inputs=state_2.model_inputs,

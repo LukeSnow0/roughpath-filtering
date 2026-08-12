@@ -8,7 +8,7 @@ Design
 * **LOBO:** for each held-out bird ``b``, fit on all birds except ``b``, then
   score bird ``b`` under a **shared reference EnKF** (full-track NLL/obs).
   The held-out bird never enters the fit (no leakage).
-* Compares CRF / CD-EKF / CD-EnKF.
+* Compares WSC-KF / CD-EKF / CD-EnKF.
 
 This targets cross-individual prediction, not one-track suffix holdout.
 
@@ -56,7 +56,7 @@ import matplotlib.pyplot as plt
 jax.config.update("jax_enable_x64", True)
 
 from cuthbert import filter as run_filter
-from crf import build_filter
+from wsckf import build_filter
 from cd_dynamax_mirror.filters import run_cd_ekf, run_cd_enkf
 
 from movement_data import load_duck_track, select_bands
@@ -104,7 +104,7 @@ _parser.add_argument(
 _parser.add_argument(
     "--skip-stochastic",
     action="store_true",
-    help="Skip EnKF MLE / LOBO (CRF + EKF only)",
+    help="Skip EnKF MLE / LOBO (WSC-KF + EKF only)",
 )
 _parser.add_argument(
     "--pooled-only",
@@ -189,7 +189,7 @@ def load_packs(bands: list[str], n_obs: int) -> list[TrackPack]:
     return packs
 
 
-def build_crf_for(pack: TrackPack, *, checkpoint_steps: bool):
+def build_wsckf_for(pack: TrackPack, *, checkpoint_steps: bool):
     def get_init_params(_mi):
         return pack.m0, pack.chol_p0
 
@@ -221,15 +221,15 @@ _run = jit(run_filter, static_argnames=["filter_obj"])
 
 def make_track_logliks(pack: TrackPack):
     """Per-track train (full selected prefix) loglik callables + ref scorer."""
-    crf = build_crf_for(pack, checkpoint_steps=True)
-    crf_fwd = build_crf_for(pack, checkpoint_steps=False)
+    wsckf = build_wsckf_for(pack, checkpoint_steps=True)
+    wsckf_fwd = build_wsckf_for(pack, checkpoint_steps=False)
 
-    def crf_ll(tau_v, sigma_v):
-        return _run(crf, _mi(tau_v, sigma_v, pack.n_obs)).log_normalizing_constant[-1]
+    def wsckf_ll(tau_v, sigma_v):
+        return _run(wsckf, _mi(tau_v, sigma_v, pack.n_obs)).log_normalizing_constant[-1]
 
-    def crf_ll_fwd(tau_v, sigma_v):
+    def wsckf_ll_fwd(tau_v, sigma_v):
         return _run(
-            crf_fwd, _mi(tau_v, sigma_v, pack.n_obs)
+            wsckf_fwd, _mi(tau_v, sigma_v, pack.n_obs)
         ).log_normalizing_constant[-1]
 
     def ekf_cum(tau_v, sigma_v):
@@ -251,8 +251,8 @@ def make_track_logliks(pack: TrackPack):
     return {
         "band": pack.band,
         "n_obs": pack.n_obs,
-        "crf_ll": jit(crf_ll),
-        "crf_ll_fwd": jit(crf_ll_fwd),
+        "wsckf_ll": jit(wsckf_ll),
+        "wsckf_ll_fwd": jit(wsckf_ll_fwd),
         "ekf_ll": jit(lambda t, s: ekf_cum(t, s)[-1]),
         "ekf_cum": jit(ekf_cum),
         "enkf_cum": enkf_cum,  # n_particles varies; jit inside callers
@@ -313,14 +313,14 @@ def adam_pooled(vg_fn, label: str):
 
 
 def make_pooled_vg(track_fns: list[dict], method: str, enkf_key=None):
-    """value_and_grad of Σ_i L_i(θ) for method in {crf, ekf, enkf}."""
+    """value_and_grad of Σ_i L_i(θ) for method in {wsckf, ekf, enkf}."""
 
-    if method == "crf":
+    if method == "wsckf":
         def total(th):
             tau, sv = jnp.exp(th[0]), jnp.exp(th[1])
             s = 0.0
             for fns in track_fns:
-                s = s + fns["crf_ll"](tau, sv)
+                s = s + fns["wsckf_ll"](tau, sv)
             return s
 
     elif method == "ekf":
@@ -364,16 +364,16 @@ else:
 packs = load_packs(BANDS, _args.n_obs)
 all_fns = [make_track_logliks(p) for p in packs]
 stochastic = not _args.skip_stochastic
-methods = ["crf", "ekf"] + (["enkf"] if stochastic else [])
-method_labels = {"crf": "CRF", "ekf": "EKF", "enkf": "EnKF"}
-method_colors = {"crf": "#2ca02c", "ekf": "#d62728", "enkf": "#1f77b4"}
+methods = ["wsckf", "ekf"] + (["enkf"] if stochastic else [])
+method_labels = {"wsckf": "WSC-KF", "ekf": "EKF", "enkf": "EnKF"}
+method_colors = {"wsckf": "#2ca02c", "ekf": "#d62728", "enkf": "#1f77b4"}
 
 print(
     f"birds ({len(packs)}): "
     + ", ".join(f"{p.band}[N={p.n_obs}]" for p in packs)
 )
 print(
-    f"CRF paths={_args.num_paths}  EnKF fit={ENKF_PARTICLES}p  "
+    f"WSC-KF paths={_args.num_paths}  EnKF fit={ENKF_PARTICLES}p  "
     f"ref={REF_ENKF_PARTICLES}p  mle_iters={_args.mle_iters}  solver={SOLVER}"
 )
 
@@ -528,7 +528,7 @@ if ax_b is not None:
 
 fig.suptitle(
     f"{_args.species} pooled MLE + LOBO  "
-    f"(n_birds={len(packs)}, n_obs≤{_args.n_obs}, CRF-P{_args.num_paths})",
+    f"(n_birds={len(packs)}, n_obs≤{_args.n_obs}, WSC-KF-P{_args.num_paths})",
     fontsize=11,
     y=0.995,
 )
@@ -550,7 +550,7 @@ with open(os.path.join(OUTPUT_DIR, "movement_lobo_summary.csv"), "w", newline=""
     w.writerow(["setup", "n_birds", len(packs)])
     w.writerow(["setup", "n_obs", _args.n_obs])
     w.writerow(["setup", "mle_iters", _args.mle_iters])
-    w.writerow(["setup", "crf_num_paths", _args.num_paths])
+    w.writerow(["setup", "wsckf_num_paths", _args.num_paths])
     w.writerow(["setup", "enkf_particles", ENKF_PARTICLES])
     w.writerow(["setup", "ref_enkf_particles", REF_ENKF_PARTICLES])
     w.writerow(["setup", "protocol", "pooled_mle_plus_lobo"])

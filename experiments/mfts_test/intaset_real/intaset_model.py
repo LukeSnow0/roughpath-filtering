@@ -2,7 +2,7 @@
 
 State ``x = [h1, h2, h3, h4]`` (tank levels [cm]). Observations are identity
 (sensor heights) with diagonal ``R``. Process noise is 2-D pump-flow noise
-(so CRF product ladders match the simulated MFTS ``d=2`` experiments).
+(so WSC-KF product ladders match the simulated MFTS ``d=2`` experiments).
 
 Geometry defaults reuse Nielsen/Azam scale as a working prior until
 ``calibrate_open_loop.py`` writes fitted parameters.

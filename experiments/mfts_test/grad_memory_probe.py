@@ -3,9 +3,9 @@
 Run in a fresh process so ``ru_maxrss`` is not polluted by prior configs:
 
   python experiments/mfts_test/grad_memory_probe.py \\
-      --method CRF-ckpt --delta-t 30 --dt0 0.25 --n-obs 16
+      --method WSC-KF-ckpt --delta-t 30 --dt0 0.25 --n-obs 16
 
-Methods: CRF-ckpt (checkpointed ODE adjoint), CRF-scan, CD-EKF, CD-UKF.
+Methods: WSC-KF-ckpt (checkpointed ODE adjoint), WSC-KF-scan, CD-EKF, CD-UKF.
 Prints a single line: ``method delta_t_s n_steps peak_rss_mb``
 """
 
@@ -31,8 +31,8 @@ from jax import jit, random, value_and_grad
 
 jax.config.update("jax_enable_x64", True)
 
-from crf import build_filter
-from crf.library import default_recombined_num_paths
+from wsckf import build_filter
+from wsckf.library import default_recombined_num_paths
 from cuthbert import filter as run_filter
 from experiments.cd_dynamax_mirror.filters import UKFParams, run_cd_ekf, run_cd_ukf
 from mfts_model import (
@@ -62,7 +62,7 @@ def main():
     ap.add_argument(
         "--method",
         required=True,
-        choices=("CRF-ckpt", "CRF-scan", "CD-EKF", "CD-UKF"),
+        choices=("WSC-KF-ckpt", "WSC-KF-scan", "CD-EKF", "CD-UKF"),
     )
     ap.add_argument("--delta-t", type=float, required=True, help="Assimilation interval [s]")
     ap.add_argument("--dt0", type=float, default=0.25, help="Fixed RK4 step [s]")
@@ -116,8 +116,8 @@ def main():
     drift0, L0, _, obs_fn, _ = dynamics(args.lam)
     alpha = jnp.log(jnp.asarray(args.lam, dtype=jnp.float64))
 
-    if args.method.startswith("CRF"):
-        ckpt = args.method == "CRF-ckpt"
+    if args.method.startswith("WSC-KF"):
+        ckpt = args.method == "WSC-KF-ckpt"
         num_paths = default_recombined_num_paths(2, args.cubature_order)
 
         def get_init(mi: StepInputs):

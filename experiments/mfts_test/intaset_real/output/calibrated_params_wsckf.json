@@ -27,7 +27,7 @@
     "sigma_u": 20.479510102201303
   },
   "meta": {
-    "engine": "CRF",
+    "engine": "WSC-KF",
     "source": "4T-M2-train",
     "fit_min": 15.0,
     "holdout_min": 10.0,

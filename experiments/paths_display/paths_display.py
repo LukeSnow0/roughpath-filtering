@@ -20,7 +20,7 @@ import plotly.graph_objects as go
 from matplotlib import cm
 from matplotlib.colors import Normalize, to_hex
 
-from crf.library.cubature_paths import build_product_lyons_paths
+from wsckf.library.cubature_paths import build_product_lyons_paths
 
 NOISE_DIM = 2
 ORDER = 2  # k -> (3^k)^2 = 81 paths

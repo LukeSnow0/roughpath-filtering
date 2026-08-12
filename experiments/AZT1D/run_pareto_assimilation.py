@@ -44,8 +44,8 @@ import matplotlib.pyplot as plt
 jax.config.update("jax_enable_x64", True)
 
 from cuthbert import filter as run_filter
-from crf import build_filter
-from crf.library import product_path_count
+from wsckf import build_filter
+from wsckf.library import product_path_count
 from cd_dynamax_mirror.filters import (
     UKFParams,
     run_bootstrap_pf,
@@ -57,7 +57,7 @@ from cd_dynamax_mirror.filters import (
 from azt1d_data import load_azt1d_series
 from glucose_model import (
     GlucoseParams,
-    crf_glucose_dynamics,
+    wsckf_glucose_dynamics,
     heldout_crps_per_obs,
     heldout_mean_score,
     init_estimate,
@@ -102,7 +102,7 @@ _parser.add_argument(
 )
 _parser.add_argument("--holdout-frac", type=float, default=0.3, dest="holdout_frac")
 _parser.add_argument("--dt0", type=float, default=1.0)
-_parser.add_argument("--crf-max-paths", type=int, default=4, dest="crf_max_paths")
+_parser.add_argument("--wsckf-max-paths", type=int, default=4, dest="wsckf_max_paths")
 _parser.add_argument("--enkf", type=str, default="25,50,100,500")
 _parser.add_argument("--pf", type=str, default="25,50,100,500")
 _parser.add_argument("--n-timing", type=int, default=1, dest="n_timing")
@@ -148,7 +148,7 @@ def _parse_floats(s: str) -> list[float]:
 
 
 @dataclass(frozen=True)
-class CrfConfig:
+class WSCKFConfig:
     family: str
     label: str
     n_paths: int
@@ -157,9 +157,9 @@ class CrfConfig:
     method: str = "product"
 
 
-def default_product_ladder(noise_dim: int = 2, max_paths: int = 81) -> list[CrfConfig]:
+def default_product_ladder(noise_dim: int = 2, max_paths: int = 81) -> list[WSCKFConfig]:
     specs = [(3, 1), (5, 1), (3, 2), (3, 3), (5, 2), (3, 4), (5, 3)]
-    configs: list[CrfConfig] = []
+    configs: list[WSCKFConfig] = []
     seen: set[int] = set()
     for m, k in specs:
         n = product_path_count(noise_dim, k, lyons_degree=m)
@@ -167,8 +167,8 @@ def default_product_ladder(noise_dim: int = 2, max_paths: int = 81) -> list[CrfC
             continue
         seen.add(n)
         configs.append(
-            CrfConfig(
-                family="CRF-product",
+            WSCKFConfig(
+                family="WSC-KF-product",
                 label=f"prod-m{m}-k{k}",
                 n_paths=n,
                 k=k,
@@ -200,7 +200,7 @@ ENKF_LIST = _parse_ints(_args.enkf)
 PF_LIST = _parse_ints(_args.pf)
 N_TIMING = max(1, int(_args.n_timing))
 SOLVER = _args.solver
-CRF_CONFIGS = default_product_ladder(2, max_paths=int(_args.crf_max_paths))
+WSCKF_CONFIGS = default_product_ladder(2, max_paths=int(_args.wsckf_max_paths))
 SPAN_MIN = float(_args.span_min)
 SEED_STRIDE_MIN = float(
     _args.seed_stride_min if _args.seed_stride_min is not None else SPAN_MIN
@@ -209,8 +209,8 @@ if SEED_STRIDE_MIN <= 0:
     raise SystemExit("--seed-stride-min must be positive")
 if not (0.05 <= _args.holdout_frac <= 0.5):
     raise SystemExit("--holdout-frac must be in [0.05, 0.5]")
-if not CRF_CONFIGS:
-    raise SystemExit(f"--crf-max-paths={_args.crf_max_paths} yields no product configs")
+if not WSCKF_CONFIGS:
+    raise SystemExit(f"--wsckf-max-paths={_args.wsckf_max_paths} yields no product configs")
 if not SEEDS:
     raise SystemExit("--seeds must be non-empty")
 
@@ -352,14 +352,14 @@ def run_one_delta(dt_assim: float, seed: int) -> list[dict]:
             f"time={1e3*wall_s:7.1f} ms"
         )
 
-    def build_crf(cfg: CrfConfig):
+    def build_wsckf(cfg: WSCKFConfig):
         model_inputs = jnp.arange(N_OBS + 1)
 
         def get_init_params(_mi):
             return M0, CHOL_P0
 
         def get_dynamics(mi):
-            return crf_glucose_dynamics(DRIFT, L_FN, mi, DT)
+            return wsckf_glucose_dynamics(DRIFT, L_FN, mi, DT)
 
         def get_observations(mi):
             return OBS_FN, CHOL_R, YS[mi - 1]
@@ -382,10 +382,10 @@ def run_one_delta(dt_assim: float, seed: int) -> list[dict]:
             model_inputs,
         )
 
-    _run_crf = jit(run_filter, static_argnames=["filter_obj"])
-    for cfg in CRF_CONFIGS:
-        filt, mi = build_crf(cfg)
-        states, wall = time_call(lambda f=filt, m=mi: _run_crf(f, m))
+    _run_wsckf = jit(run_filter, static_argnames=["filter_obj"])
+    for cfg in WSCKF_CONFIGS:
+        filt, mi = build_wsckf(cfg)
+        states, wall = time_call(lambda f=filt, m=mi: _run_wsckf(f, m))
         score(
             cfg.family,
             cfg.label,
@@ -534,7 +534,7 @@ def plot_one_delta(
 ):
     """Single-Δt Pareto in the cohort style (one series per filter)."""
     COLORS = {
-        "CRF-product": "#6A4C93",
+        "WSC-KF-product": "#6A4C93",
         "CD-EKF": "#2E86AB",
         "CD-UKF": "#E8B923",
         "CD-CKF": "#3DA35D",
@@ -542,14 +542,14 @@ def plot_one_delta(
         "PF": "#F24236",
     }
     DISPLAY = {
-        "CRF-product": "WSC-KF",
+        "WSC-KF-product": "WSC-KF",
         "CD-EKF": "EKF",
         "CD-UKF": "UKF",
         "CD-CKF": "CKF",
         "CD-EnKF": "EnKF",
         "PF": "PF",
     }
-    families = ("CRF-product", "CD-EKF", "CD-UKF", "CD-CKF", "CD-EnKF", "PF")
+    families = ("WSC-KF-product", "CD-EKF", "CD-UKF", "CD-CKF", "CD-EnKF", "PF")
     s0 = summary_dt[0]
     dt = float(s0["delta_t_min"])
 
