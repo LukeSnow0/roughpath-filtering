@@ -28,7 +28,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(HERE, "output")
 
 # Shade is mean ± BAND_SCALE * σ (mean sits in the middle).
-BAND_SCALE = 0.3
+BAND_SCALE = 0.1
 SHADE_ALPHA = 0.22
 SINGLE_X_HALF = 1.04
 

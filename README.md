@@ -6,10 +6,10 @@ cubature nodes along Wiener-space cubature paths through a Stratonovich SDE,
 without Jacobians or Monte Carlo sampling.
 
 The installable library lives in [`crf/`](crf/). The [`experiments/`](experiments/)
-directory contains benchmark scripts that compare the CRF against standard
-continuous-discrete estimators (CD-EKF, CD-UKF, CD-EnKF, bootstrap PF) on shared
-observation sequences, reporting tracking accuracy, marginal log-likelihood, and
-runtime.
+directory contains benchmark and real-data scripts that compare the CRF against
+standard continuous-discrete estimators (CD-EKF, CD-UKF, CD-EnKF, bootstrap PF)
+on shared observation sequences, reporting tracking accuracy, marginal
+log-likelihood, and runtime.
 
 For the mathematical motivation, see [EXPOSITION.md](EXPOSITION.md).
 
@@ -23,8 +23,8 @@ source .venv/bin/activate
 pip install -e ".[experiments]"
 ```
 
-The `[experiments]` extra adds **matplotlib** for benchmark plots. For library
-use only:
+The `[experiments]` extra adds **matplotlib** (and **openpyxl** for some
+real-data loaders). For library use only:
 
 ```bash
 pip install -e .
@@ -36,10 +36,20 @@ Or with [uv](https://docs.astral.sh/uv/):
 uv sync --extra experiments
 ```
 
+Optional extras:
+
+| Extra | Purpose |
+| --- | --- |
+| `experiments` | Plotting + spreadsheet deps for benchmark scripts |
+| `dev` | `pytest` |
+| `metal` | Apple Silicon JAX MPS backend (`jax-mps`) |
+
 **Dependencies:** [cuthbert](https://pypi.org/project/cuthbert/) and
 **cuthbertlib** provide the generic filtering interface (`cuthbert.inference.Filter`,
 `cuthbert.filter`); CRF predict/update kernels live in this repo under
-`crf.library`. Both are installed automatically by `pip install -e .`.
+`crf`. Both are installed automatically by `pip install -e .`.
+This project currently pins `cuthbert` / `cuthbertlib` to `>=0.0.12,<0.0.14`
+(API change in `0.0.14`).
 
 To hack on cuthbert locally, you can create optional symlinks in the repo root
 (not tracked by git):
@@ -55,6 +65,12 @@ JAX 64-bit precision is enabled inside the experiment scripts
 `JAX_ENABLE_X64=1` in the environment.
 
 A pinned dependency tree is also available in [`requirements.txt`](requirements.txt).
+Tests live under [`tests/`](tests/):
+
+```bash
+pip install -e ".[dev]"
+pytest
+```
 
 ## Using the library
 
@@ -155,18 +171,18 @@ Override explicitly when benchmarking, e.g.
 
 ## Experiments
 
-After `pip install -e ".[experiments]"`, run benchmarks from the repo root:
+After `pip install -e ".[experiments]"` (or `uv sync --extra experiments`),
+run benchmarks from the repo root. Experiment code imports the library (`crf`)
+and shared baselines (`experiments.cd_dynamax_mirror`).
+
+### Core synthetic benchmarks
 
 ```bash
 python experiments/mfts_test/run_comparison.py
 python experiments/l63_test/run_comparison.py
-python experiments/scalable_ring_test/run_comparison.py
 ```
 
-Experiment code imports the library (`crf`) and shared baselines
-(`experiments.cd_dynamax_mirror`); no `sys.path` setup is required.
-
-### Modified Four-Tank System (MFTS)
+#### Modified Four-Tank System (MFTS)
 
 State `x = [m₁, m₂, m₃, m₄, F₃, F₄]ᵀ`: four tank masses [g] (ρ = 1) plus two
 Ornstein–Uhlenbeck disturbance flows [cm³/s], driven by known pump inputs
@@ -194,9 +210,10 @@ python experiments/mfts_test/run_comparison.py --seed 42 --cubature-order 3
 | `--cubature-order` | CRF Lyons macro-segment count *k* (default 3) |
 
 Outputs: `experiments/mfts_test/output/` (tank heights, disturbance flows, MAPE
-bars, cumulative log-likelihood, runtime).
+bars, cumulative log-likelihood, runtime). Related scripts also include Pareto
+budget / interval sweeps and an `intaset_real/` real-data subfolder.
 
-### Lorenz 63 (L63)
+#### Lorenz 63 (L63)
 
 Chaotic-attractor tracking from a single noisy observation channel
 (`x₁` only), in the spirit of cd-dynamax `l63_mech_x1`:
@@ -212,7 +229,46 @@ python experiments/l63_test/run_comparison.py
 
 Outputs: `experiments/l63_test/output/` (state trajectories, per-component RMSE,
 cumulative log-likelihood, runtime). Settings are fixed in the script; edit
-there to explore variants.
+there to explore variants. Also see `run_pareto_budget_smoke.py` and
+`run_rmse_vs_interval.py`.
+
+#### Heston (stochastic volatility)
+
+Simulated twin with noisy log-price observations and latent variance
+(Brownian dim `d = 2`). Main entry:
+
+```bash
+uv run --extra experiments python experiments/heston_test/run_pareto_budget.py
+```
+
+Outputs under `experiments/heston_test/output/` (budget vs RMSE Pareto curves
+and CSVs). Overlay helper: `plot_pareto_L_overlay.py`.
+
+### Path-construction diagnostics
+
+[`experiments/multiplicative_noise_test/`](experiments/multiplicative_noise_test/)
+isolates cases where product cubature and multi-D Lyons–Victoir paths disagree
+(non-commuting noise / Lévy area), plus weak-error and diffusion-gap scripts:
+
+```bash
+uv run --extra experiments python \
+    experiments/multiplicative_noise_test/compare_product_vs_lv.py
+```
+
+### Real-data experiments
+
+| Directory | Domain | Notes |
+| --- | --- | --- |
+| [`experiments/AZT1D/`](experiments/AZT1D/) | T1D CGM + insulin pump | Bergman-style Ito SDE; see [`AZT1D/README.md`](experiments/AZT1D/README.md) |
+| [`experiments/movement_test/`](experiments/movement_test/) | Dabbling-duck GPS | OU-velocity SDE with speed-dependent diffusion; see [`movement_test/README.md`](experiments/movement_test/README.md) |
+
+Data folders for these experiments are typically gitignored; follow the
+per-experiment READMEs for download and layout.
+
+### Presentation figures
+
+[`experiments/paths_display/`](experiments/paths_display/) — cubature-path and
+algorithm figures for talks / exposition.
 
 ## Methods compared
 
@@ -240,22 +296,29 @@ moment-ODE variants are unstable on that chaotic, sparsely observed problem.
 cubature-filtering/
 ├── crf/                         # Installable library
 │   ├── __init__.py              # Public API: build_filter, CRFState, types
-│   ├── library/                 # Wiener cubature paths + predict/update kernels
+│   ├── library/                 # Wiener cubature paths + Ito/Stratonovich helpers
 │   │   ├── cubature_paths.py
-│   │   └── filtering.py
-│   └── filter/                  # High-level CRF wired into cuthbert's Filter API
+│   │   └── conversions.py
+│   └── filter/                  # High-level CRF + predict/update kernels
 │       ├── cubature_filter.py
+│       ├── filtering.py
 │       └── types.py
 ├── examples/                    # Minimal usage scripts
 │   ├── linear_gaussian_1d.py
 │   └── ito_ou_1d.py
-├── experiments/                 # Benchmarks (installed in editable dev mode)
+├── experiments/                 # Benchmarks and real-data studies
 │   ├── cd_dynamax_mirror/       # CD-EKF, CD-UKF, CD-EnKF, bootstrap PF
 │   ├── mfts_test/               # Nielsen four-tank benchmark
 │   ├── l63_test/                # Lorenz-63 tracking benchmark
+│   ├── heston_test/             # Heston SV twin / Pareto budget
+│   ├── multiplicative_noise_test/  # Product vs LV path diagnostics
+│   ├── AZT1D/                   # Real CGM / insulin filtering
+│   ├── movement_test/           # Real GPS movement filtering
 │   └── paths_display/           # Presentation figures
+├── tests/                       # pytest suite
 ├── EXPOSITION.md                # Mathematical overview
 ├── pyproject.toml
+├── uv.lock
 └── requirements.txt
 ```
 

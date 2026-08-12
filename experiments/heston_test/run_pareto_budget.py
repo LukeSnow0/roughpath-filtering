@@ -21,6 +21,7 @@ import csv
 import os
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 os.environ.setdefault(
@@ -218,16 +219,24 @@ CKF_PARAMS = UKFParams(alpha=1.0, beta=0.0, kappa=0.0)
 
 COLORS = {
     "CD-EKF": "#2E86AB",
-    "CD-UKF": "#3DA35D",
+    "CD-EKF-fine": "#5DADE2",
+    "CD-UKF": "#B8860B",
+    "CD-UKF-fine": "#E8B923",
     "CD-CKF": "#3DA35D",
     "CD-EnKF": "#F6AE2D",
     "PF": "#F24236",
     "CRF-product": "#6A4C93",
+    "CRF-m3": "#6A4C93",
+    "CRF-m5": "#C77DFF",
 }
 DISPLAY_NAME = {
     "CRF-product": "WS-CKF",
-    "CD-EKF": "CD-EKF",
+    "CRF-m3": "WS-CKF m=3",
+    "CRF-m5": "WS-CKF m=5",
+    "CD-EKF": "CD-EKF (coarse)",
+    "CD-EKF-fine": "CD-EKF (fine)",
     "CD-UKF": "CD-UKF (coarse)",
+    "CD-UKF-fine": "CD-UKF (fine)",
     "CD-CKF": "CD-CKF",
     "CD-EnKF": "CD-EnKF",
     "PF": "PF",
@@ -236,6 +245,8 @@ _LABEL_OFFSET = {
     "CD-EnKF": (0, -10),
     "PF": (0, 7),
     "CRF-product": (0, 8),
+    "CRF-m3": (0, 8),
+    "CRF-m5": (0, -9),
 }
 
 
@@ -362,8 +373,10 @@ seeds_to_run = [
     s
     for s in SEEDS
     if any(not _have(s, c.family, c.label, c.n_paths) for c in CRF_CONFIGS)
-    or not _have(s, "CD-EKF", "EKF", 0)
+    or not _have(s, "CD-EKF", "EKF-coarse", 0)
+    or not _have(s, "CD-EKF-fine", "EKF-fine", 0)
     or not _have(s, "CD-UKF", "UKF-coarse", 0)
+    or not _have(s, "CD-UKF-fine", "UKF-fine", 0)
     or not _have(s, "CD-CKF", "CKF", 0)
     or any(not _have(s, "CD-EnKF", f"EnKF-{n}", n) for n in ENKF_LIST)
     or any(not _have(s, "PF", f"PF-{n}", n) for n in PF_LIST)
@@ -438,15 +451,25 @@ for seed in seeds_to_run:
             wall,
         )
 
-    if not _have(seed, "CD-EKF", "EKF", 0):
-        ekf_jit = jit(
+    if not _have(seed, "CD-EKF", "EKF-coarse", 0):
+        ekf_c_jit = jit(
             lambda: run_cd_ekf(
                 f_drift, h_obs, L_fn, Qc_fn, R, m0, P0, ys, dt, dt0,
                 state_order="flowmap", solver="rk4",
             )
         )
-        ekf_res, wall = time_call(ekf_jit)
-        score("CD-EKF", "EKF", 0, stack_estimates(m0, ekf_res.means), wall)
+        ekf_c_res, wall = time_call(ekf_c_jit)
+        score("CD-EKF", "EKF-coarse", 0, stack_estimates(m0, ekf_c_res.means), wall)
+
+    if not _have(seed, "CD-EKF-fine", "EKF-fine", 0):
+        ekf_f_jit = jit(
+            lambda: run_cd_ekf(
+                f_drift, h_obs, L_fn, Qc_fn, R, m0, P0, ys, dt, dt0,
+                state_order="first", solver="rk4",
+            )
+        )
+        ekf_f_res, wall = time_call(ekf_f_jit)
+        score("CD-EKF-fine", "EKF-fine", 0, stack_estimates(m0, ekf_f_res.means), wall)
 
     if not _have(seed, "CD-UKF", "UKF-coarse", 0):
         ukf_jit = jit(
@@ -457,6 +480,16 @@ for seed in seeds_to_run:
         )
         ukf_res, wall = time_call(ukf_jit)
         score("CD-UKF", "UKF-coarse", 0, stack_estimates(m0, ukf_res.means), wall)
+
+    if not _have(seed, "CD-UKF-fine", "UKF-fine", 0):
+        ukf_f_jit = jit(
+            lambda: run_cd_ukf(
+                f_drift, h_obs, L_fn, Qc_fn, R, m0, P0, ys, dt, dt0,
+                UKFParams(), state_order="first", solver="rk4",
+            )
+        )
+        ukf_f_res, wall = time_call(ukf_f_jit)
+        score("CD-UKF-fine", "UKF-fine", 0, stack_estimates(m0, ukf_f_res.means), wall)
 
     if not _have(seed, "CD-CKF", "CKF", 0):
         ckf_jit = jit(
@@ -552,11 +585,11 @@ with open(csv_path, "w", newline="") as f:
         w.writerow({"delta_t": dt, "n_obs": n_obs, "horizon": HORIZON, **r})
 
 # ---- plot ----
-BAND_SCALE = 0.3
+BAND_SCALE = 0.1
 
 
 def _annotate_nodes(ax, fam, pts, xs, ys):
-    if fam in ("CD-EKF", "CD-UKF", "CD-CKF"):
+    if fam in ("CD-EKF", "CD-EKF-fine", "CD-UKF", "CD-UKF-fine", "CD-CKF"):
         return
     color = COLORS[fam]
     base_dx, base_dy = _LABEL_OFFSET.get(fam, (0, 6))
@@ -576,19 +609,33 @@ def _annotate_nodes(ax, fam, pts, xs, ys):
 
 
 fig, ax = plt.subplots(figsize=(7.5, 4.5))
-plot_groups: list[tuple[str, list[str]]] = [
-    ("WS-CKF", ["CRF-product"]),
-    ("CD-EnKF", ["CD-EnKF"]),
-    ("PF", ["PF"]),
-    ("CD-EKF", ["CD-EKF"]),
-    ("CD-UKF (coarse)", ["CD-UKF"]),
-    ("CD-CKF", ["CD-CKF"]),
+# Split WS-CKF by Lyons degree (m=3 vs m=5), matching L-overlay colors.
+plot_groups: list[tuple[str, str, Callable[[dict], bool]]] = [
+    ("WS-CKF m=3", "CRF-m3", lambda r: r["family"] == "CRF-product" and "-m3-" in r["label"]),
+    ("WS-CKF m=5", "CRF-m5", lambda r: r["family"] == "CRF-product" and "-m5-" in r["label"]),
+    ("CD-EnKF", "CD-EnKF", lambda r: r["family"] == "CD-EnKF"),
+    ("PF", "PF", lambda r: r["family"] == "PF"),
+    ("CD-EKF (coarse)", "CD-EKF", lambda r: r["family"] == "CD-EKF"),
+    ("CD-EKF (fine)", "CD-EKF-fine", lambda r: r["family"] == "CD-EKF-fine"),
+    ("CD-UKF (coarse)", "CD-UKF", lambda r: r["family"] == "CD-UKF"),
+    ("CD-UKF (fine)", "CD-UKF-fine", lambda r: r["family"] == "CD-UKF-fine"),
+    ("CD-CKF", "CD-CKF", lambda r: r["family"] == "CD-CKF"),
 ]
 all_xs: list[float] = []
 n_seeds = len({r["seed"] for r in raw_rows})
 crf_path_note = ",".join(str(c.n_paths) for c in CRF_CONFIGS)
-for disp, fams in plot_groups:
-    pts = [r for r in summary if r["family"] in fams]
+_square = {
+    "CD-EKF (coarse)",
+    "CD-EKF (fine)",
+    "CD-UKF (coarse)",
+    "CD-UKF (fine)",
+    "CD-CKF",
+    "WS-CKF m=3",
+    "WS-CKF m=5",
+}
+_markers = {"WS-CKF m=3": "s", "WS-CKF m=5": "D"}
+for disp, color_key, pred in plot_groups:
+    pts = [r for r in summary if pred(r)]
     if not pts:
         continue
     pts = sorted(pts, key=lambda r: r["budget"])
@@ -596,8 +643,8 @@ for disp, fams in plot_groups:
     ys_plot = np.asarray([r["rmse_mean"] for r in pts])
     ystd = np.asarray([r["rmse_std"] for r in pts]) * BAND_SCALE
     all_xs.extend(xs.tolist())
-    color = COLORS[fams[0]]
-    marker = "s" if disp in ("CD-EKF", "CD-UKF (coarse)", "CD-CKF", "WS-CKF") else "o"
+    color = COLORS[color_key]
+    marker = _markers.get(disp, "s" if disp in _square else "o")
     if len(pts) == 1:
         x0 = float(xs[0])
         ax.fill_between(
@@ -612,7 +659,7 @@ for disp, fams in plot_groups:
     else:
         ax.fill_between(xs, ys_plot - ystd, ys_plot + ystd, color=color, alpha=0.22, lw=0)
         ax.plot(xs, ys_plot, f"-{marker}", color=color, lw=1.5, markersize=6, label=disp)
-    _annotate_nodes(ax, fams[0], pts, xs, ys_plot)
+    _annotate_nodes(ax, color_key, pts, xs, ys_plot)
 
 ax.set_xlabel("Wall-clock time [ms]")
 _rmse_ylab = {
