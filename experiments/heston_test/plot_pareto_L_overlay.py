@@ -1,4 +1,4 @@
-"""Overlay Heston Pareto for L-scale ∈ {2,3,4}: median RMSE with [q10, q90] bands.
+"""Overlay Heston Pareto for L-scale ∈ {2,3,4}: mean RMSE with ±kσ bands.
 
 Reads raw CSVs from ``noise_hi_L2``, ``noise_hi`` (L=3), ``noise_hi_L4``.
 WS-CKF is split by Lyons degree: m=3 (P=4,16,64) vs m=5 (P=9,81).
@@ -27,7 +27,10 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(HERE, "output")
 
-Q_LO, Q_HI = 10.0, 90.0
+# Shade is mean ± BAND_SCALE * σ (mean sits in the middle).
+BAND_SCALE = 0.3
+SHADE_ALPHA = 0.22
+SINGLE_X_HALF = 1.04
 
 # (display name, color, marker, annotate?, row predicate)
 PlotSeries = tuple[str, str, str, bool, Callable[[dict], bool]]
@@ -68,7 +71,7 @@ SERIES = [
 
 
 def _load_raw_summary(tag: str) -> tuple[list[dict], float, float]:
-    """Aggregate raw seed rows → median / q10 / q90 RMSE and median wall time."""
+    """Aggregate raw seed rows → mean / std RMSE and mean wall time."""
     path = os.path.join(OUTPUT_DIR, f"pareto_budget_vs_rmse_{tag}_raw.csv")
     if not os.path.isfile(path):
         raise FileNotFoundError(path)
@@ -86,16 +89,19 @@ def _load_raw_summary(tag: str) -> tuple[list[dict], float, float]:
     for (family, label, budget), pairs in buckets.items():
         rmses = np.asarray([p[0] for p in pairs], dtype=np.float64)
         times = np.asarray([p[1] for p in pairs], dtype=np.float64)
+        mean = float(np.mean(rmses))
+        std = float(np.std(rmses, ddof=1)) if len(rmses) > 1 else 0.0
+        half = BAND_SCALE * std
         rows.append(
             {
                 "family": family,
                 "label": label,
                 "budget": budget,
                 "n_seeds": len(pairs),
-                "rmse_med": float(np.median(rmses)),
-                "rmse_qlo": float(np.percentile(rmses, Q_LO)),
-                "rmse_qhi": float(np.percentile(rmses, Q_HI)),
-                "time_s_med": float(np.median(times)),
+                "rmse_mean": mean,
+                "rmse_ylo": mean - half,
+                "rmse_yhi": mean + half,
+                "time_s_mean": float(np.mean(times)),
                 "delta_t": float(delta_t),
                 "horizon": float(horizon),
             }
@@ -128,27 +134,30 @@ def _draw_panel(ax, summary: list[dict], *, show_legend: bool):
         if not pts:
             continue
         pts = sorted(pts, key=lambda r: r["budget"])
-        xs = np.asarray([1e3 * r["time_s_med"] for r in pts])
-        ys = np.asarray([r["rmse_med"] for r in pts])
-        ylo = np.asarray([r["rmse_qlo"] for r in pts])
-        yhi = np.asarray([r["rmse_qhi"] for r in pts])
+        xs = np.asarray([1e3 * r["time_s_mean"] for r in pts])
+        ys = np.asarray([r["rmse_mean"] for r in pts])
+        ylo = np.asarray([r["rmse_ylo"] for r in pts])
+        yhi = np.asarray([r["rmse_yhi"] for r in pts])
         all_xs.extend(xs.tolist())
         all_ys.extend(ylo.tolist())
         all_ys.extend(yhi.tolist())
         if len(pts) == 1:
             x0 = float(xs[0])
             ax.fill_between(
-                [x0 / 1.04, x0 * 1.04],
+                [x0 / SINGLE_X_HALF, x0 * SINGLE_X_HALF],
                 [ylo[0]] * 2,
                 [yhi[0]] * 2,
                 color=color,
-                alpha=0.22,
+                alpha=SHADE_ALPHA,
                 lw=0,
+                zorder=1,
             )
-            ax.plot(xs, ys, marker, color=color, markersize=6, label=disp)
+            ax.plot(xs, ys, marker, color=color, markersize=6, label=disp, zorder=3)
         else:
-            ax.fill_between(xs, ylo, yhi, color=color, alpha=0.22, lw=0)
-            ax.plot(xs, ys, f"-{marker}", color=color, lw=1.4, markersize=5, label=disp)
+            ax.fill_between(xs, ylo, yhi, color=color, alpha=SHADE_ALPHA, lw=0, zorder=1)
+            ax.plot(
+                xs, ys, f"-{marker}", color=color, lw=1.4, markersize=5, label=disp, zorder=3
+            )
         if do_ann:
             _annotate(ax, disp, color, pts, xs, ys)
     if show_legend:
@@ -188,7 +197,7 @@ def main():
     delta_t, horizon = panels[0][3], panels[0][4]
     fig.suptitle(
         rf"Heston Pareto at $\Delta t={delta_t:g}$, $\xi=1$, $\rho=-0.7$ "
-        rf"(median, shade $[{Q_LO:g}\%,{Q_HI:g}\%]$; horizon={horizon:g}; "
+        rf"(mean±{BAND_SCALE:g}$\sigma$; horizon={horizon:g}; "
         r"WS-CKF $m{=}3$: $P\in\{4,16,64\}$, $m{=}5$: $P\in\{9,81\}$)",
         fontsize=12,
         y=1.02,
