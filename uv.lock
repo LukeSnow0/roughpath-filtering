@@ -99,8 +99,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cuthbert", specifier = ">=0.0.12" },
-    { name = "cuthbertlib", specifier = ">=0.0.12" },
+    { name = "cuthbert", specifier = ">=0.0.12,<0.0.14" },
+    { name = "cuthbertlib", specifier = ">=0.0.12,<0.0.14" },
     { name = "diffrax", specifier = ">=0.7.2" },
     { name = "jax", specifier = ">=0.10.1" },
     { name = "jax-mps", marker = "extra == 'metal'", specifier = ">=0.10.1" },
