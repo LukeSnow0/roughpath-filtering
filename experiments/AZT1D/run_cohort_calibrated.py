@@ -66,9 +66,15 @@ from cd_dynamax_mirror.filters import (
     run_cd_ukf,
 )
 
-from azt1d_data import list_subjects, load_azt1d_series
+from azt1d_data import (
+    cgm_noise_seed_for_subject,
+    inject_cgm_gaussian_noise,
+    list_subjects,
+    load_azt1d_series,
+)
 from glucose_model import (
     GlucoseParams,
+    crf_glucose_dynamics,
     heldout_crps_per_obs,
     heldout_mean_score,
     init_estimate,
@@ -136,6 +142,49 @@ _parser.add_argument(
     "--replace-pareto-plot",
     action="store_true",
     help="also write cohort Pareto to pareto_assimilation.png",
+)
+_parser.add_argument(
+    "--out-suffix",
+    type=str,
+    default="",
+    dest="out_suffix",
+    help="append to output tag (e.g. 'fixed' → cohort_calibrated_crps_dt20_fixed.png)",
+)
+_parser.add_argument(
+    "--params-json",
+    type=str,
+    default="",
+    dest="params_json",
+    help="load per-subject (p3, sigma_g) from a prior cohort_calibrated_params*.json "
+    "and skip EnKF-MLE (bakeoff only)",
+)
+_parser.add_argument(
+    "--sigma-g-scale",
+    type=float,
+    default=1.0,
+    dest="sigma_g_scale",
+    help="multiply each subject's σ_G after load/MLE (stress multiplicative noise)",
+)
+_parser.add_argument(
+    "--sigma-g-floor",
+    type=float,
+    default=0.0,
+    dest="sigma_g_floor",
+    help="after scaling, clamp σ_G to at least this value (0 = no floor)",
+)
+_parser.add_argument(
+    "--cgm-noise-std",
+    type=float,
+    default=0.0,
+    dest="cgm_noise_std",
+    help="add i.i.d. N(0, std²) to each assimilation-grid CGM (0 = clean data)",
+)
+_parser.add_argument(
+    "--cgm-noise-seed",
+    type=int,
+    default=0,
+    dest="cgm_noise_seed",
+    help="base seed for CGM noise (per-subject: seed + 100003*subject)",
 )
 _args = _parser.parse_args()
 
@@ -206,6 +255,21 @@ if abs(STRIDE * BASE_DT - DT_ASSIM) > 1e-6:
         f"--dt-assim={DT_ASSIM:g} must be an integer multiple of {BASE_DT:g} min"
     )
 OUT_TAG = "" if abs(DT_ASSIM - BASE_DT) < 1e-9 else f"_dt{int(round(DT_ASSIM))}"
+_sfx = str(_args.out_suffix).strip().lstrip("_")
+if _sfx:
+    OUT_TAG = f"{OUT_TAG}_{_sfx}"
+
+_PRELOADED_THETA: dict[int, tuple[float, float]] = {}
+if str(_args.params_json).strip():
+    _pj = _args.params_json.strip()
+    if not os.path.isfile(_pj):
+        raise SystemExit(f"--params-json not found: {_pj}")
+    with open(_pj) as _f:
+        _blob = json.load(_f)
+    for _row in _blob.get("params", []):
+        _PRELOADED_THETA[int(_row["subject"])] = (float(_row["p3"]), float(_row["sigma_g"]))
+    if not _PRELOADED_THETA:
+        raise SystemExit(f"--params-json has no params: {_pj}")
 if not CRF_CONFIGS:
     raise SystemExit("--crf-paths must be non-empty")
 if not ENKF_LIST:
@@ -231,6 +295,12 @@ def run_subject(subject: int) -> tuple[dict, list[dict]]:
     # Keep fine insulin/carb for continuous input interp; assimilate every STRIDE-th CGM.
     idx = np.arange(0, int(series.cgm.shape[0]), STRIDE)
     cgm = np.asarray(series.cgm, dtype=np.float64)[idx]
+    if float(_args.cgm_noise_std) > 0.0:
+        cgm = inject_cgm_gaussian_noise(
+            cgm,
+            std=float(_args.cgm_noise_std),
+            seed=cgm_noise_seed_for_subject(int(_args.cgm_noise_seed), subject),
+        )
     YS = jnp.asarray(cgm.reshape(-1, 1))
     N_OBS = int(YS.shape[0])
     min_obs = 40 if DT_ASSIM > BASE_DT + 1e-9 else 100
@@ -277,34 +347,41 @@ def run_subject(subject: int) -> tuple[dict, list[dict]]:
             n_particles=MLE_ENKF_PARTICLES, noise_dim=2, dt0=DT0, solver=SOLVER,
         ).cum_loglik[-1]
 
-    key_ad = jr.PRNGKey(_args.seed + 17 * subject)
-    vg = jit(
-        value_and_grad(
-            lambda th: enkf_ll_train(jnp.exp(th[0]), jnp.exp(th[1]), key_ad)
+    if subject in _PRELOADED_THETA:
+        p3_hat, sg_hat = _PRELOADED_THETA[subject]
+    else:
+        key_ad = jr.PRNGKey(_args.seed + 17 * subject)
+        vg = jit(
+            value_and_grad(
+                lambda th: enkf_ll_train(jnp.exp(th[0]), jnp.exp(th[1]), key_ad)
+            )
         )
-    )
-    th = np.array([np.log(_args.p3_init), np.log(_args.sigma_g_init)], dtype=float)
-    b1, b2, eps = 0.9, 0.999, 1e-8
-    m = np.zeros(2)
-    v = np.zeros(2)
-    p3_hat = float(_args.p3_init)
-    sg_hat = float(_args.sigma_g_init)
-    for t in range(1, _args.mle_iters + 1):
-        val, g = vg(jnp.asarray(th))
-        ll = float(val)
-        g = np.asarray(g, dtype=float)
-        if not np.isfinite(ll) or not np.all(np.isfinite(g)):
-            break
+        th = np.array([np.log(_args.p3_init), np.log(_args.sigma_g_init)], dtype=float)
+        b1, b2, eps = 0.9, 0.999, 1e-8
+        m = np.zeros(2)
+        v = np.zeros(2)
+        p3_hat = float(_args.p3_init)
+        sg_hat = float(_args.sigma_g_init)
+        for t in range(1, _args.mle_iters + 1):
+            val, g = vg(jnp.asarray(th))
+            ll = float(val)
+            g = np.asarray(g, dtype=float)
+            if not np.isfinite(ll) or not np.all(np.isfinite(g)):
+                break
+            p3_hat = float(np.exp(th[0]))
+            sg_hat = float(np.exp(th[1]))
+            m = b1 * m + (1 - b1) * g
+            v = b2 * v + (1 - b2) * g * g
+            mhat = m / (1 - b1**t)
+            vhat = v / (1 - b2**t)
+            th = th + _args.lr * mhat / (np.sqrt(vhat) + eps)
+        # final point
         p3_hat = float(np.exp(th[0]))
         sg_hat = float(np.exp(th[1]))
-        m = b1 * m + (1 - b1) * g
-        v = b2 * v + (1 - b2) * g * g
-        mhat = m / (1 - b1**t)
-        vhat = v / (1 - b2**t)
-        th = th + _args.lr * mhat / (np.sqrt(vhat) + eps)
-    # final point
-    p3_hat = float(np.exp(th[0]))
-    sg_hat = float(np.exp(th[1]))
+
+    sg_hat = float(sg_hat) * float(_args.sigma_g_scale)
+    if float(_args.sigma_g_floor) > 0.0:
+        sg_hat = max(sg_hat, float(_args.sigma_g_floor))
 
     params = {
         "subject": subject,
@@ -323,8 +400,8 @@ def run_subject(subject: int) -> tuple[dict, list[dict]]:
         def get_init_params(_mi):
             return M0, CHOL_P0
 
-        def get_dynamics(_mi):
-            return drift, L
+        def get_dynamics(mi):
+            return crf_glucose_dynamics(drift, L, mi, DT)
 
         def get_observations(mi):
             idx = mi if not hasattr(mi, "t_idx") else mi.t_idx
@@ -493,9 +570,24 @@ def main():
     print(
         f"cohort subjects={SUBJECTS}  n_obs≤{_args.n_obs} (5-min)  "
         f"Δt={DT_ASSIM:g} min (stride={STRIDE})  "
-        f"MLE iters={_args.mle_iters} (EnKF-{MLE_ENKF_PARTICLES})  "
-        f"WSC-KF product={[c.n_paths for c in CRF_CONFIGS]}  EnKF={ENKF_LIST}  "
-        f"PF={PF_LIST if not _args.skip_pf else []}"
+        + (
+            f"θ from {_args.params_json} (skip MLE)  "
+            if _PRELOADED_THETA
+            else f"MLE iters={_args.mle_iters} (EnKF-{MLE_ENKF_PARTICLES})  "
+        )
+        + f"WSC-KF product={[c.n_paths for c in CRF_CONFIGS]}  EnKF={ENKF_LIST}  "
+        f"PF={PF_LIST if not _args.skip_pf else []}  OUT_TAG={OUT_TAG!r}"
+        + (
+            f"  σ_G×={float(_args.sigma_g_scale):g}"
+            + (f" floor={float(_args.sigma_g_floor):g}" if float(_args.sigma_g_floor) > 0 else "")
+            if abs(float(_args.sigma_g_scale) - 1.0) > 1e-12 or float(_args.sigma_g_floor) > 0
+            else ""
+        )
+        + (
+            f"  CGM+N(0,{float(_args.cgm_noise_std):g}²) seed={int(_args.cgm_noise_seed)}"
+            if float(_args.cgm_noise_std) > 0.0
+            else ""
+        )
     )
     all_rows: list[dict] = []
     all_params: list[dict] = []
@@ -639,7 +731,7 @@ def main():
     plt.close(fig)
 
     # CRPS vs wall-clock (mean ± scaled std over subjects; PF = mixture CRPS)
-    err_scale = 0.25  # display ± (err_scale * std); keeps ratios, reduces clutter
+    err_scale = 0.06  # display ± (err_scale * std); keeps ratios, reduces clutter
     fig, ax = plt.subplots(figsize=(6.2, 4.6))
     for fam in families:
         pts = [s for s in summary if s["filter"] == fam]
@@ -650,31 +742,35 @@ def main():
         ys = np.asarray([s["crps_mean"] for s in pts])
         yerr = err_scale * np.asarray([s["crps_std"] for s in pts])
         xerr = err_scale * np.asarray([1e3 * s["time_s_std"] for s in pts])
+        col = colors[fam]
         if len(pts) > 1:
-            ax.plot(xs, ys, "-", color=colors[fam], linewidth=1.2, zorder=2)
+            ax.plot(xs, ys, "-", color=col, linewidth=1.2, zorder=2)
         ax.errorbar(
             xs, ys, xerr=xerr, yerr=yerr,
-            fmt="o", color=colors[fam], markersize=7, capsize=2.5,
-            elinewidth=1.0, linestyle="none",
-            label=fam, zorder=3,
+            fmt="s", color=col, ecolor=col,
+            markersize=7, markerfacecolor="none", markeredgecolor=col,
+            markeredgewidth=1.5, capsize=2.0, elinewidth=0.9,
+            linestyle="none", label=fam, zorder=3,
         )
         for s, x, y in zip(pts, xs, ys):
-            if s["budget"]:
+            # Annotate particle/ensemble budgets only (skip WSC path count).
+            if s["budget"] and s["filter"] in ("EnKF", "PF"):
                 ax.annotate(
                     str(s["budget"]), (x, y),
                     textcoords="offset points", xytext=(4, 4),
-                    fontsize=7, color=colors[fam],
+                    fontsize=7, color=col,
                 )
     ax.set_xlabel(
         rf"Wall-clock [ms] (mean $\pm$ {err_scale:g}\,std over subjects)"
     )
     ax.set_ylabel("Held-out CRPS")
     ax.set_xscale("log")
+    ax.set_yscale("log")
     ax.grid(True, alpha=0.3, which="both")
     ax.legend(frameon=False, fontsize=8)
     fig.suptitle(
-        f"AZT1D cohort CRPS Pareto (PF=mixture; $\\Delta t$={DT_ASSIM:g} min)\n"
-        f"N={n_ok} subjects; per-subject EnKF $\\hat\\theta_i$; "
+        f"AZT1D cohort CRPS Pareto ($\\Delta t$={DT_ASSIM:g} min)\n"
+        f"N={n_ok} subjects; "
         f"WSC-KF paths={[c.n_paths for c in CRF_CONFIGS]}; "
         rf"bars = $\pm${err_scale:g} std",
         fontsize=11,
@@ -683,8 +779,9 @@ def main():
     crps_png = os.path.join(OUTPUT_DIR, f"cohort_calibrated_crps{OUT_TAG}.png")
     fig.savefig(crps_png, dpi=160)
     # Also refresh the untagged path when running a non-default Δt, after
-    # preserving any existing Δt=5 figure.
-    if abs(DT_ASSIM - BASE_DT) > 1e-9:
+    # preserving any existing Δt=5 figure. Skip when --out-suffix is set so
+    # recalibrations do not clobber the previous default figures.
+    if abs(DT_ASSIM - BASE_DT) > 1e-9 and not _sfx:
         untagged = os.path.join(OUTPUT_DIR, "cohort_calibrated_crps.png")
         dt5 = os.path.join(OUTPUT_DIR, "cohort_calibrated_crps_dt5.png")
         if os.path.isfile(untagged) and not os.path.isfile(dt5):

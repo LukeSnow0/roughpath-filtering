@@ -57,6 +57,7 @@ from cd_dynamax_mirror.filters import (
 from azt1d_data import load_azt1d_series
 from glucose_model import (
     GlucoseParams,
+    crf_glucose_dynamics,
     heldout_crps_per_obs,
     heldout_mean_score,
     init_estimate,
@@ -357,8 +358,8 @@ def run_one_delta(dt_assim: float, seed: int) -> list[dict]:
         def get_init_params(_mi):
             return M0, CHOL_P0
 
-        def get_dynamics(_mi):
-            return DRIFT, L_FN
+        def get_dynamics(mi):
+            return crf_glucose_dynamics(DRIFT, L_FN, mi, DT)
 
         def get_observations(mi):
             return OBS_FN, CHOL_R, YS[mi - 1]

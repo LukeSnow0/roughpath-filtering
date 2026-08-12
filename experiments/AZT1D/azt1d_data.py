@@ -229,3 +229,26 @@ def load_azt1d_series(
         n_obs=n_full,
         span_days=float(span_days),
     )
+
+
+def inject_cgm_gaussian_noise(
+    cgm: np.ndarray,
+    *,
+    std: float,
+    seed: int,
+) -> np.ndarray:
+    """Add i.i.d. N(0, std²) noise to CGM; ``std<=0`` returns a float64 copy.
+
+    Use the same ``seed`` (and same-length ``cgm``) across scripts so
+    recalibration and bakeoff/tracks share one noisy realization.
+    """
+    x = np.asarray(cgm, dtype=np.float64)
+    if float(std) <= 0.0:
+        return x.copy()
+    rng = np.random.default_rng(int(seed))
+    return x + rng.normal(0.0, float(std), size=x.shape)
+
+
+def cgm_noise_seed_for_subject(base_seed: int, subject: int) -> int:
+    """Deterministic per-subject seed for ``inject_cgm_gaussian_noise``."""
+    return int(base_seed) + 100_003 * int(subject)

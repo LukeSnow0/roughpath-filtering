@@ -68,7 +68,7 @@ from cd_dynamax_mirror.filters import (
 )
 
 from azt1d_data import load_azt1d_series
-from glucose_model import GlucoseParams, init_estimate, make_glucose_dynamics, mape_glucose
+from glucose_model import GlucoseParams, crf_glucose_dynamics, init_estimate, make_glucose_dynamics, mape_glucose
 
 OUTPUT_DIR = os.path.join(HERE, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -198,7 +198,7 @@ def build_crf(ys, *, checkpoint_steps: bool):
             p3=mi.p3,
             sigma_g=mi.sigma_g,
         )
-        return drift, L
+        return crf_glucose_dynamics(drift, L, mi, DT)
 
     def get_observations(mi):
         return OBS_FN, CHOL_R, ys[mi.t_idx - 1]

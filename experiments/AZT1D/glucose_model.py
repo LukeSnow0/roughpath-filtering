@@ -53,6 +53,12 @@ def make_glucose_dynamics(
 ):
     """Return ``(drift, L, Qc, obs, R)`` with time-varying insulin/carb inputs.
 
+    ``drift(t, x)`` / ``L(t, x)`` expect **absolute** time ``t`` in the same units
+    as ``t_min`` (minutes from series start). The CD-EKF/UKF/EnKF/PF baselines
+    pass absolute interval times; the CRF integrates each assimilation window in
+    *relative* time ``[0, Δt]``, so wrap with :func:`shift_sde_time` using
+    ``t0 = (step_index - 1) * Δt`` (see :func:`crf_time_offset`).
+
     ``p3`` (insulin sensitivity) and ``sigma_g`` (√G diffusion scale) may be JAX
     scalars so the filter likelihood is differentiable w.r.t. them; defaults
     fall back to ``p.p3`` / ``p.sigma_g``.
@@ -98,6 +104,39 @@ def make_glucose_dynamics(
 
     R = jnp.array([[p.meas_std**2]])
     return drift_fn, diffusion_coefficient_fn, diffusion_cov_fn, obs_fn, R
+
+
+def shift_sde_time(drift_fn, diffusion_fn, t0):
+    """Map CRF relative time ``τ ∈ [0, Δt]`` to absolute ``t = τ + t0``.
+
+    The cubature filter integrates each assimilation interval on ``[0, Δt]``.
+    Pump / meal inputs are tabulated in absolute series time, so the SDE
+    callbacks used by CRF must shift the integrator clock by the window start.
+    """
+
+    def drift_abs(t, x):
+        return drift_fn(t + t0, x)
+
+    def diffusion_abs(t, x):
+        return diffusion_fn(t + t0, x)
+
+    return drift_abs, diffusion_abs
+
+
+def crf_time_offset(model_inputs, dt: float):
+    """Absolute start time of the CRF assimilation window for ``model_inputs``.
+
+    AZT1D wires ``model_inputs`` as step indices ``0..N`` (or a pytree with
+    ``t_idx``), observing ``y[k-1]`` on step ``k≥1``. That matches the CD
+    baselines' interval ``[(k-1)Δt, kΔt]``, so ``t0 = (k - 1) Δt``.
+    """
+    idx = model_inputs.t_idx if hasattr(model_inputs, "t_idx") else model_inputs
+    return (idx - 1) * dt
+
+
+def crf_glucose_dynamics(drift_fn, diffusion_fn, model_inputs, dt: float):
+    """CRF ``get_dynamics`` helper: absolute-time drift/diffusion for one step."""
+    return shift_sde_time(drift_fn, diffusion_fn, crf_time_offset(model_inputs, dt))
 
 
 def init_estimate(cgm: np.ndarray, p: GlucoseParams) -> tuple[np.ndarray, np.ndarray]:

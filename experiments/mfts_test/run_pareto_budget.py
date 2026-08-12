@@ -248,6 +248,44 @@ _parser.add_argument(
     help="Output filename tag. Empty → '' for additive, '_mult' for multiplicative. "
     "Example: --tag mult → pareto_budget_vs_mape_mult.png",
 )
+_parser.add_argument(
+    "--sigma-scale",
+    type=float,
+    default=1.0,
+    dest="sigma_scale",
+    help="Multiply base disturbance σ (truth + filters) by this factor "
+    "(e.g. 4 for σ/σ₀=2² under multiplicative g(F))",
+)
+_parser.add_argument(
+    "--mape-mode",
+    choices=("fine", "obs"),
+    default="fine",
+    dest="mape_mode",
+    help="MAPE scoring: fine-grid (Nielsen open-loop fill) or obs-time "
+    "(filter means vs truth at assimilation times only)",
+)
+_parser.add_argument(
+    "--shared-sigma",
+    action="store_true",
+    dest="shared_sigma",
+    help="Use the same disturbance σ for UKF/CKF as for EKF/EnKF/PF/WSC "
+    "(overrides Nielsen's tighter additive UKF σ=1)",
+)
+_parser.add_argument(
+    "--shared-lambda",
+    action="store_true",
+    dest="shared_lambda",
+    help="Use the same OU rate λ for EKF/UKF/CKF and EnKF/PF/WSC "
+    "(overrides Nielsen's λ=0 vs λ=2e-3 split)",
+)
+_parser.add_argument(
+    "--lambda-dist",
+    type=float,
+    default=None,
+    dest="lambda_dist",
+    help="Filter OU rate λ on (F3,F4). Default: Nielsen split, or 2e-3 "
+    "when --shared-lambda is set. Ignored for truth (always λ_sim=0.1).",
+)
 _args = _parser.parse_args()
 
 SEEDS = _parse_ints(_args.seeds)
@@ -256,12 +294,19 @@ EVAL_DT_MIN = float(_args.eval_dt)
 SOLVER = _args.solver
 N_TIMING = _args.n_timing
 NOISE_MODE = _args.noise
+SIGMA_SCALE = float(_args.sigma_scale)
+MAPE_MODE = _args.mape_mode
 if _args.tag.strip():
     OUT_TAG = f"_{_args.tag.strip()}"
-elif NOISE_MODE == "multiplicative":
-    OUT_TAG = "_mult"
 else:
-    OUT_TAG = ""
+    parts: list[str] = []
+    if NOISE_MODE == "multiplicative":
+        parts.append("mult")
+    if abs(SIGMA_SCALE - 1.0) > 1e-12:
+        parts.append(f"sg{SIGMA_SCALE:g}")
+    if MAPE_MODE == "obs":
+        parts.append("obs")
+    OUT_TAG = ("_" + "_".join(parts)) if parts else ""
 ENKF_PARTICLE_LIST = _parse_ints(_args.enkf)
 PF_PARTICLE_LIST = _parse_ints(_args.pf)
 CRF_CONFIGS = default_product_ladder(2, max_paths=_args.crf_max_paths)
@@ -333,13 +378,26 @@ HORIZON_MIN = 30.0
 DT_TRUTH = 0.015
 DT_FILTER = 0.15
 LAMBDA_SIM = 0.1
-SIGMA_SIM = 5.0
-LAMBDA_EKF_UKF = 0.0
-LAMBDA_ENKF_PF = 2.0e-3
-SIGMA_EKF_ENKF_PF = 5.0
-# Additive Nielsen bakeoff uses a tighter UKF process noise; under multiplicative
-# diffusion keep a shared σ so moment-ODE vs path filters are comparable.
-SIGMA_UKF = 5.0 if NOISE_MODE == "multiplicative" else 1.0
+SIGMA0 = 5.0
+SIGMA_SIM = SIGMA0 * SIGMA_SCALE
+# Nielsen split: EKF/UKF λ=0, EnKF/PF/WSC λ=2e-3. --shared-lambda equalizes.
+_LAM_DEFAULT_PATH = 2.0e-3
+if _args.lambda_dist is not None:
+    LAMBDA_EKF_UKF = float(_args.lambda_dist)
+    LAMBDA_ENKF_PF = float(_args.lambda_dist)
+elif bool(_args.shared_lambda):
+    LAMBDA_EKF_UKF = _LAM_DEFAULT_PATH
+    LAMBDA_ENKF_PF = _LAM_DEFAULT_PATH
+else:
+    LAMBDA_EKF_UKF = 0.0
+    LAMBDA_ENKF_PF = _LAM_DEFAULT_PATH
+SIGMA_EKF_ENKF_PF = SIGMA0 * SIGMA_SCALE
+# Additive Nielsen bakeoff uses a tighter UKF process noise (σ=1); pass
+# --shared-sigma (or use multiplicative mode) for a fair common-σ comparison.
+if NOISE_MODE == "multiplicative" or bool(_args.shared_sigma):
+    SIGMA_UKF = SIGMA_EKF_ENKF_PF
+else:
+    SIGMA_UKF = 1.0 * SIGMA_SCALE
 F_NOISE_SCALE = 150.0
 F1, F2 = 5.0, 5.0
 
@@ -519,11 +577,21 @@ drift_ens, L_ens, _, _, _ = make_mfts_dynamics(
 )
 
 print(
-    f"Δt={dt_min:g} min, n_obs={n_obs}, noise={NOISE_MODE}, seeds={SEEDS}, "
+    f"Δt={dt_min:g} min, n_obs={n_obs}, noise={NOISE_MODE}, "
+    f"σ×={SIGMA_SCALE:g}, mape={MAPE_MODE}, "
+    f"λ_ekf={LAMBDA_EKF_UKF:g}, λ_ens={LAMBDA_ENKF_PF:g}, "
+    f"seeds={SEEDS}, "
     f"CRF configs={[c.label + f'({c.n_paths})' for c in CRF_CONFIGS]}"
 )
 
 raw_rows: list[dict] = []
+
+
+def mape_at_obs(m_filt: np.ndarray, true_fine: np.ndarray, state_idx: slice) -> float:
+    """MAPE of filter means vs truth at t0 and each observation time."""
+    true_obs = true_fine[::stride]
+    n = min(m_filt.shape[0], true_obs.shape[0])
+    return mape_pct(m_filt[:n], true_obs[:n], state_idx)
 
 
 def score(
@@ -537,16 +605,22 @@ def score(
     drift_fn,
     true_fine: np.ndarray,
 ):
-    est_fine = estimates_on_fine_grid(
-        m_filt, dt, times_fine_sec, drift_fn, DT_FILTER
-    )
+    if MAPE_MODE == "obs":
+        mapex = mape_at_obs(m_filt, true_fine, slice(0, 4))
+        maped = mape_at_obs(m_filt, true_fine, slice(4, 6))
+    else:
+        est_fine = estimates_on_fine_grid(
+            m_filt, dt, times_fine_sec, drift_fn, DT_FILTER
+        )
+        mapex = mape_pct(est_fine, true_fine, slice(0, 4))
+        maped = mape_pct(est_fine, true_fine, slice(4, 6))
     rec = {
         "seed": seed,
         "family": family,
         "label": label,
         "budget": budget,
-        "mapex": mape_pct(est_fine, true_fine, slice(0, 4)),
-        "maped": mape_pct(est_fine, true_fine, slice(4, 6)),
+        "mapex": mapex,
+        "maped": maped,
         "nll_per_obs": -final_ll / n_obs,
         "time_s": wall_s,
     }
@@ -1192,8 +1266,15 @@ _ws_ckf_budgets = (
     else ",".join(str(b) for b in sorted(WS_CKF_PLOT_BUDGETS))
 )
 _noise_note = "multiplicative $g(F)$" if NOISE_MODE == "multiplicative" else "additive"
+if abs(SIGMA_SCALE - 1.0) > 1e-12:
+    _noise_note = rf"{_noise_note}, $\sigma/\sigma_0={SIGMA_SCALE:g}$"
+if bool(_args.shared_sigma) and NOISE_MODE == "additive":
+    _noise_note = rf"{_noise_note}, shared $\sigma$={SIGMA_EKF_ENKF_PF:g}"
+if abs(LAMBDA_EKF_UKF - LAMBDA_ENKF_PF) < 1e-15:
+    _noise_note = rf"{_noise_note}, shared $\lambda$={LAMBDA_EKF_UKF:g}"
+_mape_note = "obs-time MAPE" if MAPE_MODE == "obs" else "fine-grid MAPE"
 _title_suffix = (
-    rf"at $\Delta t={dt_min:g}$ min, {_noise_note} "
+    rf"at $\Delta t={dt_min:g}$ min, {_noise_note}, {_mape_note} "
     rf"(mean±{BAND_SCALE:g}$\sigma$ over {n_seeds_total} seeds; "
     rf"WS-CKF paths = {_ws_ckf_budgets})"
 )

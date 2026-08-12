@@ -13,8 +13,13 @@ equations and offer two continuous-time forecast backends via ``solver=``:
   step (SDEs), matching the CRF's integrator for fair wall-clock comparisons.
 
 Model (continuous-discrete, additive observation noise):
-    dx = f(t, x) dt + L(t, x) dW,   Cov(dW) = Qc dt
+    dx = f(t, x) dt + L(t, x) dW,   Cov(dW) = Qc dt   (Itô by default)
     y_k = h(x(t_k)) + v_k,          v_k ~ N(0, R)
+
+EnKF / bootstrap PF forecast with ``solver="diffrax"`` (Heun) or ``"rk4"``
+(frozen-Wiener RK4) is Stratonovich-type. When ``sde_form="ito"`` (default), the
+drift is converted via the standard Itô→Stratonovich correction before those
+integrators — matching CRF ``sde_form="ito"``.
 
 All filters use a **predict-then-update** loop so their observation times line up with
 the cuthbert CRF: forecast over ``[t_k, t_{k+1}]`` then assimilate ``y_k``.
@@ -35,12 +40,15 @@ import jax.numpy as jnp
 import jax.random as jr
 from jax import jacfwd, jacrev, lax, vmap
 
+from crf.library.conversions import ito_to_stratonovich_drift
+
 Vector = jax.Array
 Matrix = jax.Array
 DriftFn = Callable[[jax.Array, jax.Array], jax.Array]  # (t, x) -> (x_dim,)
 ObsFn = Callable[[jax.Array], jax.Array]  # x -> (y_dim,)
 MatFn = Callable[[jax.Array, jax.Array], jax.Array]  # (t, x) -> matrix
 SolverKind = Literal["diffrax", "rk4"]
+SdeForm = Literal["ito", "stratonovich"]
 
 
 # ---------------------------------------------------------------------------
@@ -527,18 +535,57 @@ def run_cd_ukf(
 # ---------------------------------------------------------------------------
 # CD-EnKF  (cd_dynamax inference_enkf.py, state_order="first")
 # ---------------------------------------------------------------------------
-def _enkf_forecast(key, particles, f, L_fn, Qc_fn, t0, t1, dt0, noise_dim, cov_rescaling, solver: SolverKind = "diffrax", 
-                   n_steps: Optional[int] = None):
-    def drift(t, y, args):
-        return f(t, y)
+def _enkf_forecast(
+    key,
+    particles,
+    f,
+    L_fn,
+    Qc_fn,
+    t0,
+    t1,
+    dt0,
+    noise_dim,
+    cov_rescaling,
+    solver: SolverKind = "diffrax",
+    n_steps: Optional[int] = None,
+    sde_form: SdeForm = "ito",
+):
+    """Per-particle SDE forecast.
 
-    def diffusion(t, y, args):
+    Heun / frozen-Wiener RK4 are Stratonovich-type. For ``sde_form="ito"`` the
+    Itô drift is converted before integration so the continuous law matches the
+    Itô model (same convention as CRF ``sde_form="ito"``).
+    """
+
+    def diffusion_mat(t, y):
         L_t = L_fn(t, y) * cov_rescaling
         return L_t @ jnp.linalg.cholesky(psd(Qc_fn(t, y)))
 
+    if sde_form == "ito":
+        f_path = ito_to_stratonovich_drift(f, diffusion_mat)
+    elif sde_form == "stratonovich":
+        f_path = f
+    else:
+        raise ValueError(f'sde_form must be "ito" or "stratonovich", got {sde_form!r}')
+
+    def drift(t, y, args):
+        return f_path(t, y)
+
+    def diffusion(t, y, args):
+        return diffusion_mat(t, y)
+
     def one(y0, k):
         ys = integrate(
-            drift, t0, t1, y0, diffusion=diffusion, key=k, noise_dim=noise_dim, dt0=dt0, solver=solver, n_steps=n_steps
+            drift,
+            t0,
+            t1,
+            y0,
+            diffusion=diffusion,
+            key=k,
+            noise_dim=noise_dim,
+            dt0=dt0,
+            solver=solver,
+            n_steps=n_steps,
         )
         return ys[0]
 
@@ -586,13 +633,15 @@ def run_cd_enkf(
     inflation_delta: float = 0.0,
     perturb_obs: bool = True,
     solver: SolverKind = "diffrax",
+    sde_form: SdeForm = "ito",
 ) -> FilterResult:
     """Continuous-discrete Ensemble Kalman Filter (perturbed-obs, predict-then-update).
 
     Forecast uses per-particle SDE integration (``solver="diffrax"``: Heun + VBT;
-    ``solver="rk4"``: RK4 with frozen Wiener increments). A Gaussian marginal
-    log-likelihood is accumulated from the ensemble innovation statistics
-    (diagnostic only; the EnKF is not a likelihood-exact filter).
+    ``solver="rk4"``: RK4 with frozen Wiener increments). Both are Stratonovich-type;
+    with ``sde_form="ito"`` the drift is Itô→Stratonovich-corrected first.
+    A Gaussian marginal log-likelihood is accumulated from the ensemble innovation
+    statistics (diagnostic only; the EnKF is not a likelihood-exact filter).
     """
     n_steps = ys.shape[0]
     if noise_dim is None:
@@ -601,13 +650,24 @@ def run_cd_enkf(
     particles = jr.multivariate_normal(init_key, mean=m0, cov=psd(P0), shape=(n_particles,))
     n_inner = _rk4_n_steps(dt, dt0) if solver == "rk4" else None
 
-
     def step(carry, k):
         parts, ll, key = carry
         key, k_pred, k_filt = jr.split(key, 3)
         t0 = k * dt
         x_pred = _enkf_forecast(
-            k_pred, parts, f, L_fn, Qc_fn, t0, t0 + dt, dt0, noise_dim, cov_rescaling, solver=solver, n_steps=n_inner
+            k_pred,
+            parts,
+            f,
+            L_fn,
+            Qc_fn,
+            t0,
+            t0 + dt,
+            dt0,
+            noise_dim,
+            cov_rescaling,
+            solver=solver,
+            n_steps=n_inner,
+            sde_form=sde_form,
         )
         x_filt, y_mean, S = _enkf_analysis(
             k_filt, x_pred, h, R, ys[k], perturb_obs, inflation_delta
@@ -647,13 +707,15 @@ def run_bootstrap_pf(
     noise_dim: Optional[int] = None,
     dt0: float = 0.01,
     solver: SolverKind = "diffrax",
+    sde_form: SdeForm = "ito",
 ) -> FilterResult:
     """Bootstrap particle filter with an SDE proposal, resampling each step.
 
     The transition prior is the SDE forecast (``solver="diffrax"``: Heun + VBT;
-    ``solver="rk4"``: RK4 with frozen Wiener increments); weights are the Gaussian
-    observation likelihood. Accumulates the standard particle-filter log-evidence
-    estimate.
+    ``solver="rk4"``: RK4 with frozen Wiener increments). Both are Stratonovich-type;
+    with ``sde_form="ito"`` the drift is Itô→Stratonovich-corrected first.
+    Weights are the Gaussian observation likelihood. Accumulates the standard
+    particle-filter log-evidence estimate.
     """
     n_steps = ys.shape[0]
     if noise_dim is None:
@@ -667,7 +729,19 @@ def run_bootstrap_pf(
         key, k_pred, k_res = jr.split(key, 3)
         t0 = k * dt
         x_pred = _enkf_forecast(
-            k_pred, parts, f, L_fn, Qc_fn, t0, t0 + dt, dt0, noise_dim, 1.0, solver=solver, n_steps=n_inner,
+            k_pred,
+            parts,
+            f,
+            L_fn,
+            Qc_fn,
+            t0,
+            t0 + dt,
+            dt0,
+            noise_dim,
+            1.0,
+            solver=solver,
+            n_steps=n_inner,
+            sde_form=sde_form,
         )
         log_w = vmap(lambda x: gaussian_logpdf(ys[k], h(x), R))(x_pred)
         ll_inc = jax.scipy.special.logsumexp(log_w) - jnp.log(n_particles)
