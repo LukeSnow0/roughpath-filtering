@@ -1,26 +1,29 @@
-"""Orientable 3D plot of the k=2 product Lyons cubature paths (noise_dim = 2).
+"""3D plot of the k=2 product Lyons cubature paths (noise_dim = 2).
 
 Each path is a 2D Brownian driver omega(t) = (omega_1(t), omega_2(t)); we render
 it as a 3D space-time curve with axes (omega_1, omega_2, t). The P = (3^2)^2 = 81
 product paths form the tensor grid of the degree-3 Lyons 1D paths.
 
 Outputs:
-  - plots/cubature_paths_3d.html  (interactive, rotatable)
-  - plots/cubature_paths_3d.png   (static snapshot)
+  - output/cubature_paths_3d.pdf  (vector manuscript figure)
+  - output/cubature_paths_3d.png  (high-resolution preview)
 """
 
 import os
+import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+EXPERIMENTS_DIR = os.path.abspath(os.path.join(HERE, ".."))
+sys.path.insert(0, EXPERIMENTS_DIR)
 OUTPUT_DIR = os.path.join(HERE, "output")
 
 import matplotlib.pyplot as plt
 import numpy as np
-import plotly.graph_objects as go
 from matplotlib import cm
-from matplotlib.colors import Normalize, to_hex
+from matplotlib.colors import Normalize
 
 from wsckf.library.cubature_paths import build_product_lyons_paths
+from mfts_test.plot_style import DOUBLE_COLUMN_WIDTH, save_publication_figure
 
 NOISE_DIM = 2
 ORDER = 2  # k -> (3^k)^2 = 81 paths
@@ -44,48 +47,7 @@ def main() -> None:
     norm = Normalize(vmin=weights.min(), vmax=weights.max())
     path_colors = cm.viridis(norm(weights))
 
-    # ---- Interactive Plotly (orientable in a browser) ----
-    fig = go.Figure()
-    for p in range(P):
-        fig.add_trace(
-            go.Scatter3d(
-                x=ts,
-                y=paths[p, :, 0],
-                z=paths[p, :, 1],
-                mode="lines",
-                # Scalar line.color ignores colorscale; use explicit Viridis RGB.
-                line=dict(color=to_hex(path_colors[p]), width=2 + 6 * wnorm[p]),
-                opacity=0.85,
-                showlegend=False,
-                hovertemplate=f"path {p}<br>weight={weights[p]:.4f}<extra></extra>",
-            )
-        )
-    # Terminal cubature support points at t = 1.
-    fig.add_trace(
-        go.Scatter3d(
-            x=np.ones(P), y=paths[:, -1, 0], z=paths[:, -1, 1],
-            mode="markers",
-            marker=dict(size=4, color=weights, colorscale="Viridis",
-                        cmin=weights.min(), cmax=weights.max(),
-                        colorbar=dict(title="weight"), line=dict(width=1, color="black")),
-            showlegend=False,
-            hovertext=[f"w={w:.4f}" for w in weights],
-        )
-    )
-    fig.update_layout(
-        title=f"Product Lyons Wiener cubature paths (noise_dim=2, k={ORDER}, P={P})",
-        scene=dict(xaxis_title="t", yaxis_title="omega_1", zaxis_title="omega_2",
-                   camera=dict(eye=dict(x=1.6, y=1.6, z=0.9))),
-        width=950, height=800,
-    )
-    
-    # uncomment to save an interactive HTML file (open in a browser and drag to rotate):
-    #html_out = os.path.join(OUTPUT_DIR, "cubature_paths_3d.html")
-    #fig.write_html(html_out)
-    #print(f"saved {html_out}  (open in a browser and drag to rotate)")
-
-    # ---- Static Matplotlib snapshot (for inline viewing) ----
-    figm = plt.figure(figsize=(10, 8))
+    figm = plt.figure(figsize=(DOUBLE_COLUMN_WIDTH, 5.4))
     ax = figm.add_subplot(111, projection="3d")
     for p in range(P):
         ax.plot(ts, paths[p, :, 0], paths[p, :, 1],
@@ -93,15 +55,16 @@ def main() -> None:
     ax.scatter(np.ones(P), paths[:, -1, 0], paths[:, -1, 1],
                c=weights, cmap="viridis", s=30, edgecolor="k", linewidth=0.4)
     ax.set(xlabel="t", ylabel=r"$\omega_1$", zlabel=r"$\omega_2$")
-    ax.set_title(f"Product Lyons cubature paths (noise_dim=2, k={ORDER}, P={P})")
+    ax.set_title(rf"Product Lyons paths ($d=2$, $k={ORDER}$, $P={P}$)")
     ax.view_init(elev=22, azim=-65)
     sm = cm.ScalarMappable(cmap="viridis", norm=norm)
     sm.set_array([])
-    figm.colorbar(sm, ax=ax, fraction=0.03, pad=0.08, label="cubature weight")
+    figm.colorbar(sm, ax=ax, fraction=0.03, pad=0.08, label="Cubature weight")
     png_out = os.path.join(OUTPUT_DIR, "cubature_paths_3d.png")
-    figm.savefig(png_out, dpi=150, bbox_inches="tight")
+    plot_png, plot_pdf = save_publication_figure(figm, png_out)
     plt.close(figm)
-    print(f"saved {png_out}")
+    print(f"saved {plot_png}")
+    print(f"saved {plot_pdf}")
     print(f"  P=(3^{ORDER})^2={P} paths, weights sum to {weights.sum():.6f}")
 
 
