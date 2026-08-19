@@ -25,7 +25,7 @@ OUTPUT_DIR = os.path.join(HERE, "output")
 # Ink / paper / accent — presentation-friendly, not default purple-on-white
 INK = "#1a2332"
 MUTED = "#5a6577"
-PAPER = "#f7f4ef"
+PAPER = "#ffffff"
 PANEL = "#ffffff"
 ACCENT = "#c45c26"  # observation / update
 PATH = "#2a6f7f"  # Wiener paths / predict
@@ -366,7 +366,7 @@ def main() -> None:
     fig.tight_layout(pad=0.3)
     png = os.path.join(OUTPUT_DIR, "algorithm_one_picture.png")
     pdf = os.path.join(OUTPUT_DIR, "algorithm_one_picture.pdf")
-    fig.savefig(png, dpi=220, facecolor=fig.get_facecolor(), bbox_inches="tight")
+    fig.savefig(png, dpi=450, facecolor=fig.get_facecolor(), bbox_inches="tight")
     fig.savefig(pdf, facecolor=fig.get_facecolor(), bbox_inches="tight")
     plt.close(fig)
     print(f"wrote {png}")

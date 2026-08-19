@@ -66,6 +66,15 @@ from movement_model import (
     make_movement_dynamics,
     tau_sigma_to_beta_sigma0,
 )
+from mfts_test.plot_style import (
+    DOUBLE_COLUMN_WIDTH,
+    METHOD_COLORS,
+    METHOD_MARKERS,
+    PALETTE,
+    save_publication_figure,
+    style_box_axis,
+    style_curve_axis,
+)
 
 OUTPUT_DIR = os.path.join(HERE, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -366,7 +375,11 @@ all_fns = [make_track_logliks(p) for p in packs]
 stochastic = not _args.skip_stochastic
 methods = ["wsckf", "ekf"] + (["enkf"] if stochastic else [])
 method_labels = {"wsckf": "WSC-KF", "ekf": "EKF", "enkf": "EnKF"}
-method_colors = {"wsckf": "#2ca02c", "ekf": "#d62728", "enkf": "#1f77b4"}
+method_colors = {
+    "wsckf": METHOD_COLORS["WSC-KF"],
+    "ekf": METHOD_COLORS["EKF"],
+    "enkf": METHOD_COLORS["EnKF"],
+}
 
 print(
     f"birds ({len(packs)}): "
@@ -439,29 +452,36 @@ if not _args.pooled_only:
 # Plots: trajectories (top) | pooled θ̂ + LOBO bars (bottom)
 # ---------------------------------------------------------------------------
 n_birds_plot = len(packs)
-fig = plt.figure(figsize=(12.0, 7.0))
+fig = plt.figure(figsize=(DOUBLE_COLUMN_WIDTH, 4.35))
 gs = fig.add_gridspec(2, n_birds_plot, height_ratios=[1.0, 1.15], hspace=0.42, wspace=0.32)
 
-track_colors = plt.cm.tab10(np.linspace(0, 0.85, max(n_birds_plot, 1)))
+track_palette = (
+    PALETTE["warm_red"],
+    PALETTE["teal_green"],
+    PALETTE["cyan_blue"],
+    PALETTE["purple"],
+    PALETTE["olive"],
+    PALETTE["salmon"],
+)
+track_colors = [track_palette[i % len(track_palette)] for i in range(n_birds_plot)]
 for i, pack in enumerate(packs):
     ax_t = fig.add_subplot(gs[0, i])
     xy = np.asarray(pack.ys)
     ax_t.plot(xy[:, 0], xy[:, 1], "-", color=track_colors[i], lw=0.95, alpha=0.95)
     ax_t.plot(
         xy[0, 0], xy[0, 1], "o", color=track_colors[i], ms=5.5,
-        markeredgecolor="k", markeredgewidth=0.45, label="start",
+        markeredgecolor=PALETTE["black"], markeredgewidth=0.45, label="Start",
     )
     ax_t.plot(
-        xy[-1, 0], xy[-1, 1], "s", color="0.2", ms=4,
-        markeredgecolor="k", markeredgewidth=0.35, label="end",
+        xy[-1, 0], xy[-1, 1], "s", color=PALETTE["black"], ms=4,
+        markeredgecolor=PALETTE["black"], markeredgewidth=0.35, label="End",
     )
     ax_t.set_aspect("equal", adjustable="datalim")
-    ax_t.set_title(f"{pack.band}  (N={pack.n_obs})", fontsize=9)
-    ax_t.tick_params(labelsize=7)
-    ax_t.grid(alpha=0.25)
+    ax_t.set_title(f"{pack.band} ($N={pack.n_obs}$)")
+    style_box_axis(ax_t)
     if i == 0:
-        ax_t.set_ylabel("north (km, centred)", fontsize=8)
-    ax_t.set_xlabel("east (km, centred)", fontsize=8)
+        ax_t.set_ylabel("North [km, centred]")
+    ax_t.set_xlabel("East [km, centred]")
 
 # Bottom panels span half the bird columns each (or full width if pooled-only).
 if _args.pooled_only:
@@ -479,17 +499,16 @@ for method in methods:
         lw=1.0, alpha=0.5,
     )
     ax.plot(
-        rec["tau"], rec["sigma_v"], "o", color=method_colors[method],
-        ms=10, markeredgecolor="k", markeredgewidth=0.7,
+        rec["tau"], rec["sigma_v"], METHOD_MARKERS[method_labels[method]], color=method_colors[method],
+        ms=4.5, markeredgecolor=PALETTE["black"], markeredgewidth=0.6,
         label=rf"{method_labels[method]} pooled $(\hat\tau_v,\hat\sigma_v)$",
     )
 ax.set_xscale("log")
 ax.set_yscale("log")
 ax.set_xlabel(r"$\tau_v$ [h]")
 ax.set_ylabel(r"$\sigma_v$ [km/h]")
-ax.set_title("A  Pooled train MLE (all birds)")
-ax.legend(fontsize=7.5, framealpha=0.92)
-ax.grid(True, which="both", alpha=0.25)
+ax.set_title("(a) Pooled train MLE")
+style_curve_axis(ax, grid_axis="both")
 
 if ax_b is not None:
     names = [method_labels[m] for m in methods]
@@ -502,8 +521,8 @@ if ax_b is not None:
     xpos = np.arange(len(names))
     ax_b.bar(
         xpos, means, yerr=stds if any(s > 0 for s in stds) else None,
-        color=cols, edgecolor="0.2", lw=0.7, width=0.65,
-        capsize=4, ecolor="0.2",
+        color=cols, edgecolor=PALETTE["black"], lw=0.7, width=0.65,
+        capsize=2.0, ecolor=PALETTE["black"],
     )
     pad = 0.12
     finite = [m for m in means if np.isfinite(m)]
@@ -512,11 +531,9 @@ if ax_b is not None:
         ax_b.set_ylim(min(finite) - smax - pad, max(finite) + smax + 1.5 * pad)
     ax_b.set_xticks(xpos)
     ax_b.set_xticklabels(names)
-    ax_b.set_ylabel(
-        f"LOBO held-bird NLL / obs\n(ref EnKF-{REF_ENKF_PARTICLES}p)"
-    )
-    ax_b.set_title("B  Leave-one-bird-out (lower better)")
-    ax_b.grid(axis="y", alpha=0.3)
+    ax_b.set_ylabel("LOBO NLL [nats/observation]")
+    ax_b.set_title("(b) Leave-one-bird-out")
+    style_box_axis(ax_b, grid_axis="y")
     best = min(finite) if finite else float("nan")
     for x, m, s in zip(xpos, means, stds):
         if not np.isfinite(m):
@@ -526,17 +543,14 @@ if ax_b is not None:
         lab = f"{m:.3f}" if dlt < 1e-9 else f"{m:.3f}\n(+{dlt:.3f})"
         ax_b.text(x, m + s + 0.02 * pad, lab, ha="center", va="bottom", fontsize=8)
 
-fig.suptitle(
-    f"{_args.species} pooled MLE + LOBO  "
-    f"(n_birds={len(packs)}, n_obs≤{_args.n_obs}, WSC-KF-P{_args.num_paths})",
-    fontsize=11,
-    y=0.995,
+fig.legend(
+    *ax.get_legend_handles_labels(),
+    loc="lower center",
+    bbox_to_anchor=(0.5, 0.005),
+    ncol=max(1, len(methods)),
 )
-fig.savefig(
-    os.path.join(OUTPUT_DIR, "movement_lobo_compare.png"),
-    dpi=160,
-    bbox_inches="tight",
-)
+fig.subplots_adjust(left=0.08, right=0.99, bottom=0.16, top=0.94)
+save_publication_figure(fig, os.path.join(OUTPUT_DIR, "movement_lobo_compare.png"))
 plt.close(fig)
 
 # ---------------------------------------------------------------------------

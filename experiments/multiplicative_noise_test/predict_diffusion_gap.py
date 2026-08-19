@@ -53,11 +53,37 @@ sys.path.insert(0, EXPERIMENTS_DIR)
 sys.path.insert(0, ROOT_DIR)
 
 from cd_dynamax_mirror.filters import UKFParams, _ekf_predict, _ukf_predict, _ukf_weights
+from mfts_test.plot_style import (
+    DOUBLE_COLUMN_WIDTH,
+    METHOD_COLORS,
+    METHOD_MARKERS,
+    save_publication_figure,
+    style_curve_axis,
+)
 
 from wsckf.library import ito_to_stratonovich_dynamics, precompute_cubature_paths, predict
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+PLOT_COLORS = {
+    "WSC-KF": METHOD_COLORS["WSC-KF"],
+    "CD-EKF": METHOD_COLORS["CD-EKF"],
+    "CD-UKF": METHOD_COLORS["CD-UKF"],
+    "CD-CKF": METHOD_COLORS["CD-CKF"],
+}
+PLOT_MARKERS = {
+    "WSC-KF": METHOD_MARKERS["WSC-KF"],
+    "CD-EKF": METHOD_MARKERS["CD-EKF"],
+    "CD-UKF": METHOD_MARKERS["CD-UKF"],
+    "CD-CKF": METHOD_MARKERS["CD-CKF"],
+}
+PLOT_LINESTYLES = {
+    "WSC-KF": "-",
+    "CD-EKF": "--",
+    "CD-UKF": "-.",
+    "CD-CKF": (0, (1.5, 1.2)),
+}
 
 # ---------------------------------------------------------------------------
 # GBM model (Ito): dx = mu x dt + sigma x dW
@@ -219,59 +245,76 @@ def main():
     # ----- plot -----
     d_arr = np.array([r["delta"] for r in rows])
     var_err = {
-        "WSC-KF (Wiener cubature)": np.array([rel(r["wsckf_var"], r["exact_var"]) for r in rows]),
-        "CD-EKF (moment ODE)": np.array([rel(r["ekf_var"], r["exact_var"]) for r in rows]),
-        "CD-UKF (moment ODE)": np.array([rel(r["ukf_var"], r["exact_var"]) for r in rows]),
-        "CD-CKF (moment ODE)": np.array([rel(r["ckf_var"], r["exact_var"]) for r in rows]),
+        "WSC-KF": np.array([rel(r["wsckf_var"], r["exact_var"]) for r in rows]),
+        "CD-EKF": np.array([rel(r["ekf_var"], r["exact_var"]) for r in rows]),
+        "CD-UKF": np.array([rel(r["ukf_var"], r["exact_var"]) for r in rows]),
+        "CD-CKF": np.array([rel(r["ckf_var"], r["exact_var"]) for r in rows]),
     }
     mean_err = {
-        "WSC-KF (Wiener cubature)": np.array([rel(r["wsckf_mean"], r["exact_mean"]) for r in rows]),
-        "CD-EKF (moment ODE)": np.array([rel(r["ekf_mean"], r["exact_mean"]) for r in rows]),
-        "CD-UKF (moment ODE)": np.array([rel(r["ukf_mean"], r["exact_mean"]) for r in rows]),
-        "CD-CKF (moment ODE)": np.array([rel(r["ckf_mean"], r["exact_mean"]) for r in rows]),
-    }
-    colors = {
-        "WSC-KF (Wiener cubature)": "C2",
-        "CD-EKF (moment ODE)": "C3",
-        "CD-UKF (moment ODE)": "C0",
-        "CD-CKF (moment ODE)": "#2E86AB",
-    }
-    markers = {
-        "WSC-KF (Wiener cubature)": "o",
-        "CD-EKF (moment ODE)": "s",
-        "CD-UKF (moment ODE)": "^",
-        "CD-CKF (moment ODE)": "D",
+        "WSC-KF": np.array([rel(r["wsckf_mean"], r["exact_mean"]) for r in rows]),
+        "CD-EKF": np.array([rel(r["ekf_mean"], r["exact_mean"]) for r in rows]),
+        "CD-UKF": np.array([rel(r["ukf_mean"], r["exact_mean"]) for r in rows]),
+        "CD-CKF": np.array([rel(r["ckf_mean"], r["exact_mean"]) for r in rows]),
     }
 
-    fig, (axv, axm) = plt.subplots(1, 2, figsize=(12, 5))
+    fig, (axv, axm) = plt.subplots(
+        1,
+        2,
+        figsize=(DOUBLE_COLUMN_WIDTH, 2.30),
+        sharex=True,
+    )
     floor = 1e-16
     for label in var_err:
-        axv.loglog(d_arr, np.maximum(var_err[label], floor), marker=markers[label],
-                   color=colors[label], label=label)
-    axv.set_xlabel(r"assimilation interval $\delta$")
-    axv.set_ylabel("relative error in predicted variance")
-    axv.set_title("Predicted variance: multiplicative-diffusion gap")
-    axv.grid(True, which="both", alpha=0.3)
-    axv.legend()
+        axv.loglog(
+            d_arr,
+            np.maximum(var_err[label], floor),
+            marker=PLOT_MARKERS[label],
+            color=PLOT_COLORS[label],
+            linestyle=PLOT_LINESTYLES[label],
+            markerfacecolor="white",
+            markeredgewidth=0.8,
+            linewidth=1.35,
+            markersize=3.7,
+            label=label,
+        )
+    axv.set_xlabel(r"Assimilation interval $\delta$")
+    axv.set_ylabel("Relative variance error")
+    axv.set_title("(a) Variance")
+    style_curve_axis(axv, grid_axis="both")
 
     for label in mean_err:
-        axm.loglog(d_arr, np.maximum(mean_err[label], floor), marker=markers[label],
-                   color=colors[label], label=label)
-    axm.set_xlabel(r"assimilation interval $\delta$")
-    axm.set_ylabel("relative error in predicted mean")
-    axm.set_title("Predicted mean: linear drift (no diffusion gap)")
-    axm.grid(True, which="both", alpha=0.3)
-    axm.legend()
+        axm.loglog(
+            d_arr,
+            np.maximum(mean_err[label], floor),
+            marker=PLOT_MARKERS[label],
+            color=PLOT_COLORS[label],
+            linestyle=PLOT_LINESTYLES[label],
+            markerfacecolor="white",
+            markeredgewidth=0.8,
+            linewidth=1.35,
+            markersize=3.7,
+            label=label,
+        )
+    axm.set_xlabel(r"Assimilation interval $\delta$")
+    axm.set_ylabel("Relative mean error")
+    axm.set_title("(b) Mean")
+    style_curve_axis(axm, grid_axis="both")
 
-    fig.suptitle(
-        f"WSC-KF vs CD moment-ODE predict on GBM  "
-        f"dx = {MU}x dt + {SIGMA}x dW,  x(0)~N({M0},{P0})",
-        fontsize=12,
+    handles, labels = axv.get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.985),
+        ncol=4,
+        columnspacing=1.2,
     )
-    fig.tight_layout()
+    fig.subplots_adjust(left=0.085, right=0.99, bottom=0.20, top=0.77, wspace=0.30)
     png_path = os.path.join(OUTPUT_DIR, "predict_diffusion_gap.png")
-    fig.savefig(png_path, dpi=150)
+    png_path, pdf_path = save_publication_figure(fig, png_path)
+    plt.close(fig)
     print(f"\nSaved plot -> {png_path}")
+    print(f"Saved plot -> {pdf_path}")
     print(f"Saved data -> {csv_path}")
 
 

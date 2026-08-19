@@ -65,6 +65,13 @@ from heston_model import (
     rmse_components,
     simulate_heston,
 )
+from mfts_test.plot_style import (
+    DOUBLE_COLUMN_WIDTH,
+    METHOD_COLORS,
+    PALETTE,
+    save_publication_figure,
+    style_curve_axis,
+)
 
 OUTPUT_DIR = os.path.join(HERE, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -218,16 +225,16 @@ DT_INNER = EVAL_DT
 CKF_PARAMS = UKFParams(alpha=1.0, beta=0.0, kappa=0.0)
 
 COLORS = {
-    "CD-EKF": "#2E86AB",
-    "CD-EKF-fine": "#5DADE2",
-    "CD-UKF": "#B8860B",
-    "CD-UKF-fine": "#E8B923",
-    "CD-CKF": "#3DA35D",
-    "CD-EnKF": "#F6AE2D",
-    "PF": "#F24236",
-    "WSC-KF-product": "#6A4C93",
-    "WSC-KF-m3": "#6A4C93",
-    "WSC-KF-m5": "#C77DFF",
+    "CD-EKF": METHOD_COLORS["CD-EKF"],
+    "CD-EKF-fine": PALETTE["muted_blue"],
+    "CD-UKF": METHOD_COLORS["CD-UKF-coarse"],
+    "CD-UKF-fine": METHOD_COLORS["CD-UKF-fine"],
+    "CD-CKF": METHOD_COLORS["CD-CKF"],
+    "CD-EnKF": METHOD_COLORS["CD-EnKF"],
+    "PF": METHOD_COLORS["PF"],
+    "WSC-KF-product": METHOD_COLORS["WSC-KF-product"],
+    "WSC-KF-m3": METHOD_COLORS["WSC-KF"],
+    "WSC-KF-m5": PALETTE["salmon"],
 }
 DISPLAY_NAME = {
     "WSC-KF-product": "WSC-KF",
@@ -585,7 +592,7 @@ with open(csv_path, "w", newline="") as f:
         w.writerow({"delta_t": dt, "n_obs": n_obs, "horizon": HORIZON, **r})
 
 # ---- plot ----
-BAND_SCALE = 0.1
+BAND_SCALE = 1.0
 
 
 def _annotate_nodes(ax, fam, pts, xs, ys):
@@ -608,7 +615,7 @@ def _annotate_nodes(ax, fam, pts, xs, ys):
         )
 
 
-fig, ax = plt.subplots(figsize=(7.5, 4.5))
+fig, ax = plt.subplots(figsize=(DOUBLE_COLUMN_WIDTH, 2.85))
 # Split WSC-KF by Lyons degree (m=3 vs m=5), matching L-overlay colors.
 plot_groups: list[tuple[str, str, Callable[[dict], bool]]] = [
     ("WSC-KF m=3", "WSC-KF-m3", lambda r: r["family"] == "WSC-KF-product" and "-m3-" in r["label"]),
@@ -652,13 +659,13 @@ for disp, color_key, pred in plot_groups:
             [ys_plot[0] - ystd[0]] * 2,
             [ys_plot[0] + ystd[0]] * 2,
             color=color,
-            alpha=0.22,
+            alpha=0.14,
             lw=0,
         )
-        ax.plot(xs, ys_plot, marker, color=color, markersize=7, label=disp)
+        ax.plot(xs, ys_plot, marker, color=color, markerfacecolor="white", markersize=4.5, label=disp)
     else:
-        ax.fill_between(xs, ys_plot - ystd, ys_plot + ystd, color=color, alpha=0.22, lw=0)
-        ax.plot(xs, ys_plot, f"-{marker}", color=color, lw=1.5, markersize=6, label=disp)
+        ax.fill_between(xs, ys_plot - ystd, ys_plot + ystd, color=color, alpha=0.14, lw=0)
+        ax.plot(xs, ys_plot, f"-{marker}", color=color, markerfacecolor="white", lw=1.25, markersize=4.2, label=disp)
     _annotate_nodes(ax, color_key, pts, xs, ys_plot)
 
 ax.set_xlabel("Wall-clock time [ms]")
@@ -672,21 +679,29 @@ ax.set_xscale("log")
 ax.set_yscale("linear")
 if all_xs:
     ax.set_xlim(min(all_xs) / 1.25, max(all_xs) * 1.35)
-ax.grid(True, which="both", alpha=0.3)
-ax.legend(fontsize=8, loc="best")
-_rmse_note = "" if RMSE_COMP == "all" else rf"; RMSE on ${RMSE_COMP}$"
-ax.set_title(
-    rf"Heston Pareto at $\Delta t={dt:g}$, $\xi={PARAMS.xi:g}$, "
-    rf"$L$-scale={PARAMS.diff_scale:g}, $\rho={PARAMS.rho:g}$ "
-    rf"(mean±{BAND_SCALE:g}$\sigma$ over {n_seeds} seeds; "
-    rf"horizon={HORIZON:g}; WSC-KF P∈{{{wsckf_path_note}}}{_rmse_note})",
-    fontsize=11,
+style_curve_axis(ax, grid_axis="both")
+fig.legend(
+    *ax.get_legend_handles_labels(),
+    loc="lower center",
+    bbox_to_anchor=(0.5, 0.005),
+    ncol=5,
 )
-fig.tight_layout()
-fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+_rmse_note = "" if RMSE_COMP == "all" else rf"; RMSE on ${RMSE_COMP}$"
+ax.text(
+    0.02,
+    0.98,
+    rf"$\Delta t={dt:g}$; $L$-scale={PARAMS.diff_scale:g}; bars: $\pm 1$ SD",
+    transform=ax.transAxes,
+    ha="left",
+    va="top",
+    fontsize=6.4,
+)
+fig.subplots_adjust(left=0.10, right=0.99, bottom=0.30, top=0.97)
+plot_png, plot_pdf = save_publication_figure(fig, plot_path)
 plt.close()
 
 print("-" * 60)
-print(f"Wrote {plot_path}")
+print(f"Wrote {plot_png}")
+print(f"Wrote {plot_pdf}")
 print(f"Wrote {csv_path}")
 print(f"Wrote {raw_path}")

@@ -58,6 +58,14 @@ sys.path.insert(0, ROOT_DIR)
 from cd_dynamax_mirror.filters import UKFParams, _ekf_predict, _ukf_predict, _ukf_weights
 
 from wsckf.library import ito_to_stratonovich_dynamics, precompute_cubature_paths, predict
+from mfts_test.plot_style import (
+    METHOD_COLORS,
+    METHOD_MARKERS,
+    PALETTE,
+    SINGLE_COLUMN_WIDTH,
+    save_publication_figure,
+    style_curve_axis,
+)
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -329,11 +337,20 @@ def fit_slope(deltas, errs, dmax=0.4, floor=1e-13):
     return float(np.polyfit(np.log(d[mask]), np.log(e[mask]), 1)[0])
 
 
-def guide(ax, deltas, anchor_err, anchor_d, slope, label, color="k", ls="--"):
+def guide(
+    ax,
+    deltas,
+    anchor_err,
+    anchor_d,
+    slope,
+    label,
+    color=PALETTE["neutral_gray"],
+    ls="--",
+):
     d = np.asarray(deltas)
     c = anchor_err / (anchor_d**slope)
     (line,) = ax.loglog(
-        d, c * d**slope, ls, color=color, alpha=0.75, lw=1.6, label=label
+        d, c * d**slope, ls, color=color, alpha=0.8, lw=1.1, label=label
     )
     return line
 
@@ -422,22 +439,35 @@ def main():
                 ]
             )
 
-    # ----- plot (two separate figures) -----
+    # ----- plot (two separate publication-size figures) -----
     mid = min(6, len(deltas) - 1)
-    wsckf_colors = {3: "#6A4C93", 5: "#9B5DE5", 7: "#F15BB5"}
-    AXIS_FS = 13
-    LEGEND_FS = 11
-    TICK_FS = 11
+    mean_colors = {
+        1: PALETTE["blue"],
+        3: PALETTE["teal_green"],
+        5: PALETTE["orange"],
+        7: PALETTE["warm_red"],
+    }
+    mean_markers = {1: "o", 3: "s", 5: "D", 7: "^"}
+    wsckf_colors = {
+        3: PALETTE["purple"],
+        5: PALETTE["warm_red"],
+        7: PALETTE["orange"],
+    }
+    wsckf_markers = {3: "o", 5: "D", 7: "^"}
 
-    fig1, ax1 = plt.subplots(figsize=(6.2, 4.8))
+    fig1, ax1 = plt.subplots(figsize=(SINGLE_COLUMN_WIDTH, 2.3))
     h_ws = []
-    for k, c in zip(ks, ["C0", "C1", "C2", "C4"]):
+    for k in ks:
         (ln,) = ax1.loglog(
             deltas,
             np.maximum(mean_err_by_k[k], rng_floor),
-            marker="o",
-            color=c,
-            label=rf"WSC-KF  $k$={k}",
+            marker=mean_markers[k],
+            color=mean_colors[k],
+            markerfacecolor="white",
+            markeredgewidth=0.75,
+            markersize=3.5,
+            linewidth=1.35,
+            label=rf"WSC-KF, $k={k}$",
         )
         h_ws.append(ln)
     h_g3 = guide(
@@ -447,58 +477,84 @@ def main():
         deltas[mid],
         3.0,
         r"$\propto\delta^{3}$",
-        color="0.35",
+        color=PALETTE["neutral_gray"],
         ls="--",
     )
-    ax1.set_xlabel(r"assimilation interval $\delta$", fontsize=AXIS_FS)
-    ax1.set_ylabel("abs. error in predicted mean $E[x_\\delta|x_0]$", fontsize=AXIS_FS)
+    ax1.set_xlabel(r"Assimilation interval $\delta$")
+    ax1.set_ylabel(r"$|\widehat{\mathrm{E}}[x_\delta]-\mathrm{E}[x_\delta]|$")
     ax1.set_xlim(deltas[0], deltas[-1])
-    ax1.tick_params(axis="both", which="major", labelsize=TICK_FS)
-    ax1.grid(True, which="both", alpha=0.3)
-    # Methods in left column; ∝δ guide beside the last method (ncol=2, column-major).
-    ax1.legend(
-        handles=[*h_ws, h_g3],
-        labels=[h.get_label() for h in h_ws] + [h_g3.get_label()],
-        fontsize=LEGEND_FS,
-        ncol=2,
-        columnspacing=1.0,
-        handletextpad=0.5,
-        loc="lower left",
-        bbox_to_anchor=(0.0, 1.02),
-        borderaxespad=0.0,
+    style_curve_axis(ax1, grid_axis="both")
+    mean_legend_handles = [h_ws[0], h_ws[3], h_ws[1], h_g3, h_ws[2]]
+    fig1.legend(
+        handles=mean_legend_handles,
+        labels=[h.get_label() for h in mean_legend_handles],
+        ncol=3,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.985),
     )
-    fig1.tight_layout()
+    fig1.subplots_adjust(left=0.19, right=0.98, bottom=0.2, top=0.7)
     png_mean = os.path.join(OUTPUT_DIR, "weak_error_delta_scaling_mean.png")
-    fig1.savefig(png_mean, dpi=150, bbox_inches="tight")
+    mean_png, mean_pdf = save_publication_figure(fig1, png_mean)
     plt.close(fig1)
 
-    fig2, ax2 = plt.subplots(figsize=(6.2, 4.8))
+    fig2, ax2 = plt.subplots(figsize=(SINGLE_COLUMN_WIDTH, 2.50))
+    wsckf_fitted_slopes = {
+        m: fit_slope(deltas, wsckf_cov_err_2d[m]) for m in wsckf_degrees
+    }
     h_ws = []
     for m in wsckf_degrees:
         (ln,) = ax2.loglog(
             deltas,
             np.maximum(wsckf_cov_err_2d[m], rng_floor),
-            "o-",
             color=wsckf_colors[m],
-            label=rf"WSC-KF $m$={m} (fit={fit_slope(deltas, wsckf_cov_err_2d[m]):.2f})",
+            marker=wsckf_markers[m],
+            markerfacecolor="white",
+            markeredgewidth=0.75,
+            markersize=3.5,
+            linewidth=1.35,
+            label=rf"WSC-KF $m={m}$",
         )
         h_ws.append(ln)
     (h_ekf,) = ax2.loglog(
-        deltas, np.maximum(ekf_cov_err, rng_floor), "s-", color="C3", label="CD-EKF"
+        deltas,
+        np.maximum(ekf_cov_err, rng_floor),
+        color=METHOD_COLORS["CD-EKF"],
+        marker=METHOD_MARKERS["CD-EKF"],
+        markerfacecolor="white",
+        markeredgewidth=0.75,
+        markersize=3.5,
+        linewidth=1.35,
+        label="CD-EKF",
     )
     (h_ukf,) = ax2.loglog(
-        deltas, np.maximum(ukf_cov_err, rng_floor), "^-", color="C0", label="CD-UKF"
+        deltas,
+        np.maximum(ukf_cov_err, rng_floor),
+        color=METHOD_COLORS["CD-UKF"],
+        marker=METHOD_MARKERS["CD-UKF"],
+        markerfacecolor="white",
+        markeredgewidth=0.75,
+        markersize=3.5,
+        linewidth=1.35,
+        label="CD-UKF",
     )
     (h_ckf,) = ax2.loglog(
-        deltas, np.maximum(ckf_cov_err, rng_floor), "D-", color="#2E86AB", label="CD-CKF"
+        deltas,
+        np.maximum(ckf_cov_err, rng_floor),
+        color=METHOD_COLORS["CD-CKF"],
+        marker=METHOD_MARKERS["CD-CKF"],
+        markerfacecolor="white",
+        markeredgewidth=0.75,
+        markersize=3.5,
+        linewidth=1.35,
+        label="CD-CKF",
     )
     h_g2 = guide(
         ax2, deltas, ekf_cov_err[mid], deltas[mid], 2.0, r"$\propto\delta^{2}$",
-        color="0.35", ls="--",
+        color=PALETTE["neutral_gray"], ls="--",
     )
     h_g3 = guide(
         ax2, deltas, wsckf_cov_err_2d[5][mid], deltas[mid], 3.0, r"$\propto\delta^{3}$",
-        color="0.35", ls=":",
+        color=PALETTE["neutral_gray"], ls=":",
     )
     h_g4 = guide(
         ax2,
@@ -507,43 +563,65 @@ def main():
         deltas[mid],
         4.0,
         r"$\propto\delta^{4}$",
-        color="0.35",
+        color=PALETTE["neutral_gray"],
         ls="-.",
     )
-    ax2.set_xlabel(r"assimilation interval $\delta$", fontsize=AXIS_FS)
-    ax2.set_ylabel(r"$\|\hat P - P\|_F$", fontsize=AXIS_FS)
+    ax2.set_xlabel(r"Assimilation interval $\delta$")
+    ax2.set_ylabel(r"$\|\widehat P-P\|_F$")
     ax2.set_xlim(deltas[0], deltas[-1])
-    ax2.tick_params(axis="both", which="major", labelsize=TICK_FS)
-    ax2.grid(True, which="both", alpha=0.3)
-    # One box, 3 columns (column-major): WSC-KF | CD | ∝δ guides; above axes.
-    ax2.legend(
-        handles=[h_ws[0], h_ws[1], h_ws[2], h_ekf, h_ukf, h_ckf, h_g2, h_g3, h_g4],
-        labels=[
-            h_ws[0].get_label(),
-            h_ws[1].get_label(),
-            h_ws[2].get_label(),
-            h_ekf.get_label(),
-            h_ukf.get_label(),
-            h_ckf.get_label(),
-            h_g2.get_label(),
-            h_g3.get_label(),
-            h_g4.get_label(),
-        ],
-        fontsize=LEGEND_FS,
-        ncol=3,
-        columnspacing=1.0,
-        handletextpad=0.4,
-        loc="lower left",
-        bbox_to_anchor=(0.0, 1.02),
-        borderaxespad=0.0,
+    style_curve_axis(ax2, grid_axis="both")
+    ax2.text(
+        0.03,
+        0.96,
+        (
+            rf"$\hat p_{{m=3,5,7}}="
+            rf"({wsckf_fitted_slopes[3]:.2f},\,"
+            rf"{wsckf_fitted_slopes[5]:.2f},\,"
+            rf"{wsckf_fitted_slopes[7]:.2f})$"
+        ),
+        transform=ax2.transAxes,
+        ha="left",
+        va="top",
+        fontsize=6.4,
+        color=PALETTE["black"],
     )
-    fig2.tight_layout()
+    # Center the three semantic rows independently so their unequal label
+    # widths do not make the shorter rows look left-shifted.
+    legend_kwargs = dict(
+        ncol=3,
+        loc="upper center",
+        fontsize=6.2,
+        columnspacing=1.15,
+        handlelength=1.55,
+        handletextpad=0.45,
+        borderaxespad=0.0,
+        borderpad=0.0,
+    )
+    for handles, anchor_y in (
+        (h_ws, 0.985),
+        ([h_ekf, h_ukf, h_ckf], 0.910),
+        ([h_g2, h_g3, h_g4], 0.835),
+    ):
+        fig2.legend(
+            handles=handles,
+            labels=[h.get_label() for h in handles],
+            bbox_to_anchor=(0.525, anchor_y),
+            **legend_kwargs,
+        )
+    fig2.subplots_adjust(
+        left=0.19,
+        right=0.98,
+        bottom=0.19,
+        top=0.77,
+    )
     png_cov = os.path.join(OUTPUT_DIR, "weak_error_delta_scaling_cov.png")
-    fig2.savefig(png_cov, dpi=150, bbox_inches="tight")
+    cov_png, cov_pdf = save_publication_figure(fig2, png_cov)
     plt.close(fig2)
 
-    print(f"\nSaved plot -> {png_mean}")
-    print(f"Saved plot -> {png_cov}")
+    print(f"\nSaved plot -> {mean_png}")
+    print(f"Saved plot -> {mean_pdf}")
+    print(f"Saved plot -> {cov_png}")
+    print(f"Saved plot -> {cov_pdf}")
     print(f"Saved data -> {csv_path}")
 
 

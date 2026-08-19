@@ -36,6 +36,6 @@
     "heldout_nll_std": 1.2055005865959696,
     "train_ll_final": -4531.960665691498,
     "warm_start": true,
-    "open_loop_params": "/Users/lukesnow-basis/Documents/code/cubature-filtering/experiments/mfts_test/intaset_real/output/calibrated_params.json"
+    "open_loop_params": "/Users/danwaxman/Documents/cubature-filtering/experiments/mfts_test/intaset_real/output/calibrated_params.json"
   }
 }

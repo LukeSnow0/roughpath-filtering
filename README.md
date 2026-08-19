@@ -211,7 +211,9 @@ python experiments/mfts_test/run_comparison.py --seed 42 --cubature-order 3
 
 Outputs: `experiments/mfts_test/output/` (tank heights, disturbance flows, MAPE
 bars, cumulative log-likelihood, runtime). Related scripts also include Pareto
-budget / interval sweeps and an `intaset_real/` real-data subfolder.
+budget / interval sweeps and an `intaset_real/` real-data subfolder. MFTS
+plotting scripts write both vector PDF and 450-dpi PNG versions at final 90 mm
+single-column or 190 mm full-width manuscript sizes.
 
 #### Lorenz 63 (L63)
 

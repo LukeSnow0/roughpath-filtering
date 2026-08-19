@@ -69,6 +69,14 @@ from wsckf import build_filter
 from wsckf.library import default_recombined_num_paths
 from lyons_victoir_paths import describe as lv_describe
 from lyons_victoir_paths import precompute_lv_paths
+from mfts_test.plot_style import (
+    DOUBLE_COLUMN_WIDTH,
+    METHOD_COLORS,
+    METHOD_MARKERS,
+    PALETTE,
+    save_publication_figure,
+    style_curve_axis,
+)
 
 OUTPUT_DIR = os.path.join(HERE, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -215,19 +223,28 @@ REC_FILTER_NAMES = tuple(rec_label(n) for n in WSCKF_PATH_BUDGETS)
 LV_FILTER_NAMES = tuple(lv_label(m) for m in LV_DEGREES)
 FILTER_NAMES = BASE_FILTER_NAMES + REC_FILTER_NAMES + LV_FILTER_NAMES
 
-# Purple gradient: recombined path budgets. Teal/cyan: explicit multi-D LV.
-_WSCKF_PURPLES = ("#C4B0E0", "#9B7EBD", "#7A5CA3", "#6A4C93", "#4A2F6E", "#2F1A4A")
-_LV_COLORS = {3: "#0D9488", 5: "#134E4A"}
 COLORS = {
-    "CD-EKF": "#2E86AB",
-    "CD-UKF": "#3DA35D",
-    "CD-EnKF": "#F6AE2D",
-    "PF": "#F24236",
+    "CD-EKF": METHOD_COLORS["CD-EKF"],
+    "CD-UKF": METHOD_COLORS["CD-UKF"],
+    "CD-EnKF": METHOD_COLORS["CD-EnKF"],
+    "PF": METHOD_COLORS["PF"],
 }
+for _name in REC_FILTER_NAMES:
+    COLORS[_name] = METHOD_COLORS["WSC-KF"]
+for _name in LV_FILTER_NAMES:
+    COLORS[_name] = PALETTE["salmon"]
+
+PLOT_MARKERS = {name: METHOD_MARKERS[name] for name in BASE_FILTER_NAMES}
 for _i, _name in enumerate(REC_FILTER_NAMES):
-    COLORS[_name] = _WSCKF_PURPLES[min(_i, len(_WSCKF_PURPLES) - 1)]
-for _m, _name in zip(LV_DEGREES, LV_FILTER_NAMES):
-    COLORS[_name] = _LV_COLORS[_m]
+    PLOT_MARKERS[_name] = ("o", "P", "X", "*", "h")[_i % 5]
+for _i, _name in enumerate(LV_FILTER_NAMES):
+    PLOT_MARKERS[_name] = ("D", "d")[_i % 2]
+
+PLOT_LINESTYLES = {name: "-" for name in BASE_FILTER_NAMES}
+for _i, _name in enumerate(REC_FILTER_NAMES):
+    PLOT_LINESTYLES[_name] = ("-", "--", "-.", ":")[_i % 4]
+for _i, _name in enumerate(LV_FILTER_NAMES):
+    PLOT_LINESTYLES[_name] = ("--", ":")[_i % 2]
 
 
 def lorenz_drift(x):
@@ -630,7 +647,7 @@ for dt_req in DELTA_T_REQ:
 # Plot RMSE vs Delta_t
 # ---------------------------------------------------------------------------
 
-fig, axes = plt.subplots(1, 2, figsize=(11, 4.5), sharex=True)
+fig, axes = plt.subplots(1, 2, figsize=(DOUBLE_COLUMN_WIDTH, 2.65), sharex=True)
 for ax, metric, title in zip(
     axes,
     ("rmse_overall", "rmse_unobs"),
@@ -641,31 +658,30 @@ for ax, metric, title in zip(
             delta_t_eff,
             series[name][metric],
             color=COLORS[name],
-            marker="o",
-            lw=1.8,
+            marker=PLOT_MARKERS[name],
+            linestyle=PLOT_LINESTYLES[name],
+            markerfacecolor="white",
+            markeredgewidth=0.7,
+            markersize=3.8,
+            lw=1.25,
             label=name,
         )
     ax.set_xlabel(r"Observation interval $\Delta t$")
     ax.set_ylabel("RMSE")
     ax.set_title(title)
-    ax.grid(True, alpha=0.3)
+    style_curve_axis(ax, grid_axis="both")
     ax.set_xscale("log")
-axes[0].legend(fontsize=9, loc="best")
-fig.suptitle(
-    f"Lorenz-63 fine-grid RMSE vs $\\Delta t$ "
-    f"(eval_dt={DT_FINE:g}, solver={SOLVER})",
-    fontsize=12,
-)
-fig.tight_layout()
+fig.legend(*axes[0].get_legend_handles_labels(), loc="lower center", bbox_to_anchor=(0.5, 0.005), ncol=4)
+fig.subplots_adjust(left=0.09, right=0.99, bottom=0.31, top=0.91, wspace=0.28)
 plot_path = os.path.join(OUTPUT_DIR, "rmse_vs_interval.png")
-fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+rmse_png, rmse_pdf = save_publication_figure(fig, plot_path)
 plt.close()
 
 # ---------------------------------------------------------------------------
 # Plot wall-clock time vs Delta_t
 # ---------------------------------------------------------------------------
 
-fig, axes = plt.subplots(1, 2, figsize=(11, 4.5), sharex=True)
+fig, axes = plt.subplots(1, 2, figsize=(DOUBLE_COLUMN_WIDTH, 2.65), sharex=True)
 
 ax = axes[0]
 for name in FILTER_NAMES:
@@ -673,8 +689,12 @@ for name in FILTER_NAMES:
         delta_t_eff,
         [1e3 * t for t in series[name]["time"]],
         color=COLORS[name],
-        marker="o",
-        lw=1.8,
+        marker=PLOT_MARKERS[name],
+        linestyle=PLOT_LINESTYLES[name],
+        markerfacecolor="white",
+        markeredgewidth=0.7,
+        markersize=3.8,
+        lw=1.25,
         label=name,
     )
 ax.set_xlabel(r"Observation interval $\Delta t$")
@@ -682,8 +702,7 @@ ax.set_ylabel("Wall-clock time [ms]")
 ax.set_title("Total filter runtime")
 ax.set_xscale("log")
 ax.set_yscale("log")
-ax.grid(True, which="both", alpha=0.3)
-ax.legend(fontsize=9, loc="best")
+style_curve_axis(ax, grid_axis="both")
 
 ax = axes[1]
 for name in FILTER_NAMES:
@@ -695,8 +714,12 @@ for name in FILTER_NAMES:
         delta_t_eff,
         per_obs,
         color=COLORS[name],
-        marker="o",
-        lw=1.8,
+        marker=PLOT_MARKERS[name],
+        linestyle=PLOT_LINESTYLES[name],
+        markerfacecolor="white",
+        markeredgewidth=0.7,
+        markersize=3.8,
+        lw=1.25,
         label=name,
     )
 ax.set_xlabel(r"Observation interval $\Delta t$")
@@ -704,15 +727,11 @@ ax.set_ylabel("Wall-clock time / observation [ms]")
 ax.set_title("Cost per assimilation step")
 ax.set_xscale("log")
 ax.set_yscale("log")
-ax.grid(True, which="both", alpha=0.3)
-
-fig.suptitle(
-    r"L63 filter compute time vs $\Delta t$",
-    fontsize=12,
-)
-fig.tight_layout()
+style_curve_axis(ax, grid_axis="both")
+fig.legend(*axes[0].get_legend_handles_labels(), loc="lower center", bbox_to_anchor=(0.5, 0.005), ncol=4)
+fig.subplots_adjust(left=0.09, right=0.99, bottom=0.31, top=0.91, wspace=0.30)
 timing_path = os.path.join(OUTPUT_DIR, "timing_vs_interval.png")
-fig.savefig(timing_path, dpi=150, bbox_inches="tight")
+timing_png, timing_pdf = save_publication_figure(fig, timing_path)
 plt.close()
 
 # ---------------------------------------------------------------------------

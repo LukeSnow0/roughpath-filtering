@@ -59,6 +59,15 @@ from cd_dynamax_mirror.filters import (
 from cuthbert import filter as run_filter  
 from wsckf import build_filter, WSCKFState
 from wsckf.library import default_recombined_num_paths
+from mfts_test.plot_style import (
+    DOUBLE_COLUMN_WIDTH,
+    METHOD_COLORS,
+    PALETTE,
+    SINGLE_COLUMN_WIDTH,
+    save_publication_figure,
+    style_box_axis,
+    style_curve_axis,
+)
 
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
@@ -282,11 +291,11 @@ pf_res, pf_time = time_call(pf_jit, pf_key)
 # Collect results
 # ---------------------------------------------------------------------------
 RESULTS = {
-    "CD-EKF": dict(means=ekf_res.means, loglik=ekf_res.cum_loglik, time=ekf_time, color="#2E86AB"),
-    "CD-UKF": dict(means=ukf_res.means, loglik=ukf_res.cum_loglik, time=ukf_time, color="#3DA35D"),
-    "CD-EnKF": dict(means=enkf_res.means, loglik=enkf_res.cum_loglik, time=enkf_time, color="#F6AE2D"),
-    "PF": dict(means=pf_res.means, loglik=pf_res.cum_loglik, time=pf_time, color="#F24236"),
-    "WSC-KF": dict(means=wsckf_means, loglik=wsckf_loglik, time=wsckf_time, color="#6A4C93"),
+    "CD-EKF": dict(means=ekf_res.means, loglik=ekf_res.cum_loglik, time=ekf_time, color=METHOD_COLORS["CD-EKF"]),
+    "CD-UKF": dict(means=ukf_res.means, loglik=ukf_res.cum_loglik, time=ukf_time, color=METHOD_COLORS["CD-UKF"]),
+    "CD-EnKF": dict(means=enkf_res.means, loglik=enkf_res.cum_loglik, time=enkf_time, color=METHOD_COLORS["CD-EnKF"]),
+    "PF": dict(means=pf_res.means, loglik=pf_res.cum_loglik, time=pf_time, color=METHOD_COLORS["PF"]),
+    "WSC-KF": dict(means=wsckf_means, loglik=wsckf_loglik, time=wsckf_time, color=METHOD_COLORS["WSC-KF"]),
 }
 
 
@@ -301,21 +310,20 @@ for name, r in RESULTS.items():
 # ---------------------------------------------------------------------------
 # Plot 1: state trajectories
 # ---------------------------------------------------------------------------
-fig, axes = plt.subplots(3, 1, figsize=(12, 8), sharex=True)
+fig, axes = plt.subplots(3, 1, figsize=(DOUBLE_COLUMN_WIDTH, 4.35), sharex=True)
 dim_labels = ["$x_1$ (observed)", "$x_2$ (unobserved)", "$x_3$ (unobserved)"]
 for i, ax in enumerate(axes):
-    ax.plot(times, true_states[:, i], "k-", linewidth=1.2, label="True", alpha=0.7)
+    ax.plot(times, true_states[:, i], "--", color=PALETTE["black"], linewidth=1.25, label="True")
     if i == 0:
-        ax.scatter(times, ys[:, 0], s=6, color="gray", alpha=0.3, label="Obs", zorder=1)
+        ax.scatter(times, ys[:, 0], s=5, color=PALETTE["neutral_gray"], alpha=0.35, label="Observations", zorder=1)
     for name, r in RESULTS.items():
-        ax.plot(times, r["means"][:, i], color=r["color"], linewidth=1.0, label=name, alpha=0.9)
-    ax.set_ylabel(dim_labels[i], fontsize=12)
-    ax.grid(True, alpha=0.2)
-axes[0].legend(loc="upper right", fontsize=9, ncol=6)
-axes[2].set_xlabel("Time", fontsize=13)
-fig.suptitle("WSC-KF vs cd_dynamax filters — Lorenz-63 tracking", fontsize=14)
-fig.tight_layout()
-fig.savefig(os.path.join(OUTPUT_DIR, "trajectories.png"), dpi=150, bbox_inches="tight")
+        ax.plot(times, r["means"][:, i], color=r["color"], linewidth=1.1, label=name, alpha=0.95)
+    ax.set_ylabel(dim_labels[i])
+    style_curve_axis(ax, grid_axis="y")
+axes[2].set_xlabel("Time")
+fig.legend(*axes[0].get_legend_handles_labels(), loc="lower center", bbox_to_anchor=(0.5, 0.005), ncol=7)
+fig.subplots_adjust(left=0.09, right=0.99, bottom=0.16, top=0.98, hspace=0.18)
+save_publication_figure(fig, os.path.join(OUTPUT_DIR, "trajectories.png"))
 plt.close()
 
 
@@ -327,52 +335,46 @@ xpos = jnp.arange(len(component_names))
 names = list(RESULTS.keys())
 width = 0.8 / len(names)
 
-fig, ax = plt.subplots(figsize=(9, 4.5))
+fig, ax = plt.subplots(figsize=(DOUBLE_COLUMN_WIDTH, 2.55))
 for j, name in enumerate(names):
     vals = [*RESULTS[name]["rmse"].tolist(), float(jnp.mean(RESULTS[name]["rmse"]))]
     ax.bar(xpos + (j - (len(names) - 1) / 2) * width, vals, width, label=name, color=RESULTS[name]["color"])
 ax.set_xticks(xpos)
-ax.set_xticklabels(component_names, fontsize=12)
-ax.set_ylabel("RMSE", fontsize=13)
-ax.set_title("Per-component and overall RMSE", fontsize=14)
-ax.legend(fontsize=10, ncol=5)
-ax.grid(True, axis="y", alpha=0.3)
-fig.tight_layout()
-fig.savefig(os.path.join(OUTPUT_DIR, "rmse.png"), dpi=150, bbox_inches="tight")
+ax.set_xticklabels(component_names)
+ax.set_ylabel("RMSE")
+style_box_axis(ax, grid_axis="y")
+fig.legend(*ax.get_legend_handles_labels(), loc="lower center", bbox_to_anchor=(0.5, 0.005), ncol=5)
+fig.subplots_adjust(left=0.09, right=0.99, bottom=0.28, top=0.97)
+save_publication_figure(fig, os.path.join(OUTPUT_DIR, "rmse.png"))
 plt.close()
 
 
 # ---------------------------------------------------------------------------
 # Plot 3: cumulative log-likelihood
 # ---------------------------------------------------------------------------
-fig, ax = plt.subplots(figsize=(10, 4))
+fig, ax = plt.subplots(figsize=(DOUBLE_COLUMN_WIDTH, 2.35))
 for name, r in RESULTS.items():
     ax.plot(times, r["loglik"], color=r["color"], linewidth=1.8, label=name)
-ax.set_xlabel("Time", fontsize=13)
-ax.set_ylabel("Cumulative log-likelihood - log scale", fontsize=13)
-ax.set_title("Cumulative marginal log-likelihood (EnKF value is a Gaussian diagnostic)", fontsize=12)
-ax.legend(fontsize=10, ncol=5)
-ax.grid(True, alpha=0.2)
+ax.set_xlabel("Time")
+ax.set_ylabel("Cumulative log-likelihood [nats]")
 ax.set_yscale("symlog")
-fig.tight_layout()
-fig.savefig(os.path.join(OUTPUT_DIR, "loglik.png"), dpi=150, bbox_inches="tight")
+style_curve_axis(ax, grid_axis="y")
+fig.legend(*ax.get_legend_handles_labels(), loc="lower center", bbox_to_anchor=(0.5, 0.005), ncol=5)
+fig.subplots_adjust(left=0.10, right=0.99, bottom=0.29, top=0.97)
+save_publication_figure(fig, os.path.join(OUTPUT_DIR, "loglik.png"))
 plt.close()
 
 
 # ---------------------------------------------------------------------------
 # Plot 4: runtime
 # ---------------------------------------------------------------------------
-fig, ax = plt.subplots(figsize=(7, 4))
+fig, ax = plt.subplots(figsize=(SINGLE_COLUMN_WIDTH, 2.15))
 ax.bar(names, [RESULTS[n]["time"] for n in names], color=[RESULTS[n]["color"] for n in names])
-ax.set_ylabel("Wall-clock time (s) - log scale", fontsize=13)
-ax.set_title(
-    f"Filter runtime (median of {N_TIMING}, excl. JIT; CD solver={SOLVER})",
-    fontsize=12,
-)
-ax.grid(True, axis="y", alpha=0.3)
+ax.set_ylabel("Wall-clock time [s]")
 ax.set_yscale("log")
-fig.tight_layout()
-fig.savefig(os.path.join(OUTPUT_DIR, "timing.png"), dpi=150, bbox_inches="tight")
+style_box_axis(ax, grid_axis="y")
+fig.subplots_adjust(left=0.19, right=0.98, bottom=0.24, top=0.97)
+save_publication_figure(fig, os.path.join(OUTPUT_DIR, "timing.png"))
 plt.close()
 
 

@@ -22,6 +22,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.lines import Line2D
+from plot_style import (
+    DOUBLE_COLUMN_WIDTH,
+    METHOD_COLORS,
+    save_publication_figure,
+    style_curve_axis,
+)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(HERE, "output")
@@ -66,7 +72,7 @@ def main():
         default=os.path.join(OUTPUT_DIR, "cohort_calibrated_crps_dt20_stress.png"),
     )
     ap.add_argument("--dt-assim", type=float, default=20.0, dest="dt_assim")
-    ap.add_argument("--err-scale", type=float, default=0.25, dest="err_scale")
+    ap.add_argument("--err-scale", type=float, default=1.0, dest="err_scale")
     args = ap.parse_args()
 
     tags = [t.strip().lstrip("_") for t in args.tags.split(",") if t.strip()]
@@ -83,22 +89,14 @@ def main():
     if len(scales) != len(tags):
         raise SystemExit("--tags and --scales length mismatch")
 
-    colors = {
-        "WSC-KF": "#6A4C93",
-        "EKF": "#2E86AB",
-        "UKF": "#E8B923",
-        "CKF": "#3DA35D",
-        "EnKF": "#D97706",
-        "PF": "#F24236",
-    }
+    families = ["WSC-KF", "EKF", "UKF", "CKF", "EnKF", "PF"]
+    colors = {name: METHOD_COLORS[name] for name in families}
     # Distinct linestyles / markers per scale (readable in B&W too)
     scale_style = {
         1.0: {"ls": "-", "marker": "o", "alpha": 1.00},
         2.0: {"ls": "--", "marker": "s", "alpha": 0.92},
         3.0: {"ls": ":", "marker": "^", "alpha": 0.88},
     }
-    families = ["WSC-KF", "EKF", "UKF", "CKF", "EnKF", "PF"]
-
     bundles = []
     for tag, sc in zip(tags, scales):
         path = os.path.join(OUTPUT_DIR, f"cohort_calibrated_summary_{tag}.csv")
@@ -109,7 +107,7 @@ def main():
     n_subj = int(bundles[0][1][0].get("n_subjects", 0)) if bundles[0][1] else 0
     err_scale = float(args.err_scale)
 
-    fig, ax = plt.subplots(figsize=(7.0, 5.0))
+    fig, ax = plt.subplots(figsize=(DOUBLE_COLUMN_WIDTH, 2.65))
     present_fams: list[str] = []
     for sc, summary in bundles:
         sty = scale_style.get(
@@ -130,13 +128,14 @@ def main():
             col = colors.get(fam, "0.3")
             if len(pts) > 1:
                 ax.plot(
-                    xs, ys, sty["ls"], color=col, linewidth=1.35,
+                    xs, ys, sty["ls"], color=col, linewidth=1.15,
                     alpha=sty["alpha"], zorder=2,
                 )
             ax.errorbar(
                 xs, ys, xerr=xerr, yerr=yerr,
-                fmt=sty["marker"], color=col, markersize=7, capsize=2.5,
-                elinewidth=1.0, linestyle="none",
+                fmt=sty["marker"], color=col, markerfacecolor="white",
+                markeredgewidth=0.8, markersize=4.2, capsize=2.0,
+                elinewidth=0.7, linestyle="none",
                 alpha=sty["alpha"], zorder=3,
             )
 
@@ -144,7 +143,7 @@ def main():
     fam_handles = [
         Line2D(
             [0], [0], color=colors[f], marker="o", linestyle="none",
-            markersize=7, label=f,
+            markerfacecolor="white", markersize=4.2, label=f,
         )
         for f in present_fams
     ]
@@ -157,34 +156,38 @@ def main():
         scale_handles.append(
             Line2D(
                 [0], [0], color="0.25", marker=sty["marker"], linestyle=sty["ls"],
-                linewidth=1.35, markersize=7,
+                linewidth=1.15, markerfacecolor="white", markersize=4.2,
                 label=rf"$\sigma_G\times{sc:g}$",
             )
         )
-    leg1 = ax.legend(
-        handles=fam_handles, loc="upper left", frameon=False, fontsize=8, title="filter",
+    leg1 = fig.legend(
+        handles=fam_handles, loc="lower center", bbox_to_anchor=(0.5, 0.075),
+        ncol=max(1, len(fam_handles)), title="Filter",
     )
-    ax.add_artist(leg1)
-    ax.legend(
-        handles=scale_handles, loc="upper right", frameon=False, fontsize=8, title="noise",
+    fig.add_artist(leg1)
+    fig.legend(
+        handles=scale_handles, loc="lower center", bbox_to_anchor=(0.5, 0.005),
+        ncol=max(1, len(scale_handles)), title=r"Process-noise scale",
     )
 
-    ax.set_xlabel(rf"Wall-clock [ms] (mean $\pm$ {err_scale:g}\,std over subjects)")
-    ax.set_ylabel("Held-out CRPS")
+    ax.set_xlabel("Mean wall time [ms]")
+    ax.set_ylabel("Held-out CRPS [mg/dL]")
     ax.set_xscale("log")
-    ax.grid(True, alpha=0.3, which="both")
-    scale_txt = ", ".join(f"$\\times{sc:g}$" for sc, _ in bundles)
-    fig.suptitle(
-        f"AZT1D cohort CRPS Pareto (PF=mixture; $\\Delta t$={args.dt_assim:g} min)\n"
-        f"N={n_subj} subjects; EnKF $\\hat\\theta_i$; "
-        rf"$\sigma_G$ stress {scale_txt}; bars = $\pm${err_scale:g} std",
-        fontsize=11,
+    style_curve_axis(ax, grid_axis="both")
+    ax.text(
+        0.02,
+        0.98,
+        rf"$N={n_subj}$; $\Delta t={args.dt_assim:g}$ min; bars: $\pm {err_scale:g}$ SD",
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=6.4,
     )
-    fig.tight_layout()
-    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-    fig.savefig(args.out, dpi=160)
+    fig.subplots_adjust(left=0.09, right=0.99, bottom=0.36, top=0.97)
+    out_png, out_pdf = save_publication_figure(fig, args.out)
     plt.close(fig)
-    print(f"Wrote {args.out}")
+    print(f"Wrote {out_png}")
+    print(f"Wrote {out_pdf}")
 
 
 if __name__ == "__main__":

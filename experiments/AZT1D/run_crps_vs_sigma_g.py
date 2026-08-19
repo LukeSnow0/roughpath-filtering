@@ -61,6 +61,13 @@ from glucose_model import (
     init_estimate,
     make_glucose_dynamics,
 )
+from plot_style import (
+    METHOD_COLORS,
+    METHOD_MARKERS,
+    SINGLE_COLUMN_WIDTH,
+    save_publication_figure,
+    style_curve_axis,
+)
 
 OUTPUT_DIR = os.path.join(HERE, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -326,15 +333,7 @@ def main():
     for r in rows:
         if r["filter"] not in filters:
             filters.append(r["filter"])
-    colors = {
-        "WSC-KF": "#6A4C93",
-        "EKF": "#2E86AB",
-        "UKF": "#E8B923",
-        "EnKF": "#D97706",
-        "PF": "#F24236",
-    }
-
-    fig, ax = plt.subplots(figsize=(6.2, 4.4), layout="constrained")
+    fig, ax = plt.subplots(figsize=(SINGLE_COLUMN_WIDTH, 2.55))
     for fam in filters:
         xs, ys, yerr = [], [], []
         for sc in scales:
@@ -352,22 +351,27 @@ def main():
                 float(np.std(arr, ddof=1) / np.sqrt(len(arr))) if len(arr) > 1 else 0.0
             )
         ax.errorbar(
-            xs, ys, yerr=yerr, color=colors.get(fam, "0.3"),
-            marker="s", ms=6, lw=1.6, capsize=3, label=fam,
+            xs, ys, yerr=yerr, color=METHOD_COLORS[fam],
+            marker=METHOD_MARKERS[fam], markerfacecolor="white",
+            markeredgewidth=0.8, ms=4.2, lw=1.25, capsize=2.0,
+            elinewidth=0.7, label=fam,
         )
-    ax.set_xlabel(r"process-noise scale $\sigma_G / \hat\sigma_G$")
-    ax.set_ylabel("Held-out CRPS")
+    ax.set_xlabel(r"Process-noise scale $\sigma_G / \hat\sigma_G$")
+    ax.set_ylabel("Held-out CRPS [mg/dL]")
     ax.set_yscale("log")
-    ax.grid(True, alpha=0.3)
-    ax.legend(frameon=False, fontsize=8)
-    fig.suptitle(
-        rf"AZT1D: CRPS vs $\sigma_G$ scale ($\Delta t$={dt_assim:g}, N={len(subjects)})",
-        fontsize=11,
+    style_curve_axis(ax, grid_axis="both")
+    fig.legend(
+        *ax.get_legend_handles_labels(),
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.005),
+        ncol=min(3, len(filters)),
     )
+    fig.subplots_adjust(left=0.19, right=0.98, bottom=0.34, top=0.97)
     png = os.path.join(OUTPUT_DIR, f"crps_vs_sigma_g_scale{tag}.png")
-    fig.savefig(png, dpi=170)
+    out_png, out_pdf = save_publication_figure(fig, png)
     plt.close(fig)
-    print(f"Wrote {png}")
+    print(f"Wrote {out_png}")
+    print(f"Wrote {out_pdf}")
 
     # Print slope-ish summary: ΔCRPS from scale 1 → max
     print("\nΔCRPS (max scale − scale 1), mean over subjects:")

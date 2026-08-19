@@ -47,6 +47,12 @@ for p in (EXPERIMENTS_DIR, ROOT_DIR, HERE):
 from wsckf.library import predict
 from wsckf.library.conversions import ito_to_stratonovich_dynamics
 from lyons_victoir_paths import describe, precompute_lv_paths
+from mfts_test.plot_style import (
+    DOUBLE_COLUMN_WIDTH,
+    PALETTE,
+    save_publication_figure,
+    style_curve_axis,
+)
 
 OUTPUT_DIR = os.path.join(HERE, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -144,10 +150,28 @@ def fit_slope(deltas, errs, dmax=0.4, floor=1e-13):
     return float(np.polyfit(np.log(d[mask]), np.log(e[mask]), 1)[0])
 
 
-def guide(ax, deltas, anchor_err, anchor_d, slope, label, color="k"):
+def guide(
+    ax,
+    deltas,
+    anchor_err,
+    anchor_d,
+    slope,
+    label,
+    *,
+    color,
+    linestyle,
+):
     d = np.asarray(deltas)
     c = anchor_err / (anchor_d**slope)
-    ax.loglog(d, c * d**slope, "--", color=color, alpha=0.55, lw=1.2, label=label)
+    return ax.loglog(
+        d,
+        c * d**slope,
+        color=color,
+        linestyle=linestyle,
+        alpha=0.72,
+        lw=1.0,
+        label=label,
+    )[0]
 
 
 def parse_args():
@@ -283,53 +307,105 @@ def main():
             )
 
     # ----- plot -----
-    fig, axes = plt.subplots(2, 2, figsize=(11.5, 9.0), sharex=True)
-    colors = {3: "#6A4C93", 5: "#9B5DE5"}
+    fig, axes = plt.subplots(
+        2,
+        2,
+        figsize=(DOUBLE_COLUMN_WIDTH, 4.60),
+        sharex=True,
+    )
+    colors = {3: PALETTE["warm_red"], 5: PALETTE["teal_green"]}
+    linestyles = {3: "-", 5: "--"}
+    markers = {3: "o", 5: "s"}
 
     panels = [
-        (axes[0, 0], err_mean_1d, "1D GBM: mean error", r"$|\hat\mu - \mu|$"),
-        (axes[0, 1], err_var_1d, "1D GBM: variance error", r"$|\hat v - v|$"),
-        (axes[1, 0], err_mean_2d, "2D GBM: mean error", r"$\|\hat\mu - \mu\|_2$"),
-        (axes[1, 1], err_cov_2d, "2D GBM: cov error", r"$\|\hat P - P\|_F$"),
+        (axes[0, 0], err_mean_1d, "(a) 1D mean", r"$|\hat\mu-\mu|$"),
+        (axes[0, 1], err_var_1d, "(b) 1D variance", r"$|\hat v-v|$"),
+        (axes[1, 0], err_mean_2d, "(c) 2D mean", r"$\|\hat\mu-\mu\|_2$"),
+        (axes[1, 1], err_cov_2d, "(d) 2D covariance", r"$\|\hat P-P\|_F$"),
     ]
     for ax, series, title, ylab in panels:
+        fitted_slopes = {}
         for m in degrees:
             ys = np.maximum(series[m], floor)
             fitted = fit_slope(deltas, series[m])
-            theor = 0.5 * (m + 1)
+            fitted_slopes[m] = fitted
             ax.loglog(
                 deltas,
                 ys,
-                "o-",
                 color=colors[m],
-                lw=1.8,
-                ms=5,
-                label=f"LV m={m}  (fit={fitted:.2f}, theory={theor:.0f})",
+                linestyle=linestyles[m],
+                marker=markers[m],
+                markerfacecolor="white",
+                markeredgecolor=colors[m],
+                markeredgewidth=0.8,
+                lw=1.45,
+                ms=3.6,
+                label=rf"LV $m={m}$",
             )
         # guide lines anchored at largest-δ m=3 point
         anchor_y = max(series[3][-1], floor)
         anchor_x = float(deltas[-1])
-        guide(ax, deltas, anchor_y, anchor_x, 2.0, r"$\propto\delta^{2}$", color="0.45")
-        guide(ax, deltas, anchor_y, anchor_x, 3.0, r"$\propto\delta^{3}$", color="0.55")
+        guide(
+            ax,
+            deltas,
+            anchor_y,
+            anchor_x,
+            2.0,
+            r"$O(\delta^2)$",
+            color=PALETTE["neutral_gray"],
+            linestyle=":",
+        )
+        guide(
+            ax,
+            deltas,
+            anchor_y,
+            anchor_x,
+            3.0,
+            r"$O(\delta^3)$",
+            color=PALETTE["light_gray"],
+            linestyle=(0, (4, 2)),
+        )
         ax.set_title(title)
         ax.set_ylabel(ylab)
-        ax.grid(True, which="both", alpha=0.3)
-        ax.legend(fontsize=8, loc="best")
+        ax.text(
+            0.025,
+            0.955,
+            rf"fitted: $p_3={fitted_slopes[3]:.2f}$, $p_5={fitted_slopes[5]:.2f}$",
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=6.4,
+            color=PALETTE["black"],
+        )
+        style_curve_axis(ax, grid_axis="both")
 
-    axes[1, 0].set_xlabel(r"assimilation interval $\delta$")
-    axes[1, 1].set_xlabel(r"assimilation interval $\delta$")
-    fig.suptitle(
-        "Explicit LV multi-D paths on multiplicative GBM "
-        r"($P_0=0$; exact moments)",
-        fontsize=12,
+    axes[1, 0].set_xlabel(r"Assimilation interval $\delta$")
+    axes[1, 1].set_xlabel(r"Assimilation interval $\delta$")
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.015),
+        ncol=4,
+        columnspacing=1.35,
+        handletextpad=0.45,
     )
-    fig.tight_layout()
+    fig.subplots_adjust(
+        left=0.085,
+        right=0.99,
+        bottom=0.205,
+        top=0.955,
+        wspace=0.27,
+        hspace=0.34,
+    )
     png_path = os.path.join(OUTPUT_DIR, "weak_error_lv_paths.png")
-    fig.savefig(png_path, dpi=150, bbox_inches="tight")
+    png_path, pdf_path = save_publication_figure(fig, png_path)
     plt.close()
 
     print("-" * 72)
     print(f"Wrote {png_path}")
+    print(f"Wrote {pdf_path}")
     print(f"Wrote {csv_path}")
     print(f"Wrote {slope_csv}")
 
