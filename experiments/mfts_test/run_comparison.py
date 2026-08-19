@@ -38,7 +38,7 @@ import numpy as np
 from jax import jit, random
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt  
+import matplotlib.pyplot as plt
 
 jax.config.update("jax_enable_x64", True)
 
@@ -57,7 +57,6 @@ from wsckf.library import default_recombined_num_paths
 
 from wsckf import build_filter, WSCKFState
 
-
 from mfts_model import (
     MFTSParams,
     betas,
@@ -65,6 +64,16 @@ from mfts_model import (
     make_mfts_dynamics,
     mape_pct,
     simulate_mfts,
+)
+from plot_style import (
+    DOUBLE_COLUMN_WIDTH,
+    METHOD_COLORS,
+    METHOD_MARKERS,
+    PALETTE,
+    SINGLE_COLUMN_WIDTH,
+    save_publication_figure,
+    style_box_axis,
+    style_curve_axis,
 )
 
 OUTPUT_DIR = os.path.join(HERE, "output")
@@ -120,12 +129,35 @@ F1, F2 = 5.0, 5.0
 N_TIMING = 5
 
 COLORS = {
-    "CD-EKF": "#2E86AB",
-    "CD-UKF": "#3DA35D",
-    "CD-EnKF": "#F6AE2D",
-    "PF": "#F24236",
-    "WSC-KF": "#6A4C93",
+    name: METHOD_COLORS[name]
+    for name in ("CD-EKF", "CD-UKF", "CD-EnKF", "PF", "WSC-KF")
 }
+LINESTYLES = {
+    "CD-EKF": (0, (3.0, 1.4)),
+    "CD-UKF": (0, (1.0, 1.2)),
+    "CD-EnKF": "-.",
+    "PF": (0, (5.0, 1.4)),
+    "WSC-KF": "-",
+}
+
+
+def plot_method(ax, x, y, name, *, markevery=15, label=None):
+    """Draw one filter with a stable color/line/marker encoding."""
+
+    return ax.plot(
+        x,
+        y,
+        color=COLORS[name],
+        linestyle=LINESTYLES[name],
+        linewidth=1.7 if name == "WSC-KF" else 1.15,
+        marker=METHOD_MARKERS[name],
+        markersize=2.6,
+        markerfacecolor="white",
+        markeredgewidth=0.65,
+        markevery=markevery,
+        label=name if label is None else label,
+        zorder=3 if name == "WSC-KF" else 2,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -277,41 +309,86 @@ for name, r in RESULTS.items():
 # Plot 1: tank heights [cm]
 # ---------------------------------------------------------------------------
 true_h = true_traj[:, :4] * beta
-fig, axes = plt.subplots(2, 2, figsize=(12, 7), sharex=True)
+fig, axes = plt.subplots(
+    2,
+    2,
+    figsize=(DOUBLE_COLUMN_WIDTH, 3.65),
+    sharex=True,
+)
 for i, ax in enumerate(axes.ravel()):
-    ax.plot(times_min, true_h[:, i], "k-", lw=1.2, label="True", alpha=0.8)
+    ax.plot(
+        times_min,
+        true_h[:, i],
+        color=PALETTE["black"],
+        linestyle="--",
+        linewidth=1.35,
+        label="True",
+        zorder=4,
+    )
     for name, r in RESULTS.items():
         est_h = r["est"][:, :4] * beta
-        ax.plot(times_min, est_h[:, i], color=r["color"], lw=1.0, label=name, alpha=0.9)
-    ax.set_ylabel(f"$h_{i+1}$ [cm]")
-    ax.grid(True, alpha=0.2)
-axes[0, 0].legend(loc="upper right", fontsize=8, ncol=3)
+        plot_method(ax, times_min, est_h[:, i], name)
+    ax.set_ylabel(rf"$h_{i + 1}$ [cm]")
+    style_curve_axis(ax, grid_axis="y")
 axes[1, 0].set_xlabel("Time [min]")
 axes[1, 1].set_xlabel("Time [min]")
-fig.suptitle("Tracked MFTS tank heights", fontsize=13)
-fig.tight_layout()
-fig.savefig(os.path.join(OUTPUT_DIR, "heights.png"), dpi=150, bbox_inches="tight")
-plt.close()
+handles, labels = axes[0, 0].get_legend_handles_labels()
+fig.legend(
+    handles,
+    labels,
+    loc="upper center",
+    bbox_to_anchor=(0.5, 0.995),
+    ncol=len(labels),
+)
+fig.subplots_adjust(left=0.082, right=0.992, bottom=0.12, top=0.89, wspace=0.18, hspace=0.12)
+save_publication_figure(fig, os.path.join(OUTPUT_DIR, "heights.png"))
+plt.close(fig)
 
 
 # ---------------------------------------------------------------------------
 # Plot 2: disturbance flows F3, F4
 # ---------------------------------------------------------------------------
-fig, axes = plt.subplots(1, 2, figsize=(12, 4), sharex=True)
+fig, axes = plt.subplots(
+    1,
+    2,
+    figsize=(DOUBLE_COLUMN_WIDTH, 2.25),
+    sharex=True,
+)
 for ax, idx, label in zip(axes, [4, 5], ["$F_3$", "$F_4$"]):
-    ax.plot(times_min, true_traj[:, idx], "k-", lw=1.2, label="True")
-    ax.axhline(p.F_nominal_est, color="0.55", ls="--", lw=1.0, label=r"Model $\bar F$=150")
-    for name, r in RESULTS.items():
-        ax.plot(times_min, r["est"][:, idx], color=r["color"], lw=1.0, label=name, alpha=0.9)
-    ax.set_ylabel(f"{label} [cm³/s]")
-    ax.grid(True, alpha=0.2)
-axes[0].legend(loc="upper right", fontsize=8, ncol=3)
-axes[1].set_xlabel("Time [min]")
+    ax.plot(
+        times_min,
+        true_traj[:, idx],
+        color=PALETTE["black"],
+        linestyle="--",
+        linewidth=1.35,
+        label="True",
+        zorder=4,
+    )
+    ax.axhline(
+        p.F_nominal_est,
+        color=PALETTE["neutral_gray"],
+        linestyle=":",
+        linewidth=1.0,
+        label=r"Nominal $\bar F$",
+        zorder=1,
+    )
+    for name in RESULTS:
+        plot_method(ax, times_min, RESULTS[name]["est"][:, idx], name)
+    ax.set_ylabel(rf"{label} [cm$^3$ s$^{{-1}}$]")
+    style_curve_axis(ax, grid_axis="y")
 axes[0].set_xlabel("Time [min]")
-fig.suptitle("Disturbance flows (unobserved states)", fontsize=13)
-fig.tight_layout()
-fig.savefig(os.path.join(OUTPUT_DIR, "disturbances.png"), dpi=150, bbox_inches="tight")
-plt.close()
+axes[1].set_xlabel("Time [min]")
+handles, labels = axes[0].get_legend_handles_labels()
+fig.legend(
+    handles,
+    labels,
+    loc="upper center",
+    bbox_to_anchor=(0.5, 0.995),
+    ncol=len(labels),
+)
+fig.subplots_adjust(left=0.085, right=0.992, bottom=0.19, top=0.81, wspace=0.2)
+save_publication_figure(fig, os.path.join(OUTPUT_DIR, "disturbances.png"))
+plt.close(fig)
 
 
 # ---------------------------------------------------------------------------
@@ -320,49 +397,102 @@ plt.close()
 names = list(RESULTS.keys())
 xpos = np.arange(2)
 width = 0.8 / len(names)
-fig, ax = plt.subplots(figsize=(8, 4.5))
+fig, ax = plt.subplots(figsize=(SINGLE_COLUMN_WIDTH, 2.25))
 for j, name in enumerate(names):
     vals = [RESULTS[name]["mapex"], RESULTS[name]["maped"]]
-    ax.bar(xpos + (j - (len(names) - 1) / 2) * width, vals, width, label=name, color=RESULTS[name]["color"])
+    ax.bar(
+        xpos + (j - (len(names) - 1) / 2) * width,
+        vals,
+        width,
+        label=name,
+        color=COLORS[name],
+        edgecolor="white",
+        linewidth=0.35,
+        zorder=2,
+    )
 ax.set_xticks(xpos)
-ax.set_xticklabels(["MAPEx (tanks)", "MAPEd (disturbances)"], fontsize=11)
+ax.set_xticklabels(["Tank states", "Disturbance states"])
 ax.set_ylabel("MAPE [%]")
-ax.set_title("Nielsen MAPE metrics (eq. 51)")
-ax.legend(fontsize=9, ncol=5)
-ax.grid(True, axis="y", alpha=0.3)
-fig.tight_layout()
-fig.savefig(os.path.join(OUTPUT_DIR, "mape.png"), dpi=150, bbox_inches="tight")
-plt.close()
+ax.set_ylim(bottom=0.0)
+style_box_axis(ax, grid_axis="y")
+handles, labels = ax.get_legend_handles_labels()
+fig.legend(
+    handles,
+    labels,
+    loc="upper center",
+    bbox_to_anchor=(0.5, 0.995),
+    ncol=3,
+)
+fig.subplots_adjust(left=0.16, right=0.985, bottom=0.19, top=0.76)
+save_publication_figure(fig, os.path.join(OUTPUT_DIR, "mape.png"))
+plt.close(fig)
 
 
 # ---------------------------------------------------------------------------
 # Plot 4: cumulative log-likelihood
 # ---------------------------------------------------------------------------
 obs_times_min = np.arange(1, N_OBS + 1) * dt_obs_min
-fig, ax = plt.subplots(figsize=(10, 4))
-for name, r in RESULTS.items():
-    ax.plot(obs_times_min, r["loglik"], color=r["color"], lw=1.8, label=name)
+fig, ax = plt.subplots(figsize=(SINGLE_COLUMN_WIDTH, 2.3))
+for name in RESULTS:
+    plot_method(
+        ax,
+        obs_times_min,
+        RESULTS[name]["loglik"],
+        name,
+        markevery=max(1, N_OBS // 8),
+    )
 ax.set_xlabel("Time [min]")
-ax.set_ylabel("Cumulative log-likelihood")
-ax.legend(fontsize=10, ncol=5)
-ax.grid(True, alpha=0.2)
-fig.tight_layout()
-fig.savefig(os.path.join(OUTPUT_DIR, "loglik.png"), dpi=150, bbox_inches="tight")
-plt.close()
+ax.set_ylabel("Cumulative log likelihood [nats]")
+style_curve_axis(ax, grid_axis="y")
+handles, labels = ax.get_legend_handles_labels()
+fig.legend(
+    handles,
+    labels,
+    loc="upper center",
+    bbox_to_anchor=(0.5, 0.995),
+    ncol=3,
+)
+fig.subplots_adjust(left=0.19, right=0.985, bottom=0.18, top=0.75)
+save_publication_figure(fig, os.path.join(OUTPUT_DIR, "loglik.png"))
+plt.close(fig)
 
 
 # ---------------------------------------------------------------------------
 # Plot 5: runtime (log scale)
 # ---------------------------------------------------------------------------
-fig, ax = plt.subplots(figsize=(7, 4))
-ax.bar(names, [RESULTS[n]["time"] for n in names], color=[RESULTS[n]["color"] for n in names])
-ax.set_yscale("log")
-ax.set_ylabel("Wall-clock time (s, log scale)")
-ax.set_title(f"Filter runtime (median of {N_TIMING}, excl. JIT; CD solver={SOLVER})")
-ax.grid(True, axis="y", which="both", alpha=0.3)
-fig.tight_layout()
-fig.savefig(os.path.join(OUTPUT_DIR, "timing.png"), dpi=150, bbox_inches="tight")
-plt.close()
+fig, ax = plt.subplots(figsize=(SINGLE_COLUMN_WIDTH, 2.05))
+runtime_values = np.asarray([RESULTS[n]["time"] for n in names])
+ypos = np.arange(len(names))
+for y, name, value in zip(ypos, names, runtime_values):
+    ax.plot(
+        value,
+        y,
+        color=COLORS[name],
+        marker=METHOD_MARKERS[name],
+        linestyle="none",
+        markersize=5.2,
+        zorder=2,
+    )
+ax.set_yticks(ypos)
+ax.set_yticklabels(names)
+ax.set_xscale("log")
+ax.set_xlabel("Wall-clock time [s]")
+ax.invert_yaxis()
+style_curve_axis(ax, grid_axis="x")
+for y, value in zip(ypos, runtime_values):
+    ax.text(
+        value * 1.08,
+        y,
+        f"{value:.2g}",
+        va="center",
+        ha="left",
+        fontsize=6.8,
+    )
+left, right = ax.get_xlim()
+ax.set_xlim(left, right * 1.45)
+fig.subplots_adjust(left=0.25, right=0.97, bottom=0.24, top=0.98)
+save_publication_figure(fig, os.path.join(OUTPUT_DIR, "timing.png"))
+plt.close(fig)
 
 
 # ---------------------------------------------------------------------------

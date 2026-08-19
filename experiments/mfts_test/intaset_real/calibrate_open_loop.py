@@ -27,6 +27,8 @@ os.environ.setdefault(
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+MFTS_DIR = os.path.abspath(os.path.join(HERE, ".."))
+sys.path.insert(0, MFTS_DIR)
 
 import matplotlib
 
@@ -41,6 +43,12 @@ from intaset_model import (
     mape_pct,
     save_params,
     simulate_open_loop,
+)
+from plot_style import (
+    DOUBLE_COLUMN_WIDTH,
+    PALETTE,
+    save_publication_figure,
+    style_curve_axis,
 )
 
 OUTPUT_DIR = os.path.join(HERE, "output")
@@ -208,7 +216,9 @@ def main():
         print(f"  {label}: open-loop MAPE={mape:.2f}%  RMSE={rmse:.3f} cm")
         return ts, Hs, hat, mape, rmse
 
-    _, H_fit, hat_fit, mape_fit, rmse_fit = _eval_segment(0.0, _args.fit_min, "fit")
+    t_fit, H_fit, hat_fit, mape_fit, rmse_fit = _eval_segment(
+        0.0, _args.fit_min, "fit"
+    )
     hold_start = float(_args.holdout_start_min)
     hold_dur = min(10.0, (traj_full.duration_sec / 60.0) - hold_start)
     mape_hold = rmse_hold = float("nan")
@@ -241,39 +251,79 @@ def main():
     print(f"  meas_std={p_fit.meas_std:.3f} cm  sigma_u={p_fit.sigma_u:.3g}")
 
     # Plot fit (+ holdout if available).
-    fig, axes = plt.subplots(2, 2, figsize=(9, 5.5), sharex=False)
+    fig, axes = plt.subplots(
+        2,
+        2,
+        figsize=(DOUBLE_COLUMN_WIDTH, 4.15),
+        sharex=True,
+    )
     for i, ax in enumerate(axes.ravel()):
-        ax.plot(t / 60.0, H[:, i], color="0.55", lw=0.8, label="meas")
         ax.plot(
-            np.linspace(0.0, _args.fit_min, hat_fit.shape[0]),
+            t_fit / 60.0,
+            H_fit[:, i],
+            color=PALETTE["neutral_gray"],
+            linewidth=0.85,
+            alpha=0.75,
+            label="Measured",
+            zorder=1,
+        )
+        ax.plot(
+            t_fit / 60.0,
             hat_fit[:, i],
-            color="C0",
-            lw=1.2,
-            label="sim fit",
+            color=PALETTE["teal_green"],
+            linewidth=1.55,
+            label="Fitted simulation",
+            zorder=3,
         )
         if H_hold is not None and t_hold is not None:
+            hold_times = hold_start + t_hold / 60.0
             ax.plot(
-                hold_start + t_hold / 60.0,
+                hold_times,
+                H_hold[:, i],
+                color=PALETTE["neutral_gray"],
+                linewidth=0.85,
+                alpha=0.75,
+                zorder=1,
+            )
+            ax.plot(
+                hold_times,
                 hat_hold[:, i],
-                color="C3",
-                lw=1.2,
-                label="sim holdout",
+                color=PALETTE["warm_red"],
+                linewidth=1.55,
+                label="Holdout simulation",
+                zorder=3,
+            )
+            ax.axvline(
+                hold_start,
+                color=PALETTE["black"],
+                linestyle=":",
+                linewidth=0.8,
+                zorder=0,
             )
         ax.set_title(f"Tank {i + 1}")
-        ax.set_ylabel("h [cm]")
-        ax.grid(True, alpha=0.3)
+        ax.set_ylabel(rf"$h_{i + 1}$ [cm]")
+        style_curve_axis(ax, grid_axis="y")
         if i >= 2:
-            ax.set_xlabel("t [min]")
-    axes[0, 0].legend(fontsize=7, loc="best")
-    fig.suptitle(
-        f"InTaSet open-loop calibration ({_args.source}): "
-        f"fit MAPE={mape_fit:.1f}%, holdout MAPE={mape_hold:.1f}%",
-        fontsize=11,
+            ax.set_xlabel("Time [min]")
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.995),
+        ncol=len(labels),
     )
-    fig.tight_layout()
+    fig.subplots_adjust(
+        left=0.082,
+        right=0.992,
+        bottom=0.115,
+        top=0.875,
+        wspace=0.18,
+        hspace=0.2,
+    )
     plot_path = os.path.join(OUTPUT_DIR, "calibration_fit.png")
-    fig.savefig(plot_path, dpi=150, bbox_inches="tight")
-    plt.close()
+    save_publication_figure(fig, plot_path)
+    plt.close(fig)
     print(f"Wrote {plot_path}")
 
 

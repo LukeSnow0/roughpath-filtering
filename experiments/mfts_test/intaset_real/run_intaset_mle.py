@@ -44,9 +44,10 @@ os.environ.setdefault(
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+MFTS_DIR = os.path.abspath(os.path.join(HERE, ".."))
 EXPERIMENTS_DIR = os.path.abspath(os.path.join(HERE, "..", ".."))
 ROOT_DIR = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-for pth in (HERE, EXPERIMENTS_DIR, ROOT_DIR):
+for pth in (HERE, MFTS_DIR, EXPERIMENTS_DIR, ROOT_DIR):
     sys.path.insert(0, pth)
 
 import jax
@@ -75,6 +76,16 @@ from intaset_model import (
     prepare_filter_grids,
     save_params,
     simulate_open_loop,
+)
+from plot_style import (
+    DOUBLE_COLUMN_WIDTH,
+    METHOD_COLORS,
+    METHOD_MARKERS,
+    PALETTE,
+    SINGLE_COLUMN_WIDTH,
+    save_publication_figure,
+    style_box_axis,
+    style_curve_axis,
 )
 
 OUTPUT_DIR = os.path.join(HERE, "output")
@@ -680,27 +691,38 @@ def main():
         )
 
     # ---- Plots ----
-    colors = {"WSC-KF-AD": "#6A4C93", "CD-EKF": "#2E86AB", "CD-EnKF": "#D97706"}
+    colors = {name: METHOD_COLORS[name] for name in methods}
 
-    fig, axes = plt.subplots(1, 2, figsize=(10.5, 4.2))
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(DOUBLE_COLUMN_WIDTH, 2.55),
+    )
     ax = axes[0]
     for name in methods:
         ax.plot(
             np.arange(1, len(traces[name]["ll"]) + 1),
             traces[name]["ll"],
             color=colors[name],
-            lw=1.6,
+            linewidth=1.5,
+            marker=METHOD_MARKERS[name],
+            markersize=3.2,
+            markevery=max(1, len(traces[name]["ll"]) // 6),
             label=name,
         )
-        ax.axhline(ll_ol[name], color=colors[name], ls="--", lw=0.9, alpha=0.7)
+        ax.axhline(
+            ll_ol[name],
+            color=colors[name],
+            linestyle="--",
+            linewidth=0.8,
+            alpha=0.75,
+        )
     ax.set_xlabel("Adam iteration")
-    ax.set_ylabel("train log-likelihood")
-    ax.set_title("Filter-MLE traces (dashed = open-loop θ)")
-    ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=8)
+    ax.set_ylabel("Train log likelihood [nats]")
+    ax.set_title("Objective")
+    style_curve_axis(ax, grid_axis="y")
 
     ax = axes[1]
-    # k_pump and γ1 traces
     for name in methods:
         ths = traces[name]["theta"]
         k = np.exp(ths[:, 0])
@@ -708,53 +730,71 @@ def main():
             np.arange(1, len(k) + 1),
             k,
             color=colors[name],
-            lw=1.4,
+            linewidth=1.5,
+            marker=METHOD_MARKERS[name],
+            markersize=3.2,
+            markevery=max(1, len(k) // 6),
             label=name,
         )
-    ax.axhline(float(np.exp(th_ol[0])), color="0.4", ls="--", lw=1.0, label="open-loop")
+    ax.axhline(
+        float(np.exp(th_ol[0])),
+        color=PALETTE["black"],
+        linestyle="--",
+        linewidth=1.0,
+        label=r"Open-loop $\theta$ (dashed)",
+    )
     ax.set_xlabel("Adam iteration")
-    ax.set_ylabel(r"$k_{\mathrm{pump}}$")
-    ax.set_title("Pump-gain trajectories")
-    ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=8)
-    fig.tight_layout()
+    ax.set_ylabel(r"$k_{\mathrm{pump}}$ [cm$^3$ s$^{-1}$]")
+    ax.set_title("Pump gain")
+    style_curve_axis(ax, grid_axis="y")
+    handles, labels = axes[1].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.995),
+        ncol=len(labels),
+    )
+    fig.subplots_adjust(left=0.085, right=0.99, bottom=0.19, top=0.76, wspace=0.27)
     trace_path = os.path.join(OUTPUT_DIR, "intaset_mle_trace.png")
-    fig.savefig(trace_path, dpi=150, bbox_inches="tight")
-    plt.close()
+    save_publication_figure(fig, trace_path)
+    plt.close(fig)
     print(f"\nWrote {trace_path}")
 
     # Held-out bars
-    fig, ax = plt.subplots(figsize=(6.2, 4.0))
+    fig, ax = plt.subplots(figsize=(SINGLE_COLUMN_WIDTH, 2.25))
     labels = ["open-loop", *methods]
     means = [held[n][0] for n in labels]
     stds = [held[n][1] for n in labels]
-    bar_colors = ["0.55", *[colors[n] for n in methods]]
+    bar_colors = [PALETTE["neutral_gray"], *[colors[n] for n in methods]]
     xpos = np.arange(len(labels))
     ax.bar(
         xpos,
         means,
         yerr=stds,
         color=bar_colors,
-        edgecolor="0.25",
-        lw=0.6,
-        capsize=4,
+        edgecolor="white",
+        linewidth=0.35,
+        error_kw={"elinewidth": 0.7, "capsize": 1.8, "capthick": 0.7},
+        zorder=2,
     )
     ax.set_xticks(xpos)
-    ax.set_xticklabels(labels, fontsize=9)
-    ax.set_ylabel("held-out NLL / obs (ref EnKF)")
-    ax.set_title(
-        f"InTaSet held-out NLL ({_args.source}, "
-        f"train {_args.fit_min:g}+hold {_args.holdout_min:g} min)"
-    )
-    ax.grid(axis="y", alpha=0.3)
-    fig.tight_layout()
+    ax.set_xticklabels(["Open loop", *methods])
+    ax.set_ylabel("NLL [nats/observation]")
+    ax.set_title("Reference-EnKF NLL")
+    style_box_axis(ax, grid_axis="y")
+    fig.subplots_adjust(left=0.18, right=0.985, bottom=0.2, top=0.86)
     held_path = os.path.join(OUTPUT_DIR, "intaset_mle_heldout.png")
-    fig.savefig(held_path, dpi=150, bbox_inches="tight")
-    plt.close()
+    save_publication_figure(fig, held_path)
+    plt.close(fig)
     print(f"Wrote {held_path}")
 
     # Timing
-    fig, axes = plt.subplots(1, 2, figsize=(10.5, 4.0))
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(DOUBLE_COLUMN_WIDTH, 2.55),
+    )
     ax = axes[0]
     timing_rows = [
         ("WSC-KF fwd", t_wsckf_fwd, colors["WSC-KF-AD"]),
@@ -771,23 +811,29 @@ def main():
     times = np.array([r[1] for r in timing_rows], dtype=float)
     cols = [r[2] for r in timing_rows]
     xpos = np.arange(len(labs))
-    bars = ax.bar(xpos, times, color=cols, edgecolor="0.3", lw=0.6)
-    ax.set_xticks(xpos)
-    ax.set_xticklabels(labs, fontsize=8)
-    ax.set_ylabel("median wall [s]")
-    ax.set_yscale("log")
-    ax.set_title(f"Per-eval on train (median of {N_TIMING})")
-    ax.grid(axis="y", alpha=0.3, which="both")
+    bars = ax.barh(
+        xpos,
+        times,
+        color=cols,
+        edgecolor="white",
+        linewidth=0.35,
+        zorder=2,
+    )
+    ax.set_yticks(xpos)
+    ax.set_yticklabels(labs)
+    ax.set_xlabel("Wall-clock time [s]")
+    ax.set_title("One evaluation")
+    ax.invert_yaxis()
+    style_box_axis(ax, grid_axis="x")
     for b, t in zip(bars, times):
         if np.isfinite(t) and t > 0:
             ax.text(
-                b.get_x() + b.get_width() / 2,
-                t * 1.2,
-                f"{t:.3f}s",
-                ha="center",
-                va="bottom",
-                fontsize=7,
-                rotation=90,
+                t * 1.08,
+                b.get_y() + b.get_height() / 2,
+                f"{t:.3g}",
+                ha="left",
+                va="center",
+                fontsize=6.6,
             )
 
     ax = axes[1]
@@ -795,27 +841,37 @@ def main():
     mle_t = [walls[n] for n in methods]
     mle_c = [colors[n] for n in methods]
     xpos = np.arange(len(mle_labs))
-    bars = ax.bar(xpos, mle_t, color=mle_c, edgecolor="0.3", lw=0.6)
-    ax.set_xticks(xpos)
-    ax.set_xticklabels(mle_labs, fontsize=9)
-    ax.set_ylabel("wall [s]")
-    ax.set_yscale("log")
-    ax.set_title(f"Adam MLE ({_args.mle_iters} iters)")
-    ax.grid(axis="y", alpha=0.3, which="both")
+    bars = ax.barh(
+        xpos,
+        mle_t,
+        color=mle_c,
+        edgecolor="white",
+        linewidth=0.35,
+        zorder=2,
+    )
+    ax.set_yticks(xpos)
+    ax.set_yticklabels(mle_labs)
+    ax.set_xlabel("Wall-clock time [s]")
+    ax.set_title("MLE total")
+    ax.invert_yaxis()
+    style_box_axis(ax, grid_axis="x")
     for b, t in zip(bars, mle_t):
         if np.isfinite(t) and t > 0:
             ax.text(
-                b.get_x() + b.get_width() / 2,
-                t * 1.15,
-                f"{t:.1f}s",
-                ha="center",
-                va="bottom",
-                fontsize=8,
+                t * 1.08,
+                b.get_y() + b.get_height() / 2,
+                f"{t:.3g}",
+                ha="left",
+                va="center",
+                fontsize=6.6,
             )
-    fig.tight_layout()
+    for ax in axes:
+        left, right = ax.get_xlim()
+        ax.set_xlim(left, right * 1.45)
+    fig.subplots_adjust(left=0.14, right=0.985, bottom=0.19, top=0.84, wspace=0.34)
     timing_path = os.path.join(OUTPUT_DIR, "intaset_mle_timing.png")
-    fig.savefig(timing_path, dpi=150, bbox_inches="tight")
-    plt.close()
+    save_publication_figure(fig, timing_path)
+    plt.close(fig)
     print(f"Wrote {timing_path}")
 
     # ---- CSV + best params ----

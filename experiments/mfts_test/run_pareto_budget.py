@@ -13,12 +13,12 @@ shows mean ± 1 std.
 Run:
   uv run --extra experiments python experiments/mfts_test/run_pareto_budget.py
   uv run --extra experiments python experiments/mfts_test/run_pareto_budget.py \\
-      --seeds 100,101,102,103,104 --include-lv
+      --seeds 100,101,102,103,104,105,106,107,108,109 --include-lv
 
 Outputs:
-  ``experiments/mfts_test/output/pareto_budget_vs_mape.png``
-  ``experiments/mfts_test/output/pareto_budget_vs_nll.png``
-  ``experiments/mfts_test/output/pareto_budget_vs_mape.csv``       (seed means)
+  ``experiments/mfts_test/output/pareto_budget_vs_mape.{pdf,png}``
+  ``experiments/mfts_test/output/pareto_budget_vs_nll.{pdf,png}``
+  ``experiments/mfts_test/output/pareto_budget_vs_mape.csv``       (across-seed summary)
   ``experiments/mfts_test/output/pareto_budget_vs_mape_raw.csv``   (per-seed)
 """
 
@@ -79,6 +79,15 @@ from mfts_model import (
     make_mfts_dynamics,
     mape_pct,
     simulate_mfts,
+)
+from plot_style import (
+    DOUBLE_COLUMN_WIDTH,
+    METHOD_COLORS,
+    METHOD_MARKERS,
+    PALETTE,
+    SINGLE_COLUMN_WIDTH,
+    save_publication_figure,
+    style_curve_axis,
 )
 
 OUTPUT_DIR = os.path.join(HERE, "output")
@@ -173,8 +182,8 @@ _parser = argparse.ArgumentParser(
 _parser.add_argument(
     "--seeds",
     type=str,
-    default="100,101,102,103,104",
-    help="Comma-separated truth/filter seeds to average over",
+    default="100,101,102,103,104,105,106,107,108,109",
+    help="Comma-separated truth/filter seeds to average over (default: 100–109)",
 )
 _parser.add_argument(
     "--delta",
@@ -405,14 +414,17 @@ F1, F2 = 5.0, 5.0
 CKF_PARAMS = UKFParams(alpha=1.0, beta=0.0, kappa=0.0)
 
 COLORS = {
-    "CD-EKF": "#2E86AB",
-    "CD-UKF-fine": "#E8B923",  # yellow — moment-ODE predict
-    "CD-UKF-coarse": "#B8860B",  # darkgoldenrod — flow-map predict
-    "CD-CKF": "#3DA35D",  # green
-    "CD-EnKF": "#D97706",  # amber-orange (away from PF red / UKF yellow)
-    "PF": "#F24236",
-    "WSC-KF-product": "#6A4C93",
-    "WSC-KF-LV": "#C44536",
+    name: METHOD_COLORS[name]
+    for name in (
+        "CD-EKF",
+        "CD-UKF-fine",
+        "CD-UKF-coarse",
+        "CD-CKF",
+        "CD-EnKF",
+        "PF",
+        "WSC-KF-product",
+        "WSC-KF-LV",
+    )
 }
 
 # Legend / axis display names (CSV family keys stay stable).
@@ -432,10 +444,6 @@ _LABEL_OFFSET = {
     "WSC-KF-product": (0, 7),
     "CD-EnKF": (0, -10),
     "PF": (0, 7),
-}
-# CD-EnKF early nodes sit under the curve; pin those labels above instead.
-_LABEL_ABOVE_BUDGETS = {
-    "CD-EnKF": {50, 100},
 }
 
 
@@ -921,7 +929,6 @@ if _args.merge and raw_rows:
         if (r["seed"], r["family"], r["label"]) not in replaced
     ]
 raw_rows = EXISTING_RAW + raw_rows
-n_seeds_total = len({r["seed"] for r in raw_rows})
 with open(raw_path, "w", newline="") as f:
     writer = csv.DictWriter(
         f,
@@ -999,39 +1006,10 @@ with open(csv_path, "w", newline="") as f:
         writer.writerow({"delta_t_min": dt_min, "n_obs": n_obs, **rec})
 
 # ---------------------------------------------------------------------------
-# Plot mean ± std Pareto (WSC-KF-LV omitted from figure; kept in CSV)
+# Plot mean ± 1 SD Pareto (WSC-KF-LV omitted from figure; kept in CSV)
 # ---------------------------------------------------------------------------
 
 
-def _annotate_nodes(ax, fam, pts, xs, ys):
-    """Label multi-budget nodes with path/particle count (EKF/UKF/CKF via legend)."""
-    if fam in ("CD-EKF", "CD-UKF-fine", "CD-UKF-coarse", "CD-CKF", "WSC-KF-product"):
-        return
-    color = COLORS.get(fam, "#333333")
-    base_dx, base_dy = _LABEL_OFFSET.get(fam, (0, 6))
-    above = _LABEL_ABOVE_BUDGETS.get(fam, set())
-    for i, (pt, x, y) in enumerate(zip(pts, xs, ys)):
-        budget = int(pt["budget"])
-        if budget in above:
-            dx, dy = 0, 7
-        else:
-            dx = base_dx
-            # Slight stagger on dense product ladder so early nodes don't collide.
-            dy = base_dy if (i % 2 == 0) else (base_dy + (4 if base_dy > 0 else -4))
-        ax.annotate(
-            str(budget),
-            (x, y),
-            textcoords="offset points",
-            xytext=(dx, dy),
-            fontsize=7,
-            color=color,
-            ha="center",
-            va="bottom" if dy >= 0 else "top",
-            alpha=0.9,
-        )
-
-
-BAND_SCALE = 0.3  # visual width of shaded ±σ band
 # Additive: single moment-safe WSC-KF point. Multiplicative: full product ladder
 # so path-order / Lévy-area effects are visible on the Pareto.
 WSC_KF_PLOT_BUDGETS: set[int] | None = (
@@ -1059,238 +1037,174 @@ def _plot_pts_for_family(fam: str) -> list[dict]:
     return pts
 
 
-def _plot_pareto_metric(metric: str, ylabel: str, title: str, out_name: str) -> str:
-    fig, ax = plt.subplots(figsize=(7.5, 4.5))
-    all_xs: list[float] = []
-    for fam in plot_families:
-        pts = _plot_pts_for_family(fam)
-        if not pts:
-            continue
-        pts = sorted(pts, key=lambda r: r["budget"])
-        xs = np.asarray([1e3 * r["time_s_mean"] for r in pts])
-        ys = np.asarray([r[f"{metric}_mean"] for r in pts])
-        ystd = np.asarray([r[f"{metric}_std"] for r in pts]) * BAND_SCALE
-        all_xs.extend(xs.tolist())
-        color = COLORS.get(fam, "#333333")
-        if fam == "WSC-KF-product":
-            marker = "*"
-        elif fam in ("CD-EKF", "CD-UKF-fine", "CD-UKF-coarse", "CD-CKF"):
-            marker = "s"
-        else:
-            marker = "o"
-        disp = DISPLAY_NAME.get(fam, fam)
-        if len(pts) == 1:
-            x0 = float(xs[0])
-            ax.fill_between(
-                [x0 / 1.04, x0 * 1.04],
-                [ys[0] - ystd[0]] * 2,
-                [ys[0] + ystd[0]] * 2,
-                color=color,
-                alpha=0.22,
-                linewidth=0,
-            )
-            ax.plot(
-                xs,
-                ys,
-                marker,
-                color=color,
-                markersize=12 if marker == "*" else 7,
-                label=disp,
-            )
-        else:
-            ax.fill_between(
-                xs, ys - ystd, ys + ystd, color=color, alpha=0.22, linewidth=0
-            )
-            ax.plot(
-                xs,
-                ys,
-                f"-{marker}",
-                color=color,
-                lw=1.5,
-                markersize=10 if marker == "*" else 6,
-                label=disp,
-            )
-        _annotate_nodes(ax, fam, pts, xs, ys)
+def _annotate_budget_endpoints(ax, fam, pts, xs, ys) -> None:
+    """Label only the smallest and largest variable path/particle budgets."""
+    if len(pts) < 2:
+        return
+
+    color = COLORS.get(fam, PALETTE["neutral_gray"])
+    prefix = "P" if fam.startswith("WSC-KF") else "N"
+    dx, dy = _LABEL_OFFSET.get(fam, (0, 6))
+    for idx in (0, len(pts) - 1):
+        budget = int(pts[idx]["budget"])
+        ax.annotate(
+            f"{prefix}={budget}",
+            (xs[idx], ys[idx]),
+            textcoords="offset points",
+            xytext=(dx, dy),
+            fontsize=6.2,
+            color=color,
+            ha="center",
+            va="bottom" if dy >= 0 else "top",
+            alpha=0.9,
+        )
+
+
+def _plot_family(ax, fam: str, metric: str):
+    """Draw one family with its actual across-seed ±1 SD in both coordinates."""
+    pts = sorted(_plot_pts_for_family(fam), key=lambda r: r["budget"])
+    if not pts:
+        return None
+
+    xs = np.asarray([1e3 * r["time_s_mean"] for r in pts], dtype=np.float64)
+    xstd = np.asarray([1e3 * r["time_s_std"] for r in pts], dtype=np.float64)
+    ys = np.asarray([r[f"{metric}_mean"] for r in pts], dtype=np.float64)
+    ystd = np.asarray([r[f"{metric}_std"] for r in pts], dtype=np.float64)
+    color = COLORS.get(fam, PALETTE["neutral_gray"])
+    marker = METHOD_MARKERS.get(fam, "o")
+
+    ax.errorbar(
+        xs,
+        ys,
+        xerr=xstd,
+        yerr=ystd,
+        fmt="none",
+        ecolor=color,
+        elinewidth=0.65,
+        capsize=1.5,
+        capthick=0.65,
+        alpha=0.48,
+        zorder=1,
+    )
+    line, = ax.plot(
+        xs,
+        ys,
+        color=color,
+        marker=marker,
+        linestyle="-" if len(pts) > 1 else "none",
+        linewidth=1.25,
+        markersize=7.0 if marker == "*" else 4.2,
+        markeredgecolor=color,
+        markeredgewidth=0.7,
+        label=DISPLAY_NAME.get(fam, fam),
+        zorder=2,
+    )
+    return line, pts, xs, ys
+
+
+def _style_pareto_axis(ax, ylabel: str) -> None:
     ax.set_xlabel("Wall-clock time [ms]")
     ax.set_ylabel(ylabel)
     ax.set_xscale("log")
-    ax.set_yscale("linear")
-    if all_xs:
-        ax.set_xlim(min(all_xs) / 1.25, max(all_xs) * 1.35)
-    ax.grid(True, which="both", alpha=0.3)
-    ax.legend(fontsize=8, loc="best")
-    ax.set_title(title, fontsize=11)
-    fig.tight_layout()
-    out_path = os.path.join(OUTPUT_DIR, out_name)
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close()
-    return out_path
+    style_curve_axis(ax, grid_axis="both")
+    ax.margins(x=0.08, y=0.12)
 
 
-def _plot_pareto_mapex_maped(out_name: str, title: str = "") -> str:
-    """MAPEx (solid) and MAPEd (dashed) on one axes; color = filter family."""
-
-    fig, ax = plt.subplots(figsize=(8.0, 5.0))
-    all_xs: list[float] = []
-    metric_style = {
-        # Single-point filters keep modest bands; PF/EnKF curves use much lighter fill.
-        "mapex": {
-            "ls": "-",
-            "alpha_band_point": 0.18,
-            "alpha_band_curve": 0.035,
-            "markerfacecolor": None,
-            "z": 3,
-        },
-        "maped": {
-            "ls": "--",
-            "alpha_band_point": 0.12,
-            "alpha_band_curve": 0.025,
-            "markerfacecolor": "white",
-            "z": 2,
-        },
-    }
+def _plot_pareto_nll(out_name: str):
+    """Single-column NLL Pareto with an external family legend."""
+    fig, ax = plt.subplots(figsize=(SINGLE_COLUMN_WIDTH, 2.65))
+    handles = []
+    labels = []
     for fam in plot_families:
-        pts = _plot_pts_for_family(fam)
-        if not pts:
+        plotted = _plot_family(ax, fam, "nll_per_obs")
+        if plotted is None:
             continue
-        pts = sorted(pts, key=lambda r: r["budget"])
-        xs = np.asarray([1e3 * r["time_s_mean"] for r in pts])
-        all_xs.extend(xs.tolist())
-        color = COLORS.get(fam, "#333333")
-        if fam == "WSC-KF-product":
-            marker = "*"
-        elif fam in ("CD-EKF", "CD-UKF-fine", "CD-UKF-coarse", "CD-CKF"):
-            marker = "s"
-        else:
-            marker = "o"
-        disp = DISPLAY_NAME.get(fam, fam)
-        for metric, sty in metric_style.items():
-            ys = np.asarray([r[f"{metric}_mean"] for r in pts])
-            ystd = np.asarray([r[f"{metric}_std"] for r in pts]) * BAND_SCALE
-            mfc = color if sty["markerfacecolor"] is None else sty["markerfacecolor"]
-            label = f"{disp} · MAPEx" if metric == "mapex" else f"{disp} · MAPEd"
-            ms = 12 if marker == "*" else 7
-            if len(pts) == 1:
-                x0 = float(xs[0])
-                ax.fill_between(
-                    [x0 / 1.04, x0 * 1.04],
-                    [ys[0] - ystd[0]] * 2,
-                    [ys[0] + ystd[0]] * 2,
-                    color=color,
-                    alpha=sty["alpha_band_point"],
-                    linewidth=0,
-                    zorder=sty["z"] - 1,
-                )
-                ax.plot(
-                    xs,
-                    ys,
-                    marker,
-                    color=color,
-                    markersize=ms,
-                    markerfacecolor=mfc,
-                    markeredgecolor=color,
-                    markeredgewidth=1.2,
-                    linestyle="none",
-                    label=label,
-                    zorder=sty["z"],
-                )
-            else:
-                ax.fill_between(
-                    xs,
-                    ys - ystd,
-                    ys + ystd,
-                    color=color,
-                    alpha=sty["alpha_band_curve"],
-                    linewidth=0,
-                    zorder=sty["z"] - 1,
-                )
-                ax.plot(
-                    xs,
-                    ys,
-                    marker=marker,
-                    linestyle=sty["ls"],
-                    color=color,
-                    lw=1.5,
-                    markersize=6 if marker != "*" else 10,
-                    markerfacecolor=mfc,
-                    markeredgecolor=color,
-                    markeredgewidth=1.0,
-                    label=label,
-                    zorder=sty["z"],
-                )
-        # Particle/path labels once (on MAPEx).
-        _annotate_nodes(
-            ax,
-            fam,
-            pts,
-            xs,
-            np.asarray([r["mapex_mean"] for r in pts]),
-        )
+        line, pts, xs, ys = plotted
+        handles.append(line)
+        labels.append(DISPLAY_NAME.get(fam, fam))
+        _annotate_budget_endpoints(ax, fam, pts, xs, ys)
 
-    ax.set_xlabel("Wall-clock time [ms]", fontsize=13)
-    ax.set_ylabel("MAPE [%]", fontsize=13)
-    ax.set_xscale("log")
-    ax.set_yscale("log")
-    if all_xs:
-        ax.set_xlim(min(10.0, min(all_xs) / 1.25), max(1e3, max(all_xs) * 1.35))
-    ax.set_xticks([1e1, 1e2, 1e3])
-    ax.tick_params(axis="both", labelsize=11)
-    ax.grid(True, which="both", alpha=0.3)
-    # Compact legend: family colors + metric style keys.
-    handles, labels = ax.get_legend_handles_labels()
-    # Keep family·metric entries but add style cue at top via title is enough;
-    # split into two columns for readability.
-    ax.legend(
+    _style_pareto_axis(ax, "NLL\n[nats/observation]")
+    fig.legend(
         handles,
         labels,
-        fontsize=10,
-        loc="best",
-        ncol=2,
-        columnspacing=0.9,
-        handletextpad=0.4,
-        title=r"solid = MAPEx,  dashed/open = MAPEd",
-        title_fontsize=10,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.985),
+        ncol=3,
+        fontsize=6.4,
+        columnspacing=0.65,
+        handletextpad=0.35,
     )
-    if title:
-        ax.set_title(title, fontsize=11)
-    fig.tight_layout()
+    fig.subplots_adjust(left=0.20, right=0.98, bottom=0.17, top=0.72)
     out_path = os.path.join(OUTPUT_DIR, out_name)
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    paths = save_publication_figure(fig, out_path)
     plt.close()
-    return out_path
+    return paths
 
 
-_wsc_kf_budgets = (
-    "ladder"
-    if WSC_KF_PLOT_BUDGETS is None
-    else ",".join(str(b) for b in sorted(WSC_KF_PLOT_BUDGETS))
+def _plot_pareto_mape(out_name: str):
+    """Full-width MAPEx/MAPEd panels with one family legend."""
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(DOUBLE_COLUMN_WIDTH, 2.45),
+        sharex=True,
+    )
+    handles = []
+    labels = []
+    for panel_idx, (ax, metric, panel_title) in enumerate(
+        zip(
+            axes,
+            ("mapex", "maped"),
+            ("Tank states", "Disturbance states"),
+        )
+    ):
+        for fam in plot_families:
+            plotted = _plot_family(ax, fam, metric)
+            if plotted is None:
+                continue
+            line, pts, xs, ys = plotted
+            if panel_idx == 0:
+                handles.append(line)
+                labels.append(DISPLAY_NAME.get(fam, fam))
+                _annotate_budget_endpoints(ax, fam, pts, xs, ys)
+        _style_pareto_axis(ax, "MAPE [%]")
+        ax.set_title(panel_title)
+
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.985),
+        ncol=max(1, len(handles)),
+        fontsize=6.7,
+        columnspacing=0.65,
+        handletextpad=0.35,
+    )
+    fig.subplots_adjust(
+        left=0.075,
+        right=0.99,
+        bottom=0.19,
+        top=0.76,
+        wspace=0.27,
+    )
+    out_path = os.path.join(OUTPUT_DIR, out_name)
+    paths = save_publication_figure(fig, out_path)
+    plt.close()
+    return paths
+
+
+mape_png_path, mape_pdf_path = _plot_pareto_mape(
+    f"pareto_budget_vs_mape{OUT_TAG}.png"
 )
-_noise_note = "multiplicative $g(F)$" if NOISE_MODE == "multiplicative" else "additive"
-if abs(SIGMA_SCALE - 1.0) > 1e-12:
-    _noise_note = rf"{_noise_note}, $\sigma/\sigma_0={SIGMA_SCALE:g}$"
-if bool(_args.shared_sigma) and NOISE_MODE == "additive":
-    _noise_note = rf"{_noise_note}, shared $\sigma$={SIGMA_EKF_ENKF_PF:g}"
-if abs(LAMBDA_EKF_UKF - LAMBDA_ENKF_PF) < 1e-15:
-    _noise_note = rf"{_noise_note}, shared $\lambda$={LAMBDA_EKF_UKF:g}"
-_mape_note = "obs-time MAPE" if MAPE_MODE == "obs" else "fine-grid MAPE"
-_title_suffix = (
-    rf"at $\Delta t={dt_min:g}$ min, {_noise_note}, {_mape_note} "
-    rf"(mean±{BAND_SCALE:g}$\sigma$ over {n_seeds_total} seeds; "
-    rf"WSC-KF paths = {_wsc_kf_budgets})"
-)
-mape_plot_path = _plot_pareto_mapex_maped(
-    f"pareto_budget_vs_mape{OUT_TAG}.png",
-    title=rf"MFTS Pareto: MAPE vs wall-clock {_title_suffix}",
-)
-nll_plot_path = _plot_pareto_metric(
-    "nll_per_obs",
-    "Mean NLL per observation",
-    rf"MFTS Pareto: NLL vs wall-clock {_title_suffix}",
-    f"pareto_budget_vs_nll{OUT_TAG}.png",
+nll_png_path, nll_pdf_path = _plot_pareto_nll(
+    f"pareto_budget_vs_nll{OUT_TAG}.png"
 )
 
 print("-" * 72)
-print(f"Wrote {mape_plot_path}")
-print(f"Wrote {nll_plot_path}")
+print(f"Wrote {mape_png_path}")
+print(f"Wrote {mape_pdf_path}")
+print(f"Wrote {nll_png_path}")
+print(f"Wrote {nll_pdf_path}")
 print(f"Wrote {csv_path}")
 print(f"Wrote {raw_path}")
