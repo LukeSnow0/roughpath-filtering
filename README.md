@@ -160,8 +160,11 @@ step propagates spatial cubature nodes along deterministic Wiener-space cubature
 paths; the update is a square-root sigma-point Kalman correction. Wiener path
 construction defaults to ``multidim_paths="auto"``:
 
-- **`auto`** (default) — ``product`` when ``(3^k)^d <= 256``, else ``recombined``
-- **`product`** — tensor-product Lyons paths (exact to degree 3)
+- **`auto`** (default) — explicit multi-D Lyons–Victoir (``lv``) for
+  ``lyons_degree=5`` and ``d>1`` when the support is below the path-count
+  threshold (512), else ``recombined``. 1D always uses the classical 1D formulae.
+- **`lv`** — Lyons–Victoir multi-D lift (Gauss–Hermite × Bernoulli Lévy area)
+- **`product`** — tensor product of 1D Lyons paths (no mixed area tensors)
 - **`recombined`** — recursive KLV expansion with high-order recombination
   (Snow & Krishnamurthy, 2025); path budget defaults via
   ``default_recombined_num_paths`` when ``num_paths=None``

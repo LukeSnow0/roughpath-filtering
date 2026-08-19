@@ -8,5 +8,5 @@ The WSC-KF represents the filtering distribution as **Gaussian** (a mean and a C
 
 **Update.** A statistical-linearization (sigma-point) Kalman update is applied in square-root form: a single triangularization of the pre-array yields the innovation Cholesky factor, the Kalman gain, and the updated state Cholesky factor simultaneously.
 
-Two multidimensional path constructions are available via `multidim_paths`: `product` (tensor-product Lyons paths, exact to degree 3) and `recombined` (a large candidate pool reduced to a sparse moment-matched measure).
+Two multidimensional path constructions are available via `multidim_paths`: `lv` (explicit Lyons–Victoir multi-D formulae, including Lévy area for degree 5), `product` (tensor-product of 1D Lyons paths), and `recombined` (a large candidate pool reduced to a sparse moment-matched measure). Default `auto` selects `lv` for degree-5 multi-D when the support is small enough.
 

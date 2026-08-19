@@ -53,7 +53,7 @@ def build_filter(
     cubature_order: int = 2,
     cubature_gamma: float = 0.6,
     num_paths: Optional[int] = None,
-    multidim_paths: Literal["product", "recombined", "auto"] = "auto",
+    multidim_paths: Literal["lv", "product", "recombined", "auto"] = "auto",
     seed: int = 0,
     candidate_factor: float = 8.0,
     recombination_degree: int = 3,
@@ -85,9 +85,13 @@ def build_filter(
         num_paths: Number of Wiener paths (meaning depends on ``multidim_paths``).
             If ``None``, a method-specific default is used.
         multidim_paths: Multidimensional path construction:
-            ``"auto"`` (default: ``product`` when ``(3^k)^d <= 256``, else
-            ``recombined``),
-            ``"product"`` (tensor-product Lyons), or
+            ``"auto"`` (default: explicit multi-D Lyons–Victoir ``"lv"`` for
+            ``lyons_degree=5`` and ``d>1`` when the support is below the
+            path-count threshold, else ``"recombined"``; 1D always uses the
+            classical 1D formulae),
+            ``"lv"`` (Gaussian cubature × Bernoulli Lévy area; d=2 uses the
+            planar √22 + perpendicular triangle construction),
+            ``"product"`` (tensor product of 1D Lyons paths), or
             ``"recombined"`` (moment-matched sparse measure).
         seed: Seed for Rademacher candidate generation.
         candidate_factor: Candidate-pool scaling for recombination.
@@ -100,7 +104,8 @@ def build_filter(
             pure ODE, so this enables memory-efficient ODE adjoints through the
             filter likelihood (see :func:`wsckf.library.integrate_stratonovich_cde`).
         lyons_degree: Explicit Lyons–Victoir degree ``m ∈ {3, 5}``. Default
-            ``5`` matches the repo's standard three-path 1D formula.
+            ``5`` is the three-path 1D formula, or the multi-D LV lift when
+            ``d>1`` and ``multidim_paths`` is ``"auto"`` or ``"lv"``.
         wiener_paths: Optional precomputed ``(ts, path_values, path_weights)``
             arrays. When set, library cubature construction is skipped (used for
             experiment-side path builders such as explicit multi-D LV).
@@ -131,9 +136,9 @@ def build_filter(
         path_values = jnp.asarray(path_values)
         path_weights = jnp.asarray(path_weights)
     else:
-        if multidim_paths not in ("auto", "product", "recombined"):
+        if multidim_paths not in ("auto", "lv", "product", "recombined"):
             raise ValueError(
-                'multidim_paths must be "auto", "product", or "recombined".'
+                'multidim_paths must be "auto", "lv", "product", or "recombined".'
             )
 
         ts, path_values, path_weights = precompute_cubature_paths(

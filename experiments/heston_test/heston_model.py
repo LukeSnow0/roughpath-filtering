@@ -64,6 +64,52 @@ def make_heston_dynamics(p: HestonParams):
     return drift_fn, L_fn, Qc_fn, obs_fn, R
 
 
+def make_heston_sv_dynamics(p: HestonParams, *, smooth_vol_eps: float | None = None):
+    """Textbook Heston in ``x = [S, v]`` (Itô).
+
+    dS = μ S dt + s S φ(v) dW¹
+    dv = κ(θ − v) dt + s ξ φ(v) (ρ dW¹ + √(1−ρ²) dW²)
+
+    By default ``φ(v) = √max(v, ε)``. If ``smooth_vol_eps`` is set, ``φ`` is the
+    globally ``C^∞`` map ``(v² + ε²)^{1/4}`` (``~√|v|`` for large ``|v|``), so
+    every derivative is bounded for that fixed ``ε>0``. Drift is unchanged, so
+    ``E[S]`` and ``E[v]`` remain the closed affine means.
+    """
+    mu, kappa, theta, xi, rho = p.mu, p.kappa, p.theta, p.xi, p.rho
+    v_eps = p.v_eps
+    diff_scale = p.diff_scale
+    rho_bar = float(np.sqrt(max(0.0, 1.0 - rho * rho)))
+    eps2 = None if smooth_vol_eps is None else float(smooth_vol_eps) ** 2
+
+    def _phi(v: jnp.ndarray) -> jnp.ndarray:
+        if eps2 is None:
+            return jnp.sqrt(jnp.maximum(v, v_eps))
+        return jnp.power(v * v + eps2, 0.25)
+
+    def drift_fn(t: float, x: jnp.ndarray) -> jnp.ndarray:
+        S, v = x[0], x[1]
+        return jnp.array([mu * S, kappa * (theta - v)])
+
+    def L_fn(t: float, x: jnp.ndarray) -> jnp.ndarray:
+        S = x[0]
+        s = diff_scale * _phi(x[1])
+        return jnp.array(
+            [
+                [S * s, 0.0],
+                [xi * rho * s, xi * rho_bar * s],
+            ]
+        )
+
+    def Qc_fn(t: float, x: jnp.ndarray) -> jnp.ndarray:
+        return jnp.eye(2)
+
+    def obs_fn(x: jnp.ndarray) -> jnp.ndarray:
+        return x[:1]
+
+    R = jnp.array([[p.meas_std**2]], dtype=jnp.float64)
+    return drift_fn, L_fn, Qc_fn, obs_fn, R
+
+
 def simulate_heston(
     *,
     horizon: float,
@@ -147,3 +193,155 @@ def rmse_components(estimates: np.ndarray, truth: np.ndarray) -> np.ndarray:
     """Per-component RMSE, shape ``(x_dim,)``."""
     err2 = (estimates - truth) ** 2
     return np.sqrt(np.mean(err2, axis=0))
+
+
+def exact_heston_mean_cov(
+    delta: float,
+    x0: np.ndarray,
+    p: HestonParams,
+    *,
+    n_steps: int = 4096,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Exact second moments of Heston from a point mass via closed Itô ODEs.
+
+    Integrates the closed system for
+    ``(E[X], E[v], E[X²], E[v²], E[Xv])`` with classical RK4. Diffusion scale
+    ``p.diff_scale`` is included (effective vol-of-vol ``ξ_eff = diff_scale·ξ``
+    and quadratic variation of ``X`` scaled by ``diff_scale²``).
+
+    Returns ``(mean, cov)`` with shapes ``(2,)`` and ``(2, 2)``.
+    """
+    X0, v0 = float(x0[0]), float(x0[1])
+    mu, kappa, theta = p.mu, p.kappa, p.theta
+    xi, rho = p.xi, p.rho
+    s = p.diff_scale
+    s2 = s * s
+    xi2_s2 = s2 * (xi * xi)
+    cross = s2 * xi * rho  # coefficient of E[v] in dE[Xv]/dt from d<X,v>
+    # State z = [m_X, m_v, s_XX, s_vv, s_Xv]
+    z = np.array([X0, v0, X0 * X0, v0 * v0, X0 * v0], dtype=np.float64)
+
+    def rhs(z_: np.ndarray) -> np.ndarray:
+        m_X, m_v, s_XX, s_vv, s_Xv = z_
+        return np.array(
+            [
+                mu - 0.5 * m_v,
+                kappa * (theta - m_v),
+                2.0 * mu * m_X - s_Xv + s2 * m_v,
+                2.0 * kappa * (theta * m_v - s_vv) + xi2_s2 * m_v,
+                kappa * (theta * m_X - s_Xv) + mu * m_v - 0.5 * s_vv + cross * m_v,
+            ],
+            dtype=np.float64,
+        )
+
+    if delta <= 0.0:
+        mean = np.array([X0, v0], dtype=np.float64)
+        return mean, np.zeros((2, 2), dtype=np.float64)
+
+    n_steps = max(1, int(n_steps))
+    h = float(delta) / n_steps
+    for _ in range(n_steps):
+        k1 = rhs(z)
+        k2 = rhs(z + 0.5 * h * k1)
+        k3 = rhs(z + 0.5 * h * k2)
+        k4 = rhs(z + h * k3)
+        z = z + (h / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+
+    m_X, m_v, s_XX, s_vv, s_Xv = z
+    mean = np.array([m_X, m_v], dtype=np.float64)
+    cov = np.array(
+        [
+            [s_XX - m_X * m_X, s_Xv - m_X * m_v],
+            [s_Xv - m_X * m_v, s_vv - m_v * m_v],
+        ],
+        dtype=np.float64,
+    )
+    # Numerical PSD cleanup for tiny negative eigenvalues.
+    cov = 0.5 * (cov + cov.T)
+    return mean, cov
+
+
+def exact_heston_sv_mean(
+    delta: float,
+    x0: np.ndarray,
+    p: HestonParams,
+) -> np.ndarray:
+    """Closed-form mean of textbook Heston ``x = [S, v]``.
+
+    Drift is affine, so
+    ``E[S_t] = S0 exp(μ t)`` and ``E[v_t] = θ + (v0 − θ) exp(−κ t)``
+    are exact (independent of ``ξ``, ``ρ``).
+    """
+    S0, v0 = float(x0[0]), float(x0[1])
+    t = float(delta)
+    m_S = S0 * np.exp(p.mu * t)
+    m_v = p.theta + (v0 - p.theta) * np.exp(-p.kappa * t)
+    return np.array([m_S, m_v], dtype=np.float64)
+
+
+def mc_heston_sv_mean_cov(
+    delta: float,
+    x0: np.ndarray,
+    p: HestonParams,
+    *,
+    n_paths: int = 1_000_000,
+    n_steps: int | None = None,
+    seed: int = 0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Monte Carlo Itô-Euler estimate of ``(E[x], Cov(x))`` for ``x=[S,v]``.
+
+    Uses antithetic Brownian increments. ``n_paths`` is the number of
+    independent ``Z`` draws; the estimator uses ``2 n_paths`` trajectories.
+    """
+    import jax
+    import jax.random as jr
+    from jax import lax
+
+    if n_steps is None:
+        n_steps = max(256, int(np.ceil(float(delta) / 5e-4)))
+    n_steps = int(n_steps)
+    n_paths = int(n_paths)
+    S0 = jnp.asarray(x0[0], dtype=jnp.float64)
+    v0 = jnp.asarray(x0[1], dtype=jnp.float64)
+    mu, kappa, theta = p.mu, p.kappa, p.theta
+    xi, rho, v_eps, s = p.xi, p.rho, p.v_eps, p.diff_scale
+    rho_bar = float(np.sqrt(max(0.0, 1.0 - rho * rho)))
+    dt = jnp.asarray(delta / n_steps, dtype=jnp.float64)
+    sqrt_dt = jnp.sqrt(dt)
+
+    def one_batch(key):
+        S = jnp.full((n_paths,), S0, dtype=jnp.float64)
+        v = jnp.full((n_paths,), v0, dtype=jnp.float64)
+        Sm = S.copy()
+        vm = v.copy()
+
+        def body(carry, k):
+            S_, v_, Sm_, vm_ = carry
+            z = jr.normal(k, (n_paths, 2), dtype=jnp.float64)
+            dW = z * sqrt_dt
+            dWm = -dW
+
+            def step(S__, v__, dW__):
+                sv = s * jnp.sqrt(jnp.maximum(v__, v_eps))
+                dS = mu * S__ * dt + S__ * sv * dW__[:, 0]
+                dv = kappa * (theta - v__) * dt + xi * sv * (
+                    rho * dW__[:, 0] + rho_bar * dW__[:, 1]
+                )
+                return S__ + dS, v__ + dv
+
+            S_, v_ = step(S_, v_, dW)
+            Sm_, vm_ = step(Sm_, vm_, dWm)
+            return (S_, v_, Sm_, vm_), None
+
+        keys = jr.split(key, n_steps)
+        (S, v, Sm, vm), _ = lax.scan(body, (S, v, Sm, vm), keys)
+        xx = jnp.stack(
+            [jnp.concatenate([S, Sm]), jnp.concatenate([v, vm])], axis=1
+        )
+        mean = jnp.mean(xx, axis=0)
+        xc = xx - mean
+        cov = (xc.T @ xc) / xx.shape[0]
+        return mean, 0.5 * (cov + cov.T)
+
+    mean, cov = jax.jit(one_batch, static_argnums=())(jr.key(int(seed)))
+    return np.asarray(mean), np.asarray(cov)
