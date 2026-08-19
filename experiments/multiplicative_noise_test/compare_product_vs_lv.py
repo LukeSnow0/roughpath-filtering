@@ -52,6 +52,12 @@ for p in (EXPERIMENTS_DIR, ROOT_DIR, HERE):
 
 from wsckf.library import ito_to_stratonovich_dynamics, precompute_cubature_paths, predict
 from lyons_victoir_paths import precompute_lv_paths
+from mfts_test.plot_style import (
+    PALETTE,
+    SINGLE_COLUMN_WIDTH,
+    save_publication_figure,
+    style_curve_axis,
+)
 
 OUTPUT_DIR = os.path.join(HERE, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -59,6 +65,29 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 INNER_STEPS = 64
 X0 = np.array([0.0, 0.0])
 NOISE_DIM = 2
+
+PLOT_STYLES = {
+    ("product", 3): {
+        "color": PALETTE["purple"],
+        "marker": "o",
+        "linestyle": "--",
+    },
+    ("product", 5): {
+        "color": PALETTE["olive"],
+        "marker": "^",
+        "linestyle": "--",
+    },
+    ("lv", 3): {
+        "color": PALETTE["cyan_blue"],
+        "marker": "s",
+        "linestyle": "-",
+    },
+    ("lv", 5): {
+        "color": PALETTE["warm_red"],
+        "marker": "D",
+        "linestyle": "-",
+    },
+}
 
 
 def ito_drift(t, x):
@@ -180,52 +209,54 @@ def main():
             )
 
     # plot
-    fig, ax = plt.subplots(figsize=(7.2, 5.0))
-    styles = {
-        ("product", 3): ("o--", "#6A4C93"),
-        ("product", 5): ("o--", "#9B5DE5"),
-        ("lv", 3): ("s-", "#2E86AB"),
-        ("lv", 5): ("s-", "#F24236"),
-    }
+    fig, ax = plt.subplots(figsize=(SINGLE_COLUMN_WIDTH, 2.55))
     labels = {
-        ("product", 3): rf"product $m$=3 (P={n_paths[('product', 3)]})",
-        ("product", 5): rf"product $m$=5 (P={n_paths[('product', 5)]})",
-        ("lv", 3): rf"LV multi-D $m$=3 (P={n_paths[('lv', 3)]})",
-        ("lv", 5): rf"LV multi-D $m$=5 (P={n_paths[('lv', 5)]})",
+        ("product", 3): rf"Product $m=3$ ($P={n_paths[('product', 3)]}$)",
+        ("product", 5): rf"Product $m=5$ ($P={n_paths[('product', 5)]}$)",
+        ("lv", 3): rf"LV $m=3$ ($P={n_paths[('lv', 3)]}$)",
+        ("lv", 5): rf"LV $m=5$ ($P={n_paths[('lv', 5)]}$)",
     }
     floor = 1e-16
-    for key, (fmt, color) in styles.items():
+    for key, plot_style in PLOT_STYLES.items():
         ys = np.maximum(series[key], floor)
         s = fit_slope(deltas, series[key])
+        fit_label = rf"$\hat{{p}}={s:.2f}$" if np.isfinite(s) else "roundoff"
         ax.loglog(
             deltas,
             ys,
-            fmt,
-            color=color,
-            lw=1.8,
-            ms=5,
-            label=f"{labels[key]}  fit={s:.2f}",
+            color=plot_style["color"],
+            marker=plot_style["marker"],
+            linestyle=plot_style["linestyle"],
+            markerfacecolor="white",
+            markeredgewidth=0.8,
+            linewidth=1.35,
+            markersize=3.6,
+            label=f"{labels[key]}, {fit_label}",
         )
     # guides
     anchor = max(series[("lv", 3)][-1], floor)
     xs = np.asarray(deltas)
-    for slope, col in ((2.0, "0.45"), (3.0, "0.55")):
+    for slope, col in ((2.0, PALETTE["neutral_gray"]), (3.0, PALETTE["light_gray"])):
         c = anchor / (xs[-1] ** slope)
-        ax.loglog(xs, c * xs**slope, "--", color=col, alpha=0.5, lw=1.1,
+        ax.loglog(xs, c * xs**slope, ":", color=col, alpha=0.75, lw=1.0,
                   label=rf"$\propto\delta^{{{int(slope)}}}$")
 
-    ax.set_xlabel(r"assimilation interval $\delta$")
+    ax.set_xlabel(r"Assimilation interval $\delta$")
     ax.set_ylabel(r"$|\widehat{\mathbb{E}}[(x^{2})^2]-\delta^{2}/2|$")
-    ax.set_title(
-        r"Product 1D vs LV multi-D on Lévy-area SDE "
-        r"($dx^{1}=dW^{1},\; dx^{2}=x^{1}dW^{2}$)"
+    style_curve_axis(ax, grid_axis="both")
+    ax.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.34),
+        ncol=2,
+        fontsize=6.0,
+        columnspacing=0.65,
+        handlelength=1.55,
+        handletextpad=0.35,
     )
-    ax.grid(True, which="both", alpha=0.3)
-    ax.legend(fontsize=8, loc="best")
-    fig.tight_layout()
+    fig.subplots_adjust(left=0.22, right=0.98, bottom=0.18, top=0.71)
     png = os.path.join(OUTPUT_DIR, "compare_product_vs_lv.png")
-    fig.savefig(png, dpi=150, bbox_inches="tight")
-    plt.close()
+    png, pdf = save_publication_figure(fig, png)
+    plt.close(fig)
 
     csv_path = os.path.join(OUTPUT_DIR, "compare_product_vs_lv.csv")
     with open(csv_path, "w", newline="") as f:
@@ -245,6 +276,7 @@ def main():
             w.writerow(row)
 
     print(f"\nWrote {png}")
+    print(f"Wrote {pdf}")
     print(f"Wrote {csv_path}")
 
 
