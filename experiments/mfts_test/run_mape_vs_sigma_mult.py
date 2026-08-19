@@ -67,6 +67,14 @@ from mfts_model import (
     mape_pct,
     simulate_mfts,
 )
+from plot_style import (
+    DOUBLE_COLUMN_WIDTH,
+    METHOD_COLORS,
+    METHOD_MARKERS,
+    PALETTE,
+    save_publication_figure,
+    style_curve_axis,
+)
 
 OUTPUT_DIR = os.path.join(HERE, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -74,13 +82,13 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 CKF_PARAMS = UKFParams(alpha=1.0, beta=0.0, kappa=0.0)
 
 COLORS = {
-    "WSC-KF-4": "#6A4C93",
-    "WSC-KF-9": "#9B6BC9",
-    "EKF": "#2E86AB",
-    "UKF": "#E8B923",
-    "CKF": "#3DA35D",
-    "EnKF": "#D97706",
-    "PF": "#F24236",
+    "WSC-KF-4": METHOD_COLORS["WSC-KF"],
+    "WSC-KF-9": PALETTE["salmon"],
+    "EKF": METHOD_COLORS["EKF"],
+    "UKF": METHOD_COLORS["UKF"],
+    "CKF": METHOD_COLORS["CKF"],
+    "EnKF": METHOD_COLORS["EnKF"],
+    "PF": METHOD_COLORS["PF"],
 }
 
 PATH_TO_CFG = {
@@ -573,7 +581,7 @@ def main():
                 continue
             xs.append(sc)
             ys.append(row[f"{metric}_mean"])
-            yerr.append(0.3 * row[f"{metric}_std"])  # match Pareto plot band style
+            yerr.append(row[f"{metric}_std"])
         return xs, ys, yerr
 
     def _finite_mask(ys, yerr):
@@ -582,11 +590,13 @@ def main():
         ok = np.isfinite(ys) & np.isfinite(yerr) & (ys < 1e3)
         return ok
 
-    fig, axes = plt.subplots(1, 2, figsize=(9.2, 4.2), layout="constrained", sharex=True)
+    fig, axes = plt.subplots(
+        1, 2, figsize=(DOUBLE_COLUMN_WIDTH, 2.55), sharex=True
+    )
     for ax, metric, ylab in zip(
         axes,
         ("mapex", "maped"),
-        ("MAPEx [%] (tanks)", "MAPEd [%] (disturbances)"),
+        ("Tank-state MAPE [%]", "Disturbance-state MAPE [%]"),
     ):
         for fam in filters:
             xs, ys, yerr = _series(fam, metric)
@@ -596,35 +606,40 @@ def main():
             ok = _finite_mask(ys, yerr)
             if not np.any(ok):
                 continue
-            is_wsc = fam.startswith("WSC-KF")
+            base_family = "WSC-KF" if fam.startswith("WSC-KF") else fam
             ax.errorbar(
                 xs_a[ok],
                 np.asarray(ys)[ok],
                 yerr=np.asarray(yerr)[ok],
                 color=COLORS.get(fam, "0.3"),
-                marker="*" if is_wsc else "s",
-                ms=11 if is_wsc else 7,
-                lw=1.7,
-                capsize=3,
+                marker=METHOD_MARKERS[base_family],
+                markerfacecolor="white",
+                markeredgewidth=0.8,
+                ms=4.5,
+                lw=1.25,
+                elinewidth=0.7,
+                capsize=2.0,
                 label=fam,
             )
-        ax.set_xlabel(r"disturbance-noise scale $\sigma / \sigma_0$")
+        ax.set_xlabel(r"Disturbance-noise scale $\sigma / \sigma_0$")
         ax.set_ylabel(ylab)
         ax.set_xscale("log", base=2)
-        ax.grid(True, alpha=0.3)
-        ax.legend(frameon=False, fontsize=8)
+        style_curve_axis(ax, grid_axis="both")
 
-    fig.suptitle(
-        rf"MFTS: obs-time MAPE vs multiplicative $\sigma$ "
-        rf"($g(F)=\sigma\sqrt{{1+(F/F_c)^2}}$, $F_c$={F_NOISE_SCALE:g}, "
-        rf"$\sigma_0$={SIGMA0:g}, $\Delta t$={dt_min:g} min, "
-        rf"{len(seeds)} seeds; band = $0.3\sigma$)",
-        fontsize=11,
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.005),
+        ncol=min(7, len(labels)),
     )
+    fig.subplots_adjust(left=0.09, right=0.99, bottom=0.29, top=0.95, wspace=0.28)
     png = os.path.join(OUTPUT_DIR, f"mape_vs_sigma_mult{tag}.png")
-    fig.savefig(png, dpi=170)
+    plot_png, plot_pdf = save_publication_figure(fig, png)
     plt.close(fig)
-    print(f"Wrote {png}")
+    print(f"Wrote {plot_png}")
+    print(f"Wrote {plot_pdf}")
 
     # ΔMAPE from scale min → max (mean over seeds, paired)
     sc0, sc1 = scales[0], scales[-1]

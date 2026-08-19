@@ -87,6 +87,15 @@ from mfts_model import (
     mape_pct,
     simulate_mfts,
 )
+from plot_style import (
+    DOUBLE_COLUMN_WIDTH,
+    METHOD_COLORS,
+    METHOD_MARKERS,
+    PALETTE,
+    SINGLE_COLUMN_WIDTH,
+    save_publication_figure,
+    style_curve_axis,
+)
 
 OUTPUT_DIR = os.path.join(HERE, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -255,16 +264,78 @@ WSCKF_FILTER_NAMES = tuple(wsckf_label(n) for n in WSCKF_PATH_BUDGETS)
 KPROP_FILTER_NAMES = (WSCKF_KPROP_NAME,) if K_PROPORTIONAL else ()
 FILTER_NAMES = BASE_FILTER_NAMES + WSCKF_FILTER_NAMES + KPROP_FILTER_NAMES
 
-_WSCKF_PURPLES = ("#C4B0E0", "#9B7EBD", "#7A5CA3", "#6A4C93", "#4A2F6E", "#2F1A4A")
 COLORS = {
-    "CD-EKF": "#2E86AB",
-    "CD-UKF": "#3DA35D",
-    "CD-EnKF": "#F6AE2D",
-    "PF": "#F24236",
-    WSCKF_KPROP_NAME: "#C44536",
+    name: METHOD_COLORS[name] for name in BASE_FILTER_NAMES
 }
-for _i, _name in enumerate(WSCKF_FILTER_NAMES):
-    COLORS[_name] = _WSCKF_PURPLES[min(_i, len(_WSCKF_PURPLES) - 1)]
+for _name in WSCKF_FILTER_NAMES + KPROP_FILTER_NAMES:
+    COLORS[_name] = METHOD_COLORS["WSC-KF"]
+
+_BASE_LINESTYLES = {
+    "CD-EKF": "-",
+    "CD-UKF": "--",
+    "CD-EnKF": "-.",
+    "PF": ":",
+}
+_WSCKF_MARKERS = (
+    METHOD_MARKERS["WSC-KF"],
+    "P",
+    "X",
+    "*",
+    "h",
+    "d",
+    "<",
+    ">",
+)
+_WSCKF_LINESTYLES = (
+    "-",
+    "--",
+    "-.",
+    ":",
+    (0, (5, 1)),
+    (0, (3, 1, 1, 1)),
+    (0, (1, 1)),
+    (0, (5, 2, 1, 2)),
+)
+PLOT_STYLES = {
+    name: {
+        "color": COLORS[name],
+        "marker": METHOD_MARKERS[name],
+        "linestyle": _BASE_LINESTYLES[name],
+    }
+    for name in BASE_FILTER_NAMES
+}
+for _i, _name in enumerate(WSCKF_FILTER_NAMES + KPROP_FILTER_NAMES):
+    PLOT_STYLES[_name] = {
+        "color": METHOD_COLORS["WSC-KF"],
+        "marker": _WSCKF_MARKERS[_i % len(_WSCKF_MARKERS)],
+        "linestyle": _WSCKF_LINESTYLES[_i % len(_WSCKF_LINESTYLES)],
+    }
+
+
+def plot_method(ax, name, x, y, *, label=True, **kwargs):
+    """Plot one filter with the manuscript-wide color/marker semantics."""
+    style = PLOT_STYLES[name]
+    return ax.plot(
+        x,
+        y,
+        color=style["color"],
+        marker=style["marker"],
+        linestyle=style["linestyle"],
+        label=name if label else None,
+        **kwargs,
+    )
+
+
+def add_shared_legend(fig, ax, *, ncol):
+    """Place one compact method legend below a composite figure."""
+    handles, labels = ax.get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.015),
+        ncol=ncol,
+    )
 
 
 def stack_estimates(m0_arr, means):
@@ -670,88 +741,90 @@ for dt_req in DELTA_T_MIN_REQ:
 # Plot MAPE vs Delta_t
 # ---------------------------------------------------------------------------
 
-fig, axes = plt.subplots(1, 2, figsize=(11, 4.5), sharex=True)
+fig, axes = plt.subplots(
+    1,
+    2,
+    figsize=(DOUBLE_COLUMN_WIDTH, 2.65),
+    sharex=True,
+)
 for ax, metric, title in zip(
     axes,
     ("mapex", "maped"),
-    ("MAPEx (tanks)", "MAPEd (disturbances)"),
+    ("(a) Tank states", "(b) Disturbance states"),
 ):
     for name in FILTER_NAMES:
-        ax.plot(
+        plot_method(
+            ax,
+            name,
             delta_t_eff,
             series[name][metric],
-            color=COLORS[name],
-            marker="o",
-            lw=1.8,
-            label=name,
+            linewidth=1.35,
+            markersize=3.6,
         )
     ax.set_xlabel(r"Observation interval $\Delta t$ [min]")
-    ax.set_ylabel("MAPE [%]")
     ax.set_title(title)
-    ax.grid(True, which="both", alpha=0.3)
     ax.set_xscale("log")
     ax.set_yscale("log")
-axes[0].legend(fontsize=9, loc="best")
-fig.suptitle("MFTS MAPE vs Delta_t", fontsize=12)
-fig.tight_layout()
+    style_curve_axis(ax, grid_axis="both")
+axes[0].set_ylabel("MAPE [%]")
+add_shared_legend(fig, axes[0], ncol=min(4, len(FILTER_NAMES)))
+fig.subplots_adjust(left=0.115, right=0.99, top=0.91, bottom=0.29, wspace=0.30)
 plot_path = os.path.join(OUTPUT_DIR, "mape_vs_interval.png")
-fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+save_publication_figure(fig, plot_path)
 plt.close()
 
 # ---------------------------------------------------------------------------
 # Plot NLL/obs vs Delta_t
 # ---------------------------------------------------------------------------
 
-fig, ax = plt.subplots(figsize=(7, 4.5))
+fig, ax = plt.subplots(figsize=(SINGLE_COLUMN_WIDTH, 2.45))
 for name in FILTER_NAMES:
-    ax.plot(
+    plot_method(
+        ax,
+        name,
         delta_t_eff,
         series[name]["nll_per_obs"],
-        color=COLORS[name],
-        marker="o",
-        lw=1.8,
-        label=name,
+        linewidth=1.35,
+        markersize=3.5,
     )
 ax.set_xlabel(r"Observation interval $\Delta t$ [min]")
-ax.set_ylabel("Mean NLL per observation")
-ax.set_title(r"MFTS NLL / obs vs $\Delta t$")
+ax.set_ylabel("NLL\n[nats/observation]")
 ax.set_xscale("log")
 ax.set_yscale("log")
-ax.grid(True, which="both", alpha=0.3)
-ax.legend(fontsize=9, loc="best")
-fig.tight_layout()
+style_curve_axis(ax, grid_axis="both")
+add_shared_legend(fig, ax, ncol=min(3, len(FILTER_NAMES)))
+fig.subplots_adjust(left=0.245, right=0.97, top=0.98, bottom=0.39)
 nll_path = os.path.join(OUTPUT_DIR, "nll_vs_interval.png")
-fig.savefig(nll_path, dpi=150, bbox_inches="tight")
+save_publication_figure(fig, nll_path)
 plt.close()
 
 # ---------------------------------------------------------------------------
 # Hypothesis test: NLL gap vs EKF grows with Δt for WSC-KF (cubature truncation)
 # ---------------------------------------------------------------------------
 
-fig, ax = plt.subplots(figsize=(7.2, 4.6))
+fig, ax = plt.subplots(figsize=(SINGLE_COLUMN_WIDTH, 2.45))
 ekf_nll = np.asarray(series["CD-EKF"]["nll_per_obs"], dtype=np.float64)
 for name in FILTER_NAMES:
     if name == "CD-EKF":
         continue
     gap = np.asarray(series[name]["nll_per_obs"], dtype=np.float64) - ekf_nll
-    ax.plot(
+    plot_method(
+        ax,
+        name,
         delta_t_eff,
         gap,
-        color=COLORS[name],
-        marker="o",
-        lw=1.8,
-        label=name,
+        linewidth=1.35,
+        markersize=3.5,
     )
-ax.axhline(0.0, color="0.4", ls="--", lw=1.0)
+ax.axhline(0.0, color=PALETTE["neutral_gray"], ls="--", lw=0.8)
 ax.set_xlabel(r"Observation interval $\Delta t$ [min]")
-ax.set_ylabel(r"NLL/obs $-$ NLL/obs$_{\mathrm{EKF}}$  (higher = worse than EKF)")
-ax.set_title(r"MFTS: filter NLL gap vs EKF (cubature / $\Delta t$ hypothesis)")
+ax.set_ylabel("$\\Delta$NLL vs. EKF\n[nats/observation]")
 ax.set_xscale("log")
-ax.grid(True, which="both", alpha=0.3)
-ax.legend(fontsize=8, loc="best")
-fig.tight_layout()
+style_curve_axis(ax, grid_axis="both")
+add_shared_legend(fig, ax, ncol=min(3, max(1, len(FILTER_NAMES) - 1)))
+fig.subplots_adjust(left=0.20, right=0.97, top=0.98, bottom=0.39)
 gap_path = os.path.join(OUTPUT_DIR, "nll_gap_vs_ekf_interval.png")
-fig.savefig(gap_path, dpi=150, bbox_inches="tight")
+save_publication_figure(fig, gap_path)
 plt.close()
 print(f"Wrote {gap_path}")
 
@@ -759,25 +832,29 @@ print(f"Wrote {gap_path}")
 # Plot wall-clock time vs Delta_t
 # ---------------------------------------------------------------------------
 
-fig, axes = plt.subplots(1, 2, figsize=(11, 4.5), sharex=True)
+fig, axes = plt.subplots(
+    1,
+    2,
+    figsize=(DOUBLE_COLUMN_WIDTH, 2.65),
+    sharex=True,
+)
 
 ax = axes[0]
 for name in FILTER_NAMES:
-    ax.plot(
+    plot_method(
+        ax,
+        name,
         delta_t_eff,
         [1e3 * t for t in series[name]["time"]],
-        color=COLORS[name],
-        marker="o",
-        lw=1.8,
-        label=name,
+        linewidth=1.35,
+        markersize=3.6,
     )
 ax.set_xlabel(r"Observation interval $\Delta t$ [min]")
 ax.set_ylabel("Wall-clock time [ms]")
-ax.set_title("Total filter runtime")
+ax.set_title("(a) Full record")
 ax.set_xscale("log")
 ax.set_yscale("log")
-ax.grid(True, which="both", alpha=0.3)
-ax.legend(fontsize=9, loc="best")
+style_curve_axis(ax, grid_axis="both")
 
 ax = axes[1]
 for name in FILTER_NAMES:
@@ -785,86 +862,65 @@ for name in FILTER_NAMES:
         1e3 * t / n if n > 0 else np.nan
         for t, n in zip(series[name]["time"], n_obs_list)
     ]
-    ax.plot(
+    plot_method(
+        ax,
+        name,
         delta_t_eff,
         per_obs,
-        color=COLORS[name],
-        marker="o",
-        lw=1.8,
-        label=name,
+        linewidth=1.35,
+        markersize=3.6,
     )
 ax.set_xlabel(r"Observation interval $\Delta t$ [min]")
-ax.set_ylabel("Wall-clock time / observation [ms]")
-ax.set_title("Cost per assimilation step")
+ax.set_ylabel("Time / observation [ms]")
+ax.set_title("(b) Per assimilation")
 ax.set_xscale("log")
 ax.set_yscale("log")
-ax.grid(True, which="both", alpha=0.3)
+style_curve_axis(ax, grid_axis="both")
 
-fig.suptitle(
-    r"MFTS filter compute time vs $\Delta t$",
-    fontsize=12,
-)
-fig.tight_layout()
+add_shared_legend(fig, axes[0], ncol=min(4, len(FILTER_NAMES)))
+fig.subplots_adjust(left=0.115, right=0.99, top=0.91, bottom=0.29, wspace=0.31)
 timing_path = os.path.join(OUTPUT_DIR, "timing_vs_interval.png")
-fig.savefig(timing_path, dpi=150, bbox_inches="tight")
+save_publication_figure(fig, timing_path)
 plt.close()
 
 # ---------------------------------------------------------------------------
 # Pareto: wall-clock vs accuracy (lower-left is better)
 # ---------------------------------------------------------------------------
 
-fig, axes = plt.subplots(1, 2, figsize=(11, 4.5), sharex=True)
+fig, axes = plt.subplots(
+    1,
+    2,
+    figsize=(DOUBLE_COLUMN_WIDTH, 2.65),
+    sharex=True,
+)
 for ax, metric, ylabel, title in zip(
     axes,
     ("mapex", "maped"),
     ("MAPEx [%]", "MAPEd [%]"),
-    ("tanks", "disturbances"),
+    ("(a) Tank states", "(b) Disturbance states"),
 ):
     for name in FILTER_NAMES:
         xs = [1e3 * t for t in series[name]["time"]]
         ys = series[name][metric]
-        ax.plot(
+        plot_method(
+            ax,
+            name,
             xs,
             ys,
-            color=COLORS[name],
-            marker="o",
-            lw=1.2,
-            alpha=0.85,
-            label=name,
-        )
-        # Annotate the smallest and largest Δt so the sweep direction is readable.
-        ax.annotate(
-            f"{delta_t_eff[0]:g}",
-            (xs[0], ys[0]),
-            textcoords="offset points",
-            xytext=(4, 4),
-            fontsize=7,
-            color=COLORS[name],
-            alpha=0.8,
-        )
-        ax.annotate(
-            f"{delta_t_eff[-1]:g}",
-            (xs[-1], ys[-1]),
-            textcoords="offset points",
-            xytext=(4, -8),
-            fontsize=7,
-            color=COLORS[name],
-            alpha=0.8,
+            linewidth=1.15,
+            markersize=3.5,
+            alpha=0.9,
         )
     ax.set_xlabel("Wall-clock time [ms]")
     ax.set_ylabel(ylabel)
     ax.set_title(title)
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.grid(True, which="both", alpha=0.3)
-axes[0].legend(fontsize=8, loc="best")
-fig.suptitle(
-    r"MFTS Pareto: wall-clock vs MAPE (markers = $\Delta t$ sweep; annotated min/max min)",
-    fontsize=11,
-)
-fig.tight_layout()
+    style_curve_axis(ax, grid_axis="both")
+add_shared_legend(fig, axes[0], ncol=min(4, len(FILTER_NAMES)))
+fig.subplots_adjust(left=0.115, right=0.99, top=0.91, bottom=0.29, wspace=0.31)
 pareto_path = os.path.join(OUTPUT_DIR, "pareto_time_vs_mape.png")
-fig.savefig(pareto_path, dpi=150, bbox_inches="tight")
+save_publication_figure(fig, pareto_path)
 plt.close()
 
 # ---------------------------------------------------------------------------

@@ -84,6 +84,14 @@ from intaset_model import (
     mape_pct,
     prepare_filter_grids,
 )
+from experiments.mfts_test.plot_style import (
+    METHOD_COLORS,
+    METHOD_MARKERS,
+    MM_PER_INCH,
+    SINGLE_COLUMN_WIDTH,
+    save_publication_figure,
+    style_curve_axis,
+)
 
 OUTPUT_DIR = os.path.join(HERE, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -400,14 +408,24 @@ SIGMA_U_UKF = max(1.0, 0.2 * sigma_u)
 CKF_PARAMS = UKFParams(alpha=1.0, beta=0.0, kappa=0.0)
 
 COLORS = {
-    "CD-EKF": "#2E86AB",
-    "CD-UKF": "#E8B923",
-    "CD-CKF": "#3DA35D",
-    "CD-EnKF": "#D97706",
-    "PF": "#F24236",
-    "WSC-KF-product": "#6A4C93",
-    "WSC-KF-LV": "#C44536",
-    "WSC-KF-recombined": "#8B1E3F",
+    "CD-EKF": METHOD_COLORS["CD-EKF"],
+    "CD-UKF": METHOD_COLORS["CD-UKF"],
+    "CD-CKF": METHOD_COLORS["CD-CKF"],
+    "CD-EnKF": METHOD_COLORS["CD-EnKF"],
+    "PF": METHOD_COLORS["PF"],
+    "WSC-KF-product": METHOD_COLORS["WSC-KF-product"],
+    "WSC-KF-LV": METHOD_COLORS["WSC-KF-LV"],
+    "WSC-KF-recombined": METHOD_COLORS["WSC-KF-recombined"],
+}
+MARKERS = {
+    "CD-EKF": METHOD_MARKERS["CD-EKF"],
+    "CD-UKF": METHOD_MARKERS["CD-UKF"],
+    "CD-CKF": METHOD_MARKERS["CD-CKF"],
+    "CD-EnKF": METHOD_MARKERS["CD-EnKF"],
+    "PF": METHOD_MARKERS["PF"],
+    "WSC-KF-product": METHOD_MARKERS["WSC-KF-product"],
+    "WSC-KF-LV": METHOD_MARKERS["WSC-KF-LV"],
+    "WSC-KF-recombined": METHOD_MARKERS["WSC-KF-recombined"],
 }
 DISPLAY_NAME = {
     "WSC-KF-product": "WSC-KF",
@@ -419,14 +437,6 @@ DISPLAY_NAME = {
     "CD-EnKF": "CD-EnKF",
     "PF": "PF",
 }
-_LABEL_OFFSET = {
-    "WSC-KF-product": (0, 7),
-    "CD-EnKF": (0, -10),
-    "PF": (0, 7),
-}
-_LABEL_ABOVE_BUDGETS = {"CD-EnKF": {50, 100}}
-
-
 def stack_estimates(m0_arr, means):
     return np.vstack([np.asarray(m0_arr), np.asarray(means)])
 
@@ -964,10 +974,9 @@ with open(csv_path, "w", newline="") as f:
 
 
 # ---------------------------------------------------------------------------
-# Plot mean ± std Pareto (height MAPE only — no disturbance states)
+# Plot mean ± 1 SD Pareto (height MAPE only — no disturbance states)
 # ---------------------------------------------------------------------------
 
-BAND_SCALE = 0.3
 # Single moment-safe WSC-KF point (higher path budgets don't help much here).
 WSC_KF_PLOT_BUDGETS = {4}
 PARTICLE_PLOT_HIDE_BUDGETS = {25, 1000}
@@ -983,28 +992,21 @@ plot_families = [
 
 
 def _annotate_nodes(ax, fam, pts, xs, ys):
-    if fam in ("CD-EKF", "CD-UKF", "CD-CKF", "WSC-KF-product", "WSC-KF-recombined"):
+    """Label only the endpoints of multi-budget curves."""
+    if len(pts) < 2 or fam in ("CD-EKF", "CD-UKF", "CD-CKF"):
         return
-    color = COLORS.get(fam, "#333333")
-    base_dx, base_dy = _LABEL_OFFSET.get(fam, (0, 6))
-    above = _LABEL_ABOVE_BUDGETS.get(fam, set())
-    for i, (pt, x, y) in enumerate(zip(pts, xs, ys)):
-        budget = int(pt["budget"])
-        if budget in above:
-            dx, dy = 0, 7
-        else:
-            dx = base_dx
-            dy = base_dy if (i % 2 == 0) else (base_dy + (4 if base_dy > 0 else -4))
+    color = COLORS[fam]
+    offsets = ((4, 4), (4, -8))
+    for idx, (dx, dy) in zip((0, len(pts) - 1), offsets):
         ax.annotate(
-            str(budget),
-            (x, y),
+            str(int(pts[idx]["budget"])),
+            (xs[idx], ys[idx]),
             textcoords="offset points",
             xytext=(dx, dy),
-            fontsize=7,
+            fontsize=6.5,
             color=color,
-            ha="center",
+            ha="left",
             va="bottom" if dy >= 0 else "top",
-            alpha=0.9,
         )
 
 
@@ -1017,94 +1019,82 @@ def _plot_pts_for_family(fam: str) -> list[dict]:
     return pts
 
 
-def _plot_pareto_metric(metric: str, ylabel: str, title: str, out_name: str) -> str:
-    fig, ax = plt.subplots(figsize=(7.5, 4.5))
-    all_xs: list[float] = []
+def _plot_pareto_metric(metric: str, ylabel: str, title: str, out_name: str):
+    fig, ax = plt.subplots(
+        figsize=(SINGLE_COLUMN_WIDTH, 60.0 / MM_PER_INCH),
+    )
+    all_x_lows: list[float] = []
+    all_x_highs: list[float] = []
     for fam in plot_families:
         pts = _plot_pts_for_family(fam)
         if not pts:
             continue
         pts = sorted(pts, key=lambda r: r["budget"])
         xs = np.asarray([1e3 * r["time_s_mean"] for r in pts])
+        xstd = np.asarray([1e3 * r["time_s_std"] for r in pts])
         ys = np.asarray([r[f"{metric}_mean"] for r in pts])
-        ystd = np.asarray([r[f"{metric}_std"] for r in pts]) * BAND_SCALE
-        all_xs.extend(xs.tolist())
-        color = COLORS.get(fam, "#333333")
-        if fam in ("WSC-KF-product", "WSC-KF-recombined"):
-            marker = "*"
-        elif fam in ("CD-EKF", "CD-UKF", "CD-CKF"):
-            marker = "s"
-        else:
-            marker = "o"
+        ystd = np.asarray([r[f"{metric}_std"] for r in pts])
+        xstd = np.where(np.isfinite(xstd), xstd, 0.0)
+        ystd = np.where(np.isfinite(ystd), ystd, 0.0)
+        # A log axis cannot show a nominal lower error crossing zero; retain
+        # the full error bar while keeping the viewing limit well conditioned.
+        all_x_lows.extend(np.where(xs > xstd, xs - xstd, 0.1 * xs).tolist())
+        all_x_highs.extend((xs + xstd).tolist())
+        color = COLORS[fam]
+        marker = MARKERS[fam]
         disp = DISPLAY_NAME.get(fam, fam)
-        if len(pts) == 1:
-            x0 = float(xs[0])
-            ax.fill_between(
-                [x0 / 1.04, x0 * 1.04],
-                [ys[0] - ystd[0]] * 2,
-                [ys[0] + ystd[0]] * 2,
-                color=color,
-                alpha=0.22,
-                linewidth=0,
-            )
-            ax.plot(
-                xs,
-                ys,
-                marker,
-                color=color,
-                markersize=12 if marker == "*" else 7,
-                label=disp,
-            )
-        else:
-            ax.fill_between(
-                xs, ys - ystd, ys + ystd, color=color, alpha=0.22, linewidth=0
-            )
-            ax.plot(
-                xs,
-                ys,
-                f"-{marker}",
-                color=color,
-                lw=1.5,
-                markersize=10 if marker == "*" else 6,
-                label=disp,
-            )
+        ax.errorbar(
+            xs,
+            ys,
+            xerr=xstd,
+            yerr=ystd,
+            color=color,
+            marker=marker,
+            linestyle="-" if len(pts) > 1 else "none",
+            markersize=6.0 if marker == "*" else 4.0,
+            markeredgewidth=0.8,
+            elinewidth=0.65,
+            capsize=1.8,
+            capthick=0.65,
+            alpha=0.95,
+            label=disp,
+        )
         _annotate_nodes(ax, fam, pts, xs, ys)
-    ax.set_xlabel("Wall-clock time [ms]")
+    ax.set_xlabel("Filter time [ms]")
     ax.set_ylabel(ylabel)
     ax.set_xscale("log")
-    if all_xs:
-        ax.set_xlim(min(all_xs) / 1.25, max(all_xs) * 1.35)
-    ax.grid(True, which="both", alpha=0.3)
-    ax.legend(fontsize=8, loc="best")
-    ax.set_title(title, fontsize=11)
-    fig.tight_layout()
+    if all_x_lows:
+        ax.set_xlim(min(all_x_lows) / 1.12, max(all_x_highs) * 1.12)
+    ax.set_title(title)
+    style_curve_axis(ax, grid_axis="both")
+    ax.legend(
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.01),
+        bbox_transform=fig.transFigure,
+        ncol=4,
+    )
+    fig.subplots_adjust(left=0.19, right=0.985, bottom=0.31, top=0.90)
     out_path = os.path.join(OUTPUT_DIR, out_name)
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    paths = save_publication_figure(fig, out_path)
     plt.close()
-    return out_path
+    return paths
 
 
-_wsc_kf_budgets = ",".join(str(b) for b in sorted(WSC_KF_PLOT_BUDGETS))
-_title_suffix = (
-    rf"at $\Delta t={DELTA_T_MIN:g}$ min "
-    rf"(mean±{BAND_SCALE:g}$\sigma$ over {n_windows_total} windows; "
-    rf"WSC-KF paths = {_wsc_kf_budgets})"
-)
-mape_plot_path = _plot_pareto_metric(
+mape_plot_paths = _plot_pareto_metric(
     "mape",
     "Height MAPE [%]",
-    rf"InTaSet Pareto: MAPE vs wall-clock {_title_suffix}",
+    "Height accuracy",
     "pareto_budget_vs_mape.png",
 )
-nll_plot_path = _plot_pareto_metric(
+nll_plot_paths = _plot_pareto_metric(
     "nll_per_obs",
-    "Mean NLL per observation",
-    rf"InTaSet Pareto: NLL vs wall-clock {_title_suffix}",
+    "NLL\n[nats/observation]",
+    "Predictive score",
     "pareto_budget_vs_nll.png",
 )
 
 print("-" * 72)
-print(f"Wrote {mape_plot_path}")
-print(f"Wrote {nll_plot_path}")
+for path in (*mape_plot_paths, *nll_plot_paths):
+    print(f"Wrote {path}")
 print(f"Wrote {csv_path}")
 print(f"Wrote {raw_path}")

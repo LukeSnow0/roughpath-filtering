@@ -22,9 +22,9 @@ uv run --extra experiments python experiments/AZT1D/run_glucose_mle.py \
     --subject 1 --n-obs 2016 --mle-iters 30 --grid 8
 ```
 
-Outputs under `output/`: `calibrated_params_enkf.json`,
-`calibrated_enkf_mle_trace.png`, `glucose_summary.csv`, `glucose_loglik.png`,
-`glucose_mle_trace.png`, `glucose_heldout_compare.png`.
+Outputs under `output/`: `calibrated_params_enkf.json`, `glucose_summary.csv`,
+and PDF/PNG pairs for `glucose_loglik`, `glucose_mle_trace`, `glucose_track`,
+and `glucose_heldout_compare`.
 
 ## Assimilation-interval Pareto (Δt = 5 min)
 
@@ -36,7 +36,7 @@ uv run --extra experiments python experiments/AZT1D/run_pareto_assimilation.py \
     --wsckf-max-paths 4 --enkf 25,50,100,500 --pf 25,50,100,500
 ```
 
-Kept figure: `output/pareto_assimilation_dt5.png` (plus backing
+Kept figure: `output/pareto_assimilation_dt5.{pdf,png}` (plus backing
 `pareto_assimilation.csv` / `_raw.csv`).
 
 ## Cohort (per-subject \(\hat\theta_i\))
@@ -49,8 +49,9 @@ uv run --extra experiments python experiments/AZT1D/run_cohort_calibrated.py \
     --n-obs 2016 --mle-iters 25 --wsckf-paths 4 --enkf 25,500,1000 --pf 25,100,500
 ```
 
-Kept figures: `output/cohort_calibrated_pareto.png` (NLL/MAPE),
-`output/cohort_calibrated_crps.png` (mixture CRPS for PF), plus
+Kept figures: `output/cohort_calibrated_pareto.{pdf,png}` (held-out NLL /
+full-record MAPE),
+`output/cohort_calibrated_crps.{pdf,png}` (mixture CRPS for PF), plus
 `cohort_calibrated_{summary,per_subject,params}.*`.
 
 For Δt = 20 min (every 4th 5-min sample; re-MLE + bakeoff):
@@ -60,8 +61,8 @@ uv run --extra experiments python experiments/AZT1D/run_cohort_calibrated.py \
     --dt-assim 20 --n-obs 2016 --mle-iters 25 --wsckf-paths 4 --enkf 25,500,1000 --pf 25,100,500
 ```
 
-Writes `cohort_calibrated_crps_dt20.png` (also refreshes `cohort_calibrated_crps.png`;
-Δt=5 copy kept as `cohort_calibrated_crps_dt5.png`).
+Writes `cohort_calibrated_crps_dt20.{pdf,png}` (also refreshes the unsuffixed pair;
+the Δt=5 pair is kept with the `cohort_calibrated_crps_dt5` stem).
 
 ## Filter tracks (CGM overlay)
 
@@ -71,4 +72,8 @@ uv run --extra experiments python experiments/AZT1D/run_filter_tracks.py \
     --subject 1 --enkf 500 --pf 500
 ```
 
-Writes `output/filter_tracks.png` (full-series WSC-KF ±1σ + held-out multi-filter overlay).
+Writes `output/filter_tracks.{pdf,png}` (full-series WSC-KF ±1σ + held-out
+multi-filter overlay).
+
+All manuscript figures use final-size 90 mm (single-column) or 190 mm
+(double-column) canvases, vector PDF, and 450 dpi PNG.

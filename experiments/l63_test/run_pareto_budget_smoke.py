@@ -61,6 +61,13 @@ from cuthbert import filter as run_filter
 from wsckf import build_filter
 from wsckf.library import product_path_count
 from wsckf.library.cubature_paths import build_recombined_cubature_paths
+from mfts_test.plot_style import (
+    METHOD_COLORS,
+    METHOD_MARKERS,
+    SINGLE_COLUMN_WIDTH,
+    save_publication_figure,
+    style_curve_axis,
+)
 
 OUTPUT_DIR = os.path.join(HERE, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -226,12 +233,12 @@ R = (obs_std**2) * jnp.eye(y_dim)
 chol_R = jnp.linalg.cholesky(R)
 
 COLORS = {
-    "CD-EKF": "#2E86AB",
-    "CD-UKF": "#3DA35D",
-    "CD-EnKF": "#F6AE2D",
-    "PF": "#F24236",
-    "WSC-KF-product": "#6A4C93",
-    "WSC-KF-recombined": "#6A4C93",
+    "CD-EKF": METHOD_COLORS["CD-EKF"],
+    "CD-UKF": METHOD_COLORS["CD-UKF"],
+    "CD-EnKF": METHOD_COLORS["CD-EnKF"],
+    "PF": METHOD_COLORS["PF"],
+    "WSC-KF-product": METHOD_COLORS["WSC-KF-product"],
+    "WSC-KF-recombined": METHOD_COLORS["WSC-KF-recombined"],
 }
 DISPLAY_NAME = {
     "WSC-KF-product": "WSC-KF",
@@ -640,7 +647,7 @@ with open(csv_path, "w", newline="") as f:
         w.writerow({"delta_t": dt, "n_obs": n_obs, "horizon": HORIZON, **r})
 
 # ---- plot ----
-BAND_SCALE = 0.3
+BAND_SCALE = 1.0
 
 
 def _annotate_nodes(ax, fam, pts, xs, ys):
@@ -663,7 +670,7 @@ def _annotate_nodes(ax, fam, pts, xs, ys):
         )
 
 
-fig, ax = plt.subplots(figsize=(7.5, 4.5))
+fig, ax = plt.subplots(figsize=(SINGLE_COLUMN_WIDTH, 2.65))
 # Merge product + recombined onto one WSC-KF curve (sorted by path count).
 plot_groups: list[tuple[str, list[str]]] = [
     ("WSC-KF", ["WSC-KF-product", "WSC-KF-recombined"]),
@@ -685,7 +692,8 @@ for disp, fams in plot_groups:
     ystd = np.asarray([r["rmse_std"] for r in pts]) * BAND_SCALE
     all_xs.extend(xs.tolist())
     color = COLORS[fams[0]]
-    marker = "s" if disp in ("CD-EKF", "CD-UKF (coarse)", "WSC-KF") else "o"
+    method_key = "WSC-KF" if disp == "WSC-KF" else fams[0]
+    marker = METHOD_MARKERS[method_key]
     if len(pts) == 1:
         x0 = float(xs[0])
         ax.fill_between(
@@ -693,35 +701,39 @@ for disp, fams in plot_groups:
             [ys[0] - ystd[0]] * 2,
             [ys[0] + ystd[0]] * 2,
             color=color,
-            alpha=0.22,
+            alpha=0.14,
             lw=0,
         )
-        ax.plot(xs, ys, marker, color=color, markersize=7, label=disp)
+        ax.plot(xs, ys, marker, color=color, markerfacecolor="white", markersize=4.5, label=disp)
     else:
-        ax.fill_between(xs, ys - ystd, ys + ystd, color=color, alpha=0.22, lw=0)
-        ax.plot(xs, ys, f"-{marker}", color=color, lw=1.5, markersize=6, label=disp)
+        ax.fill_between(xs, ys - ystd, ys + ystd, color=color, alpha=0.14, lw=0)
+        ax.plot(xs, ys, f"-{marker}", color=color, markerfacecolor="white", lw=1.25, markersize=4.2, label=disp)
     _annotate_nodes(ax, fams[0], pts, xs, ys)
 
 ax.set_xlabel("Wall-clock time [ms]")
-ax.set_ylabel("Fine-grid RMSE (overall)")
+ax.set_ylabel("Fine-grid RMSE")
 ax.set_xscale("log")
 ax.set_yscale("linear")
 if all_xs:
     ax.set_xlim(min(all_xs) / 1.25, max(all_xs) * 1.35)
-ax.grid(True, which="both", alpha=0.3)
-ax.legend(fontsize=8, loc="best")
-ax.set_title(
-    rf"L63 smoke Pareto at $\Delta t={dt:g}$, $\sigma_{{\mathrm{{diff}}}}={diff_std:g}$ "
-    rf"(mean±{BAND_SCALE:g}$\sigma$ over {n_seeds} seeds; "
-    rf"horizon={HORIZON:g}; WSC-KF P∈{{{wsckf_path_note}}})",
-    fontsize=11,
+style_curve_axis(ax, grid_axis="both")
+ax.text(
+    0.02,
+    0.98,
+    rf"$\Delta t={dt:g}$; bars: $\pm 1$ SD",
+    transform=ax.transAxes,
+    ha="left",
+    va="top",
+    fontsize=6.4,
 )
-fig.tight_layout()
+fig.legend(*ax.get_legend_handles_labels(), loc="lower center", bbox_to_anchor=(0.5, 0.005), ncol=3)
+fig.subplots_adjust(left=0.19, right=0.98, bottom=0.34, top=0.97)
 plot_path = os.path.join(OUTPUT_DIR, f"pareto_budget_vs_rmse{OUT_TAG}.png")
-fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+plot_png, plot_pdf = save_publication_figure(fig, plot_path)
 plt.close()
 
 print("-" * 60)
-print(f"Wrote {plot_path}")
+print(f"Wrote {plot_png}")
+print(f"Wrote {plot_pdf}")
 print(f"Wrote {csv_path}")
 print(f"Wrote {raw_path}")

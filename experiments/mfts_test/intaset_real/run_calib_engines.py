@@ -42,9 +42,10 @@ os.environ.setdefault(
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+MFTS_DIR = os.path.abspath(os.path.join(HERE, ".."))
 EXPERIMENTS_DIR = os.path.abspath(os.path.join(HERE, "..", ".."))
 ROOT_DIR = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-for pth in (HERE, EXPERIMENTS_DIR, ROOT_DIR):
+for pth in (HERE, MFTS_DIR, EXPERIMENTS_DIR, ROOT_DIR):
     sys.path.insert(0, pth)
 
 import jax
@@ -79,6 +80,15 @@ from intaset_model import (
     prepare_filter_grids,
     save_params,
     simulate_open_loop,
+)
+from plot_style import (
+    DOUBLE_COLUMN_WIDTH,
+    METHOD_COLORS,
+    METHOD_MARKERS,
+    PALETTE,
+    save_publication_figure,
+    style_box_axis,
+    style_curve_axis,
 )
 
 OUTPUT_DIR = os.path.join(HERE, "output")
@@ -445,27 +455,27 @@ def pf_train_ll(theta):
 
 ENGINES: dict[str, dict] = {
     "WSC-KF": {
-        "color": "#6A4C93",
+        "color": METHOD_COLORS["WSC-KF"],
         "vg": jit(value_and_grad(wsckf_train_ll)),
         "fwd": jit(lambda th: _run(WSCKF_TRAIN, _mi(th, N_TRAIN)).log_normalizing_constant[-1]),
     },
     "EKF": {
-        "color": "#2E86AB",
+        "color": METHOD_COLORS["EKF"],
         "vg": jit(value_and_grad(ekf_train_ll)),
         "fwd": jit(ekf_train_ll),
     },
     "UKF": {
-        "color": "#E8B923",
+        "color": METHOD_COLORS["UKF"],
         "vg": jit(value_and_grad(ukf_train_ll)),
         "fwd": jit(ukf_train_ll),
     },
     "EnKF": {
-        "color": "#D97706",
+        "color": METHOD_COLORS["EnKF"],
         "vg": jit(value_and_grad(enkf_train_ll)),
         "fwd": jit(enkf_train_ll),
     },
     "PF": {
-        "color": "#F24236",
+        "color": METHOD_COLORS["PF"],
         "vg": jit(value_and_grad(pf_train_ll)),
         "fwd": jit(pf_train_ll),
     },
@@ -720,22 +730,38 @@ def main():
     # Plots
     names = [n for n in ENGINES if n in hats]
     colors = [ENGINES[n]["color"] for n in names]
+    line_styles = {
+        "WSC-KF": "-",
+        "EKF": "--",
+        "UKF": "-.",
+        "EnKF": ":",
+        "PF": (0, (4, 1, 1, 1)),
+    }
 
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(DOUBLE_COLUMN_WIDTH, 2.65),
+    )
+    method_handles = []
     ax = axes[0]
     for name in names:
-        ax.plot(
+        (line,) = ax.plot(
             np.arange(len(traces[name]["ll"])),
             traces[name]["ll"],
             color=ENGINES[name]["color"],
-            lw=1.5,
+            marker=METHOD_MARKERS[name],
+            linestyle=line_styles[name],
+            linewidth=1.35,
+            markersize=3.3,
+            markevery=max(1, len(traces[name]["ll"]) // 6),
             label=name,
         )
+        method_handles.append(line)
     ax.set_xlabel("Adam iteration")
-    ax.set_ylabel("train log-likelihood (self)")
-    ax.set_title("Calibration engines: MLE traces")
-    ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=8)
+    ax.set_ylabel("Training log likelihood [nats]")
+    ax.set_title("(a) Self objective")
+    style_curve_axis(ax, grid_axis="y")
 
     ax = axes[1]
     for name in names:
@@ -744,23 +770,42 @@ def main():
             np.arange(len(meas)),
             meas,
             color=ENGINES[name]["color"],
-            lw=1.4,
-            label=name,
+            marker=METHOD_MARKERS[name],
+            linestyle=line_styles[name],
+            linewidth=1.35,
+            markersize=3.3,
+            markevery=max(1, len(meas) // 6),
         )
-    ax.axhline(meas0, color="0.4", ls="--", lw=1, label="warm meas")
+    warm_handle = ax.axhline(
+        meas0,
+        color=PALETTE["neutral_gray"],
+        linestyle="--",
+        linewidth=0.9,
+        label="Warm start",
+    )
     ax.set_xlabel("Adam iteration")
-    ax.set_ylabel(r"meas_std [cm]")
-    ax.set_title("Sensor-noise trajectories")
-    ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=8)
-    fig.tight_layout()
+    ax.set_ylabel(r"$\sigma_y$ [cm]")
+    ax.set_title("(b) Sensor noise")
+    style_curve_axis(ax, grid_axis="y")
+    fig.legend(
+        [*method_handles, warm_handle],
+        [*names, "Warm start"],
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.015),
+        ncol=min(6, len(names) + 1),
+    )
+    fig.subplots_adjust(left=0.09, right=0.995, top=0.90, bottom=0.28, wspace=0.29)
     trace_path = os.path.join(OUTPUT_DIR, "calib_engines_trace.png")
-    fig.savefig(trace_path, dpi=150, bbox_inches="tight")
+    save_publication_figure(fig, trace_path)
     plt.close()
     print(f"Wrote {trace_path}")
 
     # Held-out bars
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(DOUBLE_COLUMN_WIDTH, 2.55),
+    )
     ax = axes[0]
     labels = ["warm-start", *names]
     hrefs = [held0[0]] + [
@@ -770,60 +815,118 @@ def main():
         next(r["heldout_ref_nll_std"] for r in results if r["engine"] == n)
         for n in names
     ]
-    cols = ["0.55", *colors]
+    cols = [PALETTE["neutral_gray"], *colors]
     xpos = np.arange(len(labels))
-    ax.bar(xpos, hrefs, yerr=hstds, color=cols, edgecolor="0.25", lw=0.6, capsize=3)
+    ax.bar(
+        xpos,
+        hrefs,
+        yerr=hstds,
+        color=cols,
+        edgecolor=PALETTE["black"],
+        linewidth=0.55,
+        capsize=2.5,
+        error_kw={"elinewidth": 0.7, "capthick": 0.7},
+    )
     ax.set_xticks(xpos)
-    ax.set_xticklabels(labels, fontsize=9)
-    ax.set_ylabel("held-out NLL / obs (ref EnKF)")
-    ax.set_title("Shared-reference calibration quality")
-    ax.grid(axis="y", alpha=0.3)
+    ax.set_xticklabels(labels)
+    ax.set_ylabel("NLL [nats/observation]")
+    ax.set_title("(a) Reference-EnKF NLL")
+    style_box_axis(ax, grid_axis="y")
 
     ax = axes[1]
     selfs = [
         next(r["heldout_self_nll"] for r in results if r["engine"] == n) for n in names
     ]
-    ax.bar(np.arange(len(names)), selfs, color=colors, edgecolor="0.25", lw=0.6)
+    ax.bar(
+        np.arange(len(names)),
+        selfs,
+        color=colors,
+        edgecolor=PALETTE["black"],
+        linewidth=0.55,
+    )
     ax.set_xticks(np.arange(len(names)))
-    ax.set_xticklabels(names, fontsize=9)
-    ax.set_ylabel("held-out NLL / obs (self filter)")
-    ax.set_title("Self-likelihood held-out (not comparable across engines)")
-    ax.grid(axis="y", alpha=0.3)
-    fig.tight_layout()
+    ax.set_xticklabels(names)
+    ax.set_ylabel("NLL [nats/observation]")
+    ax.set_title("(b) Self likelihood")
+    ax.text(
+        0.98,
+        0.96,
+        "not cross-filter comparable",
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=6.4,
+        color=PALETTE["neutral_gray"],
+    )
+    style_box_axis(ax, grid_axis="y")
+    fig.subplots_adjust(left=0.09, right=0.995, top=0.94, bottom=0.19, wspace=0.29)
     held_path = os.path.join(OUTPUT_DIR, "calib_engines_heldout.png")
-    fig.savefig(held_path, dpi=150, bbox_inches="tight")
+    save_publication_figure(fig, held_path)
     plt.close()
     print(f"Wrote {held_path}")
 
     # Timing
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.0))
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(DOUBLE_COLUMN_WIDTH, 2.65),
+    )
     ax = axes[0]
     fwd = [timings[n][0] for n in names]
     ads = [timings[n][1] for n in names]
-    x = np.arange(len(names))
-    w = 0.35
-    ax.bar(x - w / 2, fwd, w, label="forward", color="0.7", edgecolor="0.3")
-    ax.bar(x + w / 2, ads, w, label="AD", color=colors, edgecolor="0.3")
-    ax.set_xticks(x)
-    ax.set_xticklabels(names)
-    ax.set_ylabel("median wall [s]")
-    ax.set_yscale("log")
-    ax.set_title("Per-eval on train")
-    ax.legend(fontsize=8)
-    ax.grid(axis="y", alpha=0.3, which="both")
+    y = np.arange(len(names))
+    bar_height = 0.34
+    ax.barh(
+        y - bar_height / 2,
+        fwd,
+        bar_height,
+        label="Forward",
+        color=PALETTE["light_gray"],
+        edgecolor=PALETTE["black"],
+        linewidth=0.5,
+    )
+    ax.barh(
+        y + bar_height / 2,
+        ads,
+        bar_height,
+        label="Gradient (method color)",
+        color=colors,
+        edgecolor=PALETTE["black"],
+        linewidth=0.5,
+    )
+    ax.set_yticks(y)
+    ax.set_yticklabels(names)
+    ax.set_title("(a) Per evaluation")
+    ax.invert_yaxis()
+    style_box_axis(ax, grid_axis="x")
 
     ax = axes[1]
     mle_t = [walls[n] for n in names]
-    ax.bar(x, mle_t, color=colors, edgecolor="0.3")
-    ax.set_xticks(x)
-    ax.set_xticklabels(names)
-    ax.set_ylabel("wall [s]")
-    ax.set_yscale("log")
-    ax.set_title(f"Full Adam MLE ({_args.mle_iters} iters)")
-    ax.grid(axis="y", alpha=0.3, which="both")
-    fig.tight_layout()
+    ax.barh(
+        y,
+        mle_t,
+        0.56,
+        color=colors,
+        edgecolor=PALETTE["black"],
+        linewidth=0.5,
+    )
+    ax.set_yticks(y)
+    ax.set_yticklabels(names)
+    ax.set_title("(b) Full optimization")
+    ax.invert_yaxis()
+    style_box_axis(ax, grid_axis="x")
+    handles, legend_labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        legend_labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.015),
+        ncol=2,
+    )
+    fig.supxlabel("Wall time [s]", y=0.105)
+    fig.subplots_adjust(left=0.09, right=0.995, top=0.94, bottom=0.25, wspace=0.30)
     timing_path = os.path.join(OUTPUT_DIR, "calib_engines_timing.png")
-    fig.savefig(timing_path, dpi=150, bbox_inches="tight")
+    save_publication_figure(fig, timing_path)
     plt.close()
     print(f"Wrote {timing_path}")
 

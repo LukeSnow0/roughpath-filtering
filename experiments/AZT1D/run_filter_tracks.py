@@ -38,6 +38,7 @@ from jax import jit
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
 jax.config.update("jax_enable_x64", True)
 
 from cuthbert import filter as run_filter
@@ -62,25 +63,24 @@ from glucose_model import (
     init_estimate,
     make_glucose_dynamics,
 )
+from plot_style import (
+    DOUBLE_COLUMN_WIDTH,
+    METHOD_COLORS,
+    PALETTE,
+    save_publication_figure,
+    style_curve_axis,
+)
 
 OUTPUT_DIR = os.path.join(HERE, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 COLORS = {
-    "WSC-KF": "#6A4C93",
-    "EKF": "#1F77B4",
-    "UKF": "#3D8B6E",
-    "EnKF": "#E67E22",  # orange
-    "PF": "#C0392B",    # red
-    "CGM": "#4A4A4A",
+    name: METHOD_COLORS[name]
+    for name in ("WSC-KF", "EKF", "UKF", "EnKF", "PF", "CGM")
 }
-# Soft fills; WSC/EKF chosen to contrast when nested
+# Method-consistent hues make overlapping uncertainty bands easy to identify.
 BAND_COLORS = {
-    "WSC-KF": "#B39DDB",  # lavender (inner / narrower typically)
-    "EKF": "#90CAF9",     # light blue (outer / wider typically)
-    "UKF": "#A8D5C2",
-    "EnKF": "#F5C48A",    # light orange
-    "PF": "#E8A0A0",      # light red
+    name: METHOD_COLORS[name] for name in ("WSC-KF", "EKF", "UKF", "EnKF", "PF")
 }
 
 
@@ -631,16 +631,15 @@ def main():
     if args.plot_all_cov:
         # Filtered μ and full P: G ±√P_GG, X ±√P_XX, Cov(G,X)=P_GX
         fig, axes = plt.subplots(
-            4, 1, figsize=(11.5, 10.2), sharex=False,
+            4, 1, figsize=(DOUBLE_COLUMN_WIDTH, 5.6), sharex=False,
             gridspec_kw={"height_ratios": [1.05, 1.0, 0.9, 0.9], "hspace": 0.42},
         )
-        fig.subplots_adjust(left=0.08, right=0.78, top=0.94, bottom=0.06)
+        fig.subplots_adjust(left=0.09, right=0.75, top=0.97, bottom=0.08)
 
         def _style_legend(ax):
             ax.legend(
                 loc="upper left",
                 bbox_to_anchor=(1.02, 1.0),
-                fontsize=7.5,
                 frameon=False,
                 borderaxespad=0.0,
                 handlelength=1.8,
@@ -660,7 +659,7 @@ def main():
                 )
             # EKF outer / WSC inner nesting on G; plain bands on X
             if dim == 0 and wsc_label in state_covs and "EKF" in state_covs:
-                ekf_boost = 1.22
+                ekf_boost = 1.0
                 w_wsc = float(np.mean(np.sqrt(np.maximum(state_covs[wsc_label][mask, 0, 0], 0.0))))
                 w_ekf = float(np.mean(np.sqrt(np.maximum(state_covs["EKF"][mask, 0, 0], 0.0)))) * ekf_boost
                 nest = [("EKF", ekf_boost, 0.50, 1.6), (wsc_label, 1.0, 0.62, 2.4)]
@@ -678,7 +677,7 @@ def main():
                     )
                 if "UKF" in state_means:
                     mu = state_means["UKF"][mask, 0]
-                    s = band_scale * 1.22 * np.sqrt(
+                    s = band_scale * np.sqrt(
                         np.maximum(state_covs["UKF"][mask, 0, 0], 0.0)
                     )
                     ax.fill_between(
@@ -701,7 +700,7 @@ def main():
                     )
             if with_cgm:
                 ax.plot(
-                    t_h[mask], cgm[mask], "o", ms=cgm_ms, color="#1A1A1A",
+                    t_h[mask], cgm[mask], "o", ms=cgm_ms, color=PALETTE["black"],
                     alpha=0.92, label="CGM", zorder=6,
                     markeredgecolor="white", markeredgewidth=0.35,
                 )
@@ -716,10 +715,10 @@ def main():
         # A: full-series G
         ax = axes[0]
         full = np.ones(n_obs, dtype=bool)
-        ax.plot(t_h[:n_train], cgm[:n_train], "o", ms=3.8, color="#1A1A1A",
+        ax.plot(t_h[:n_train], cgm[:n_train], "o", ms=3.8, color=PALETTE["black"],
                 alpha=0.85, label="CGM (train)", zorder=5,
                 markeredgecolor="white", markeredgewidth=0.3)
-        ax.plot(t_h[n_train:], cgm[n_train:], "o", ms=3.8, color="#555555",
+        ax.plot(t_h[n_train:], cgm[n_train:], "o", ms=3.8, color=PALETTE["neutral_gray"],
                 alpha=0.9, label="CGM (held-out)", zorder=5,
                 markeredgecolor="white", markeredgewidth=0.3)
         for name in (enkf_label, pf_label):
@@ -735,7 +734,7 @@ def main():
             if name in (enkf_label, pf_label):
                 continue
             mu = state_means[name][:, 0]
-            boost = 1.22 if name in ("EKF", "UKF") else 1.0
+            boost = 1.0
             s = band_scale * boost * np.sqrt(np.maximum(state_covs[name][:, 0, 0], 0.0))
             ax.fill_between(
                 t_h, mu - s, mu + s,
@@ -748,49 +747,37 @@ def main():
                 lw=lw[name], label=rf"{name} $\mu_G\pm\sigma_G$",
                 zorder=z_line[name], alpha=0.95,
             )
-        ax.axvline(t_split, color="#2E86AB", ls="--", lw=0.9, alpha=0.8, zorder=0)
+        ax.axvline(t_split, color=PALETTE["blue"], ls="--", lw=0.9, alpha=0.8, zorder=0)
         full_held = abs(t_zoom0 - t_split) < 1e-6 and abs(t_zoom1 - float(t_h[-1])) < 1e-6
         if not full_held:
-            ax.axvspan(t_zoom0, t_zoom1, color="#c45c26", alpha=0.12, zorder=0, label="zoom")
+            ax.axvspan(t_zoom0, t_zoom1, color=PALETTE["orange"], alpha=0.12, zorder=0, label="zoom")
         ax.set_ylabel(r"$G$ [mg/dL]")
         ax.set_xlim(float(t_h[0]), float(t_h[-1]))
-        ax.grid(True, alpha=0.28)
+        style_curve_axis(ax, grid_axis="y")
         _style_legend(ax)
-        ax.set_title(
-            f"Subject {args.subject}: filtered means + cov "
-            f"($\\Delta t$ = {dt_assim:g} min): "
-            f"$p_3$={p3:.2e}, $\\sigma_G$={sigma_g:.3g}{noise_note}",
-            fontsize=11,
-        )
+        ax.set_title("(a) Full-record glucose", loc="left")
 
         # B: zoom G
         ax = axes[1]
         _plot_mean_band(ax, zoom, dim=0, with_cgm=True, cgm_ms=6.5)
         if t_zoom0 <= t_split + 1e-6 <= t_zoom1:
-            ax.axvline(t_split, color="#2E86AB", ls="--", lw=0.9, alpha=0.8, zorder=0)
+            ax.axvline(t_split, color=PALETTE["blue"], ls="--", lw=0.9, alpha=0.8, zorder=0)
         ax.set_ylabel(r"$G$ [mg/dL]")
         ax.set_xlim(t_zoom0, t_zoom1)
-        ax.grid(True, alpha=0.28)
+        style_curve_axis(ax, grid_axis="y")
         _style_legend(ax)
-        ax.set_title(
-            rf"Held-out $G$ mean $\pm\sqrt{{P_{{GG}}}}$ "
-            rf"($t\in[{t_zoom0:g},{t_zoom1:g}]$ h)",
-            fontsize=11,
-        )
+        ax.set_title(r"(b) Held-out $G\pm\sqrt{P_{GG}}$", loc="left")
 
         # C: zoom X
         ax = axes[2]
         _plot_mean_band(ax, zoom, dim=1, with_cgm=False, cgm_ms=6.5)
         if t_zoom0 <= t_split + 1e-6 <= t_zoom1:
-            ax.axvline(t_split, color="#2E86AB", ls="--", lw=0.9, alpha=0.8, zorder=0)
+            ax.axvline(t_split, color=PALETTE["blue"], ls="--", lw=0.9, alpha=0.8, zorder=0)
         ax.set_ylabel(r"$X$ [1/min]")
         ax.set_xlim(t_zoom0, t_zoom1)
-        ax.grid(True, alpha=0.28)
+        style_curve_axis(ax, grid_axis="y")
         _style_legend(ax)
-        ax.set_title(
-            rf"Held-out $X$ mean $\pm\sqrt{{P_{{XX}}}}$",
-            fontsize=11,
-        )
+        ax.set_title(r"(c) Held-out $X\pm\sqrt{P_{XX}}$", loc="left")
 
         # D: zoom Cov(G,X)
         ax = axes[3]
@@ -802,20 +789,20 @@ def main():
                 zorder=z_line[name], alpha=0.95,
             )
         if t_zoom0 <= t_split + 1e-6 <= t_zoom1:
-            ax.axvline(t_split, color="#2E86AB", ls="--", lw=0.9, alpha=0.8, zorder=0)
-        ax.axhline(0.0, color="#666666", lw=0.7, alpha=0.7, zorder=0)
-        ax.set_xlabel("time [h]")
+            ax.axvline(t_split, color=PALETTE["blue"], ls="--", lw=0.9, alpha=0.8, zorder=0)
+        ax.axhline(0.0, color=PALETTE["neutral_gray"], lw=0.7, alpha=0.7, zorder=0)
+        ax.set_xlabel("Time [h]")
         ax.set_ylabel(r"$P_{GX}$")
         ax.set_xlim(t_zoom0, t_zoom1)
-        ax.grid(True, alpha=0.28)
+        style_curve_axis(ax, grid_axis="y")
         _style_legend(ax)
-        ax.set_title(r"Held-out $\mathrm{Cov}(G,X)=P_{GX}$", fontsize=11)
+        ax.set_title(r"(d) Held-out covariance $P_{GX}$", loc="left")
 
         # y-limits
         g_parts = [cgm[zoom]]
         for name in order:
             mu = state_means[name][zoom, 0]
-            s = band_scale * (1.22 if name in ("EKF", "UKF") else 1.0) * np.sqrt(
+            s = band_scale * np.sqrt(
                 np.maximum(state_covs[name][zoom, 0, 0], 0.0)
             )
             g_parts.extend([mu - s, mu + s])
@@ -824,7 +811,7 @@ def main():
         g_full_parts = [cgm]
         for name in order:
             mu = state_means[name][:, 0]
-            s = band_scale * (1.22 if name in ("EKF", "UKF") else 1.0) * np.sqrt(
+            s = band_scale * np.sqrt(
                 np.maximum(state_covs[name][:, 0, 0], 0.0)
             )
             g_full_parts.extend([mu - s, mu + s])
@@ -838,7 +825,7 @@ def main():
             xytext=(6, -12),
             textcoords="offset points",
             fontsize=8,
-            color="#2E86AB",
+            color=PALETTE["blue"],
             va="top",
         )
         x_parts = []
@@ -852,8 +839,10 @@ def main():
 
         tag = _output_tag()
         out = os.path.join(OUTPUT_DIR, f"{tag}.png")
-        fig.savefig(out, dpi=170)
-        print(f"Wrote {out}")
+        out_png, out_pdf = save_publication_figure(fig, out)
+        plt.close(fig)
+        print(f"Wrote {out_png}")
+        print(f"Wrote {out_pdf}")
         print(f"  θ: p3={p3:.6g}  sigma_g={sigma_g:.6g}  ({theta_src})")
         print(f"  Δt={dt_assim:g} min (stride={stride})  n_obs={n_obs}  n_train={n_train}  n_held={n_held}")
         print(f"  mode=filtered-statecov  band_scale={band_scale:g}  cgm_noise={float(args.cgm_noise_std):g}")
@@ -862,10 +851,10 @@ def main():
         return
 
     fig, axes = plt.subplots(
-        2, 1, figsize=(11.5, 6.6), sharex=False,
+        2, 1, figsize=(DOUBLE_COLUMN_WIDTH, 3.95), sharex=False,
         gridspec_kw={"height_ratios": [1.05, 1.0], "hspace": 0.38},
     )
-    fig.subplots_adjust(left=0.08, right=0.78, top=0.92, bottom=0.08)
+    fig.subplots_adjust(left=0.09, right=0.75, top=0.95, bottom=0.13)
     if abs(band_scale - 1.0) < 1e-12:
         sigma_tag = r"pred $\pm 1\sigma$" if args.predictive else r"$\pm 1\sigma$"
     else:
@@ -900,15 +889,13 @@ def main():
     def _draw_nested_wsc_ekf_bands(ax, mask):
         """Larger of WSC/EKF ±σ underneath; smaller on top in a contrasting tint.
 
-        EKF/UKF bands are drawn slightly inflated (display only) so nesting is easier
-        to see when the true σ gap is modest. UKF is always filled so its covariance
-        stays visible alongside the mean.
+        UKF is always filled so its covariance stays visible alongside the mean.
         """
         if "UKF" in stds:
-            _fill_band(ax, "UKF", mask, alpha=0.34, z=1.5, width_scale=1.22)
+            _fill_band(ax, "UKF", mask, alpha=0.24, z=1.5)
         if wsc_label not in stds or "EKF" not in stds:
             return
-        ekf_boost = 1.22  # visual exaggeration of EKF/UKF band width
+        ekf_boost = 1.0
         w_wsc = float(np.mean(stds[wsc_label][mask]))
         w_ekf = float(np.mean(stds["EKF"][mask])) * ekf_boost
         if w_ekf >= w_wsc:
@@ -931,7 +918,7 @@ def main():
         _draw_nested_wsc_ekf_bands(ax, mask)
         if cgm_label is not None:
             ax.plot(
-                t_h[mask], cgm[mask], "o", ms=cgm_ms, color="#1A1A1A",
+                t_h[mask], cgm[mask], "o", ms=cgm_ms, color=PALETTE["black"],
                 alpha=0.92, label=cgm_label, zorder=6,
                 markeredgecolor="white", markeredgewidth=0.35,
             )
@@ -946,10 +933,10 @@ def main():
 
     # Panel A: full series — all filters
     ax = axes[0]
-    ax.plot(t_h[:n_train], cgm[:n_train], "o", ms=3.8, color="#1A1A1A",
+    ax.plot(t_h[:n_train], cgm[:n_train], "o", ms=3.8, color=PALETTE["black"],
             alpha=0.85, label="CGM (train)", zorder=5,
             markeredgecolor="white", markeredgewidth=0.3)
-    ax.plot(t_h[n_train:], cgm[n_train:], "o", ms=3.8, color="#555555",
+    ax.plot(t_h[n_train:], cgm[n_train:], "o", ms=3.8, color=PALETTE["neutral_gray"],
             alpha=0.9, label="CGM (held-out)", zorder=5,
             markeredgecolor="white", markeredgewidth=0.3)
     full = np.ones(n_obs, dtype=bool)
@@ -969,16 +956,16 @@ def main():
             label=rf"{name} {sigma_tag}",
             zorder=z_line[name], alpha=0.95,
         )
-    ax.axvline(t_split, color="#2E86AB", ls="--", lw=0.9, alpha=0.8, zorder=0)
+    ax.axvline(t_split, color=PALETTE["blue"], ls="--", lw=0.9, alpha=0.8, zorder=0)
     # Shade bottom-panel window on the full series whenever it is a proper sub-interval.
     full_held = abs(t_zoom0 - t_split) < 1e-6 and abs(t_zoom1 - float(t_h[-1])) < 1e-6
     if not full_held:
-        ax.axvspan(t_zoom0, t_zoom1, color="#c45c26", alpha=0.12, zorder=0, label="zoom")
+        ax.axvspan(t_zoom0, t_zoom1, color=PALETTE["orange"], alpha=0.12, zorder=0, label="zoom")
         if args.zoom_max_disc:
-            ax.axvline(t_peak_disc, color="#c45c26", ls=":", lw=1.0, alpha=0.85, zorder=0)
+            ax.axvline(t_peak_disc, color=PALETTE["orange"], ls=":", lw=1.0, alpha=0.85, zorder=0)
     ax.set_ylabel("glucose [mg/dL]")
     ax.set_xlim(float(t_h[0]), float(t_h[-1]))
-    ax.grid(True, alpha=0.28)
+    style_curve_axis(ax, grid_axis="y")
     ax.legend(
         loc="upper left",
         bbox_to_anchor=(1.02, 1.0),
@@ -987,56 +974,47 @@ def main():
         borderaxespad=0.0,
         handlelength=1.8,
     )
-    ax.set_title(
-        f"Subject {args.subject}: CGM + filters "
-        f"($\\Delta t$ = {dt_assim:g} min): "
-        f"params = $p_3$={p3:.2e}, $\\sigma_G$={sigma_g:.3g}{noise_note}",
-        fontsize=11,
-    )
+    ax.set_title("(a) Full record", loc="left")
 
     # Panel B: held-out zoom
     ax = axes[1]
     _draw_filters(ax, zoom, cgm_ms=6.5, cgm_label="CGM")
     if t_zoom0 <= t_split + 1e-6 <= t_zoom1:
-        ax.axvline(t_split, color="#2E86AB", ls="--", lw=0.9, alpha=0.8, zorder=0)
-    ax.set_xlabel("time [h]")
-    ax.set_ylabel("glucose [mg/dL]")
+        ax.axvline(
+            t_split,
+            color=PALETTE["black"],
+            ls="--",
+            lw=0.8,
+            alpha=0.72,
+            zorder=0,
+        )
+    ax.set_xlabel("Time [h]")
+    ax.set_ylabel("Glucose [mg/dL]")
     ax.set_xlim(t_zoom0, t_zoom1)
-    ax.grid(True, alpha=0.28)
-    ax.legend(
-        loc="upper left",
-        bbox_to_anchor=(1.02, 1.0),
-        fontsize=7.5,
-        frameon=False,
-        borderaxespad=0.0,
-        handlelength=1.8,
-    )
-    ax.set_title(
-        f"Held-out means {sigma_tag.replace('pred ', '')} "
-        f"(same EnKF $\\hat\\theta$; "
-        f"$\\Delta t$={dt_assim:g} min; $t\\in[{t_zoom0:g},{t_zoom1:g}]$ h)",
-        fontsize=11,
-    )
+    ax.set_title("(b) Held-out window", loc="left")
+    style_curve_axis(ax, grid_axis="y")
 
     # y-limits from visible window (include ± scaled σ so bands aren't clipped)
     y_parts = [cgm[zoom]]
     for name in order:
         g = tracks[name][zoom]
         if name in stds:
-            boost = 1.22 if name in ("EKF", "UKF") else 1.0
+            boost = 1.0
             s = band_scale * boost * stds[name][zoom]
             y_parts.extend([g - s, g + s])
         else:
             y_parts.append(g)
     y_src = np.concatenate([np.asarray(p, dtype=float).ravel() for p in y_parts])
-    y_lo = float(np.nanmin(y_src) - 10)
-    y_hi = float(np.nanmax(y_src) + 10)
+    y_span = float(np.nanmax(y_src) - np.nanmin(y_src))
+    y_pad = max(4.0, 0.04 * y_span)
+    y_lo = float(np.nanmin(y_src) - y_pad)
+    y_hi = float(np.nanmax(y_src) + y_pad)
     axes[1].set_ylim(y_lo, y_hi)
     y_parts_full = [cgm]
     for name in order:
         g = tracks[name]
         if name in stds:
-            boost = 1.22 if name in ("EKF", "UKF") else 1.0
+            boost = 1.0
             s = band_scale * boost * stds[name]
             y_parts_full.extend([g - s, g + s])
         else:
@@ -1052,19 +1030,22 @@ def main():
         xy=(t_split, y_hi_full),
         xytext=(6, -12),
         textcoords="offset points",
-        fontsize=8,
-        color="#2E86AB",
+        fontsize=7,
+        color=PALETTE["black"],
         va="top",
     )
 
     tag = _output_tag()
     out = os.path.join(OUTPUT_DIR, f"{tag}.png")
-    fig.savefig(out, dpi=170)
-    print(f"Wrote {out}")
+    out_png, out_pdf = save_publication_figure(fig, out)
+    print(f"Wrote {out_png}")
+    print(f"Wrote {out_pdf}")
     if not args.no_latest and not str(args.out_suffix).strip():
         latest = os.path.join(OUTPUT_DIR, "filter_tracks.png")
-        fig.savefig(latest, dpi=170)
-        print(f"Wrote {latest}")
+        latest_png, latest_pdf = save_publication_figure(fig, latest)
+        print(f"Wrote {latest_png}")
+        print(f"Wrote {latest_pdf}")
+    plt.close(fig)
     print(f"  θ: p3={p3:.6g}  sigma_g={sigma_g:.6g}  ({theta_src})")
     print(f"  Δt={dt_assim:g} min (stride={stride})  n_obs={n_obs}  n_train={n_train}  n_held={n_held}")
     print(f"  mode={'predictive' if args.predictive else 'filtered'}  band_scale={band_scale:g}")

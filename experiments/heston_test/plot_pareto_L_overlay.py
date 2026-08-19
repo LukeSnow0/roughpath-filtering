@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import csv
 import os
+import sys
 from collections import defaultdict
 from collections.abc import Callable
 
@@ -25,11 +26,20 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+EXPERIMENTS_DIR = os.path.abspath(os.path.join(HERE, ".."))
+sys.path.insert(0, EXPERIMENTS_DIR)
 OUTPUT_DIR = os.path.join(HERE, "output")
+from mfts_test.plot_style import (
+    DOUBLE_COLUMN_WIDTH,
+    METHOD_COLORS,
+    PALETTE,
+    save_publication_figure,
+    style_curve_axis,
+)
 
 # Shade is mean ± BAND_SCALE * σ (mean sits in the middle).
-BAND_SCALE = 0.1
-SHADE_ALPHA = 0.22
+BAND_SCALE = 1.0
+SHADE_ALPHA = 0.14
 SINGLE_X_HALF = 1.04
 
 # (display name, color, marker, annotate?, row predicate)
@@ -37,23 +47,23 @@ PlotSeries = tuple[str, str, str, bool, Callable[[dict], bool]]
 PLOT_SERIES: list[PlotSeries] = [
     (
         "WSC-KF m=3",
-        "#6A4C93",
+        METHOD_COLORS["WSC-KF"],
         "s",
         True,
         lambda r: r["family"] == "WSC-KF-product" and "-m3-" in r["label"],
     ),
     (
         "WSC-KF m=5",
-        "#C77DFF",
+        PALETTE["salmon"],
         "D",
         True,
         lambda r: r["family"] == "WSC-KF-product" and "-m5-" in r["label"],
     ),
-    ("CD-EnKF", "#F6AE2D", "o", True, lambda r: r["family"] == "CD-EnKF"),
-    ("PF", "#F24236", "o", True, lambda r: r["family"] == "PF"),
-    ("CD-EKF", "#2E86AB", "s", False, lambda r: r["family"] == "CD-EKF"),
-    ("CD-UKF (coarse)", "#3DA35D", "s", False, lambda r: r["family"] == "CD-UKF"),
-    ("CD-CKF", "#7DCEA0", "s", False, lambda r: r["family"] == "CD-CKF"),
+    ("CD-EnKF", METHOD_COLORS["CD-EnKF"], "^", True, lambda r: r["family"] == "CD-EnKF"),
+    ("PF", METHOD_COLORS["PF"], "v", True, lambda r: r["family"] == "PF"),
+    ("CD-EKF", METHOD_COLORS["CD-EKF"], "s", False, lambda r: r["family"] == "CD-EKF"),
+    ("CD-UKF (coarse)", METHOD_COLORS["CD-UKF"], "D", False, lambda r: r["family"] == "CD-UKF"),
+    ("CD-CKF", METHOD_COLORS["CD-CKF"], "X", False, lambda r: r["family"] == "CD-CKF"),
 ]
 
 _LABEL_OFFSET = {
@@ -171,19 +181,21 @@ def main():
         summary, delta_t, horizon = _load_raw_summary(tag)
         panels.append((L, tag, summary, delta_t, horizon))
 
-    fig, axes = plt.subplots(1, 3, figsize=(12.5, 4.2), sharex=True, sharey=True)
+    fig, axes = plt.subplots(
+        1, 3, figsize=(DOUBLE_COLUMN_WIDTH, 2.55), sharex=True, sharey=True
+    )
     xlim_xs: list[float] = []
     ylim_ys: list[float] = []
     for ax, (L, tag, summary, _, _) in zip(axes, panels):
-        xs, ys = _draw_panel(ax, summary, show_legend=(L == 2))
+        xs, ys = _draw_panel(ax, summary, show_legend=False)
         xlim_xs.extend(xs)
         ylim_ys.extend(ys)
         n_seeds = summary[0]["n_seeds"] if summary else 0
-        ax.set_title(rf"$L$-scale={L}  ({n_seeds} seeds)", fontsize=11)
+        ax.set_title(rf"$L$-scale = {L} ({n_seeds} seeds)")
         ax.set_xscale("log")
-        ax.grid(True, which="both", alpha=0.3)
+        style_curve_axis(ax, grid_axis="both")
         ax.set_xlabel("Wall-clock time [ms]")
-    axes[0].set_ylabel("Fine-grid RMSE (overall)")
+    axes[0].set_ylabel("Fine-grid RMSE")
 
     if xlim_xs:
         for ax in axes:
@@ -194,19 +206,20 @@ def main():
         for ax in axes:
             ax.set_ylim(max(0.0, y0 - pad), y1 + pad)
 
-    delta_t, horizon = panels[0][3], panels[0][4]
-    fig.suptitle(
-        rf"Heston Pareto at $\Delta t={delta_t:g}$, $\xi=1$, $\rho=-0.7$ "
-        rf"(mean±{BAND_SCALE:g}$\sigma$; horizon={horizon:g}; "
-        r"WSC-KF $m{=}3$: $P\in\{4,16,64\}$, $m{=}5$: $P\in\{9,81\}$)",
-        fontsize=12,
-        y=1.02,
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.005),
+        ncol=4,
     )
-    fig.tight_layout()
+    fig.subplots_adjust(left=0.08, right=0.99, bottom=0.30, top=0.90, wspace=0.16)
     out = os.path.join(OUTPUT_DIR, "pareto_budget_vs_rmse_noise_hi_L234.png")
-    fig.savefig(out, dpi=150, bbox_inches="tight")
+    out_png, out_pdf = save_publication_figure(fig, out)
     plt.close()
-    print(f"Wrote {out}")
+    print(f"Wrote {out_png}")
+    print(f"Wrote {out_pdf}")
 
 
 if __name__ == "__main__":

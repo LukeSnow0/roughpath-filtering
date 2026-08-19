@@ -67,6 +67,14 @@ from movement_model import (
     make_movement_dynamics,
     tau_sigma_to_beta_sigma0,
 )
+from mfts_test.plot_style import (
+    DOUBLE_COLUMN_WIDTH,
+    METHOD_COLORS,
+    METHOD_MARKERS,
+    PALETTE,
+    save_publication_figure,
+    style_curve_axis,
+)
 
 OUTPUT_DIR = os.path.join(HERE, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -535,16 +543,13 @@ with open(CSV_PATH, "w", newline="") as f:
 # Plot
 # ---------------------------------------------------------------------------
 COLORS = {
-    "WSC-KF-product": "#2ca02c",
-    "WSC-KF-recombined": "#98df8a",
-    "CD-EnKF": "#1f77b4",
-    "CD-EKF": "#d62728",
+    "WSC-KF-product": METHOD_COLORS["WSC-KF-product"],
+    "WSC-KF-recombined": METHOD_COLORS["WSC-KF-recombined"],
+    "CD-EnKF": METHOD_COLORS["CD-EnKF"],
+    "CD-EKF": METHOD_COLORS["CD-EKF"],
 }
 MARKERS = {
-    "WSC-KF-product": "*",
-    "WSC-KF-recombined": "P",
-    "CD-EnKF": "o",
-    "CD-EKF": "s",
+    name: METHOD_MARKERS[name] for name in COLORS
 }
 DISPLAY = {
     "WSC-KF-product": "WSC-KF (product)",
@@ -553,13 +558,13 @@ DISPLAY = {
     "CD-EKF": "CD-EKF",
 }
 PLOT_ORDER = ["WSC-KF-product", "WSC-KF-recombined", "CD-EnKF", "CD-EKF"]
-BAND_SCALE = 0.5
+BAND_SCALE = 1.0
 
 
 def _annotate_budgets(ax, fam: str, pts: list[dict], xs, ys):
     if fam == "CD-EKF":
         return
-    color = COLORS.get(fam, "#333")
+    color = COLORS.get(fam, PALETTE["black"])
     for i, (pt, x, y) in enumerate(zip(pts, xs, ys)):
         dy = 7 if i % 2 == 0 else -9
         ax.annotate(
@@ -575,10 +580,10 @@ def _annotate_budgets(ax, fam: str, pts: list[dict], xs, ys):
         )
 
 
-fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.4), sharex=True)
+fig, axes = plt.subplots(1, 2, figsize=(DOUBLE_COLUMN_WIDTH, 2.55), sharex=True)
 metrics = [
-    ("nll_held_per_obs", "held-out NLL / observation", axes[0]),
-    ("nll_full_per_obs", "full-track NLL / observation", axes[1]),
+    ("nll_held_per_obs", "Held-out NLL [nats/observation]", axes[0]),
+    ("nll_full_per_obs", "Full-track NLL [nats/observation]", axes[1]),
 ]
 # Drop exploded recombinations (moment collapse) from the figure only.
 NLL_PLOT_CAP = 50.0
@@ -605,7 +610,7 @@ for metric, ylabel, ax in metrics:
                 [ys[0] - ystd[0]] * 2,
                 [ys[0] + ystd[0]] * 2,
                 color=color,
-                alpha=0.2,
+                alpha=0.14,
                 linewidth=0,
             )
             ax.plot(
@@ -613,41 +618,43 @@ for metric, ylabel, ax in metrics:
                 ys,
                 marker,
                 color=color,
-                ms=11 if marker == "*" else 8,
+                markerfacecolor="white",
+                ms=5.5 if marker == "*" else 4.2,
                 label=DISPLAY[fam],
                 zorder=3,
             )
         else:
-            ax.fill_between(xs, ys - ystd, ys + ystd, color=color, alpha=0.18, linewidth=0)
+            ax.fill_between(xs, ys - ystd, ys + ystd, color=color, alpha=0.14, linewidth=0)
             ax.plot(
                 xs,
                 ys,
                 "-" + marker,
                 color=color,
-                ms=8 if marker != "*" else 11,
-                lw=1.4,
+                markerfacecolor="white",
+                ms=4.2 if marker != "*" else 5.5,
+                lw=1.25,
                 label=DISPLAY[fam],
                 zorder=3,
             )
         _annotate_budgets(ax, fam, pts, xs, ys)
 
     ax.set_xscale("log")
-    ax.set_xlabel("wall-clock per filter pass (ms)")
+    ax.set_xlabel("Wall-clock time [ms]")
     ax.set_ylabel(ylabel)
-    ax.grid(True, which="both", alpha=0.25)
+    style_curve_axis(ax, grid_axis="both")
 
-axes[0].legend(frameon=False, fontsize=8)
-fig.suptitle(
-    f"{track.band}: paths vs particles @ "
-    f"$(\\tau_v,\\sigma_v)=({TAU_V:g},{SIGMA_V:g})$, "
-    f"held={N_HELD}/{N_OBS}, {SOLVER}",
-    fontsize=11,
+fig.legend(
+    *axes[0].get_legend_handles_labels(),
+    loc="lower center",
+    bbox_to_anchor=(0.5, 0.005),
+    ncol=4,
 )
-fig.tight_layout()
+fig.subplots_adjust(left=0.09, right=0.99, bottom=0.30, top=0.96, wspace=0.30)
 PLOT_PATH = os.path.join(OUTPUT_DIR, "pareto_budget_vs_nll.png")
-fig.savefig(PLOT_PATH, dpi=150)
+plot_png, plot_pdf = save_publication_figure(fig, PLOT_PATH)
 plt.close(fig)
 
 print(f"\nWrote {RAW_PATH}")
 print(f"Wrote {CSV_PATH}")
-print(f"Wrote {PLOT_PATH}")
+print(f"Wrote {plot_png}")
+print(f"Wrote {plot_pdf}")

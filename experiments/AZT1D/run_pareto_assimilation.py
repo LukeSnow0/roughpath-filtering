@@ -64,6 +64,15 @@ from glucose_model import (
     make_glucose_dynamics,
     mape_glucose,
 )
+from plot_style import (
+    DOUBLE_COLUMN_WIDTH,
+    METHOD_COLORS,
+    METHOD_MARKERS,
+    PALETTE,
+    SINGLE_COLUMN_WIDTH,
+    save_publication_figure,
+    style_curve_axis,
+)
 
 OUTPUT_DIR = os.path.join(HERE, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -501,6 +510,14 @@ def aggregate(raw_rows: list[dict]) -> list[dict]:
             np.std([r["crps_held"] for r in sub], ddof=1) if n > 1 else 0.0
         )
         mape_std = float(np.std([r["mape_pct"] for r in sub], ddof=1) if n > 1 else 0.0)
+        time_std = float(
+            np.std([r["time_s"] for r in sub], ddof=1) if n > 1 else 0.0
+        )
+        time_per_obs_std = float(
+            np.std([r["time_per_obs_ms"] for r in sub], ddof=1)
+            if n > 1
+            else 0.0
+        )
         out.append(
             {
                 **base,
@@ -514,7 +531,13 @@ def aggregate(raw_rows: list[dict]) -> list[dict]:
                 "mape_std": mape_std,
                 "mape_se": mape_std / np.sqrt(n) if n > 1 else 0.0,
                 "time_s_mean": float(np.mean([r["time_s"] for r in sub])),
+                "time_s_std": time_std,
+                "time_s_se": time_std / np.sqrt(n) if n > 1 else 0.0,
                 "time_per_obs_ms_mean": float(np.mean([r["time_per_obs_ms"] for r in sub])),
+                "time_per_obs_ms_std": time_per_obs_std,
+                "time_per_obs_ms_se": (
+                    time_per_obs_std / np.sqrt(n) if n > 1 else 0.0
+                ),
                 "n_runs": n,
             }
         )
@@ -527,20 +550,11 @@ def plot_one_delta(
     *,
     per_obs: bool = False,
     metrics: tuple[tuple[str, str, str], ...] = (
-        ("nll_held_mean", "nll_held_se", "Held-out NLL / obs"),
-        ("mape_mean", "mape_se", "MAPE vs CGM [%]"),
+        ("nll_held_mean", "nll_held_se", "Held-out NLL [nats/observation]"),
+        ("mape_mean", "mape_se", "Full-record MAPE [%]"),
     ),
-    title_kind: str | None = None,
-):
+) -> tuple[str, str]:
     """Single-Δt Pareto in the cohort style (one series per filter)."""
-    COLORS = {
-        "WSC-KF-product": "#6A4C93",
-        "CD-EKF": "#2E86AB",
-        "CD-UKF": "#E8B923",
-        "CD-CKF": "#3DA35D",
-        "CD-EnKF": "#D97706",
-        "PF": "#F24236",
-    }
     DISPLAY = {
         "WSC-KF-product": "WSC-KF",
         "CD-EKF": "EKF",
@@ -551,18 +565,25 @@ def plot_one_delta(
     }
     families = ("WSC-KF-product", "CD-EKF", "CD-UKF", "CD-CKF", "CD-EnKF", "PF")
     s0 = summary_dt[0]
-    dt = float(s0["delta_t_min"])
+    crps_figure = all(metric[0].startswith("crps_") for metric in metrics)
 
     n_panel = len(metrics)
-    fig, axes = plt.subplots(1, n_panel, figsize=(5.5 * n_panel, 4.6), squeeze=False)
+    figure_width = DOUBLE_COLUMN_WIDTH if n_panel > 1 else SINGLE_COLUMN_WIDTH
+    figure_height = 2.55 if n_panel > 1 else 2.45
+    fig, axes = plt.subplots(
+        1,
+        n_panel,
+        figsize=(figure_width, figure_height),
+        squeeze=False,
+    )
     axes = axes[0]
     xkey = "time_per_obs_ms_mean" if per_obs else "time_s_mean"
     xlabel = (
-        "Wall-clock / obs [ms] (mean ± SE over seeds)"
+        "Mean time / observation [ms]"
         if per_obs
-        else "Wall-clock [ms] (fixed calendar span; mean ± SE over seeds)"
+        else "Mean wall time [ms]"
     )
-    for ax, (ykey, yerrkey, ylab) in zip(axes, metrics):
+    for panel_idx, (ax, (ykey, yerrkey, ylab)) in enumerate(zip(axes, metrics)):
         for fam in families:
             pts = [s for s in summary_dt if s["family"] == fam]
             if not pts:
@@ -573,18 +594,35 @@ def plot_one_delta(
                 if per_obs
                 else [1e3 * s["time_s_mean"] for s in pts]
             )
+            xerr = (
+                [s["time_per_obs_ms_se"] for s in pts]
+                if per_obs
+                else [1e3 * s["time_s_se"] for s in pts]
+            )
             ys = [s[ykey] for s in pts]
             yerr = [float(s.get(yerrkey, 0.0)) for s in pts]
+            display_name = DISPLAY[fam]
+            legend_name = (
+                f"{display_name} (mixture)"
+                if crps_figure and fam == "PF"
+                else display_name
+            )
             ax.errorbar(
                 xs,
                 ys,
+                xerr=xerr,
                 yerr=yerr,
-                fmt="o-",
-                color=COLORS[fam],
-                markersize=7,
-                capsize=2.5,
-                linewidth=1.2 if len(pts) > 1 else 0.0,
-                label=DISPLAY[fam],
+                fmt=METHOD_MARKERS[display_name],
+                color=METHOD_COLORS[fam],
+                markerfacecolor="white",
+                markeredgewidth=0.85,
+                markersize=4.4,
+                capsize=2.0,
+                capthick=0.7,
+                elinewidth=0.7,
+                linestyle="-" if len(pts) > 1 else "none",
+                linewidth=1.1,
+                label=legend_name,
                 zorder=3,
             )
             for s, x, y in zip(pts, xs, ys):
@@ -594,28 +632,45 @@ def plot_one_delta(
                         str(bud),
                         (x, y),
                         textcoords="offset points",
-                        xytext=(4, 4),
-                        fontsize=7,
-                        color=COLORS[fam],
+                        xytext=(3, 3),
+                        fontsize=6.2,
+                        color=METHOD_COLORS[fam],
                     )
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylab)
         ax.set_xscale("log")
-        ax.grid(True, alpha=0.3, which="both")
-        ax.legend(frameon=False, fontsize=8)
+        style_curve_axis(ax, grid_axis="both")
+        if n_panel > 1:
+            ax.set_title(f"({chr(ord('a') + panel_idx)})")
 
-    if title_kind is None:
-        title_kind = "per-obs cost" if per_obs else "Pareto"
-    fig.suptitle(
-        rf"AZT1D subject {int(s0['subject'])}: $\Delta t={dt:g}$ min {title_kind}"
-        "\n"
-        rf"$\hat\theta$ $p_3$={s0['p3']:.2e}, $\sigma_G$={s0['sigma_g']:.3f}; "
-        f"span≈{SPAN_MIN/1440:.1f} d  (bars = ±1 SE over seeds)",
-        fontsize=11,
+    axes[0].text(
+        0.02,
+        0.98,
+        r"error bars: $\pm 1$ SE",
+        transform=axes[0].transAxes,
+        ha="left",
+        va="top",
+        fontsize=6.4,
+        color=PALETTE["neutral_gray"],
     )
-    fig.tight_layout()
-    fig.savefig(png_path, dpi=160)
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.005),
+        ncol=min(3 if n_panel == 1 else 6, len(labels)),
+    )
+    fig.subplots_adjust(
+        left=0.12 if n_panel > 1 else 0.19,
+        right=0.985 if n_panel > 1 else 0.97,
+        bottom=0.27 if n_panel > 1 else 0.31,
+        top=0.94 if n_panel > 1 else 0.98,
+        wspace=0.34,
+    )
+    written_png, written_pdf = save_publication_figure(fig, png_path)
     plt.close(fig)
+    return str(written_png), str(written_pdf)
 
 
 def plot_by_delta(summary: list[dict], prefix_path: str) -> list[str]:
@@ -626,31 +681,28 @@ def plot_by_delta(summary: list[dict], prefix_path: str) -> list[str]:
     deltas = sorted({float(s["delta_t_min"]) for s in summary})
     written: list[str] = []
     nll_mape = (
-        ("nll_held_mean", "nll_held_se", "Held-out NLL / obs"),
-        ("mape_mean", "mape_se", "MAPE vs CGM [%]"),
+        ("nll_held_mean", "nll_held_se", "Held-out NLL [nats/observation]"),
+        ("mape_mean", "mape_se", "Full-record MAPE [%]"),
     )
     crps_only = (
-        ("crps_held_mean", "crps_held_se", "Held-out CRPS"),
+        ("crps_held_mean", "crps_held_se", "Held-out CRPS [mg/dL]"),
     )
     for dt in deltas:
         sub = [s for s in summary if float(s["delta_t_min"]) == dt]
         for per_obs, suffix in ((False, ""), (True, "_per_obs")):
             tag = f"{base}_dt{dt:g}{suffix}{ext}"
-            plot_one_delta(sub, tag, per_obs=per_obs, metrics=nll_mape)
-            written.append(tag)
+            written.extend(
+                plot_one_delta(sub, tag, per_obs=per_obs, metrics=nll_mape)
+            )
             tag_c = f"{base}_dt{dt:g}_crps{suffix}{ext}"
-            plot_one_delta(
-                sub,
-                tag_c,
-                per_obs=per_obs,
-                metrics=crps_only,
-                title_kind=(
-                    "per-obs CRPS (PF=mixture)"
-                    if per_obs
-                    else "CRPS Pareto (PF=mixture)"
+            written.extend(
+                plot_one_delta(
+                    sub,
+                    tag_c,
+                    per_obs=per_obs,
+                    metrics=crps_only,
                 ),
             )
-            written.append(tag_c)
     return written
 
 

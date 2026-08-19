@@ -7,7 +7,7 @@ Run:
   uv run --extra experiments python experiments/mfts_test/run_pareto_iters_smoke.py
 
 Outputs:
-  ``experiments/mfts_test/output/pareto_iters_smoke.png``
+  ``experiments/mfts_test/output/pareto_iters_smoke.{pdf,png}``
   ``experiments/mfts_test/output/pareto_iters_smoke.csv``
 """
 
@@ -54,6 +54,13 @@ from mfts_model import (
     mape_pct,
     simulate_mfts,
 )
+from plot_style import (
+    DOUBLE_COLUMN_WIDTH,
+    METHOD_COLORS,
+    METHOD_MARKERS,
+    save_publication_figure,
+    style_curve_axis,
+)
 
 OUTPUT_DIR = os.path.join(HERE, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -80,7 +87,7 @@ LAMBDA_WSCKF, SIGMA_WSCKF = 2.0e-3, 5.0
 SIGMA_UKF = 1.0
 F1, F2 = 5.0, 5.0
 
-COLORS = {"EKF": "#2E86AB", "UKF": "#3DA35D", "WSC-KF": "#6A4C93"}
+COLORS = {name: METHOD_COLORS[name] for name in ("EKF", "UKF", "WSC-KF")}
 
 
 def time_call(fn, *args):
@@ -268,33 +275,88 @@ with open(csv_path, "w", newline="") as f:
     for r in rows:
         w.writerow({"delta_t_min": DELTA_T_MIN, "seed": SEED, **r})
 
-fig, axes = plt.subplots(1, 2, figsize=(10, 4.2), sharex=True)
-all_xs = []
-for ax, metric, ylabel in zip(axes, ("mapex", "maped"), ("MAPEx [%]", "MAPEd [%]")):
+fig, axes = plt.subplots(
+    1,
+    2,
+    figsize=(DOUBLE_COLUMN_WIDTH, 2.7),
+    sharex=True,
+)
+all_xs: list[float] = []
+handles = []
+labels = []
+label_offsets = {
+    "EKF": (-3, 4),
+    "UKF": (3, 4),
+    "WSC-KF": (0, -8),
+}
+for panel_idx, (ax, metric, title) in enumerate(
+    zip(
+        axes,
+        ("mapex", "maped"),
+        ("Tank states", "Disturbance states"),
+    )
+):
     for fam in ("EKF", "UKF", "WSC-KF"):
         pts = sorted([r for r in rows if r["family"] == fam], key=lambda r: r["num_iter"])
-        xs = [1e3 * r["time_s"] for r in pts]
-        ys = [r[metric] for r in pts]
+        xs = np.asarray([1e3 * r["time_s"] for r in pts], dtype=np.float64)
+        ys = np.asarray([r[metric] for r in pts], dtype=np.float64)
         all_xs.extend(xs)
-        ax.plot(xs, ys, "-o", color=COLORS[fam], lw=1.6, markersize=6, label=fam)
+        line, = ax.plot(
+            xs,
+            ys,
+            color=COLORS[fam],
+            marker=METHOD_MARKERS[fam],
+            linestyle="-",
+            linewidth=1.25,
+            markersize=4.3,
+            label=fam,
+        )
+        if panel_idx == 0:
+            handles.append(line)
+            labels.append(fam)
+        dx, dy = label_offsets[fam]
+        for point, x, y in zip(pts, xs, ys):
+            ax.annotate(
+                str(point["num_iter"]),
+                (x, y),
+                textcoords="offset points",
+                xytext=(dx, dy),
+                ha="center",
+                va="bottom" if dy >= 0 else "top",
+                fontsize=6.1,
+                color=COLORS[fam],
+            )
     ax.set_xlabel("Wall-clock time [ms]")
-    ax.set_ylabel(ylabel)
+    ax.set_ylabel("MAPE [%]")
+    ax.set_title(title)
     ax.set_xscale("log")
-    ax.set_yscale("log")
-    ax.grid(True, which="both", alpha=0.3)
+    style_curve_axis(ax, grid_axis="both")
+    ax.margins(y=0.14)
 if all_xs:
     axes[0].set_xlim(min(all_xs) / 1.25, max(all_xs) * 1.35)
-axes[0].legend(fontsize=9, loc="best")
-fig.suptitle(
-    rf"Smoke: iterated update Pareto at $\Delta t={DELTA_T_MIN:g}$ min "
-    rf"(seed={SEED}; WSC-KF product 9 paths)",
-    fontsize=11,
+fig.legend(
+    handles,
+    labels,
+    loc="upper center",
+    bbox_to_anchor=(0.5, 0.985),
+    ncol=3,
+    title="Engineering smoke · node labels: update iterations",
+    fontsize=6.8,
+    title_fontsize=6.8,
+    columnspacing=0.9,
 )
-fig.tight_layout()
+fig.subplots_adjust(
+    left=0.075,
+    right=0.99,
+    bottom=0.19,
+    top=0.75,
+    wspace=0.27,
+)
 plot_path = os.path.join(OUTPUT_DIR, "pareto_iters_smoke.png")
-fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+plot_png_path, plot_pdf_path = save_publication_figure(fig, plot_path)
 plt.close()
 
 print("-" * 60)
-print(f"Wrote {plot_path}")
+print(f"Wrote {plot_png_path}")
+print(f"Wrote {plot_pdf_path}")
 print(f"Wrote {csv_path}")

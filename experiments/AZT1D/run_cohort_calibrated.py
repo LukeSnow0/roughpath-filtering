@@ -5,9 +5,9 @@ Protocol
 For each AZT1D subject ``i``:
   1. Adam EnKF-MLE of ``(p₃, σ_G)`` on that subject's train prefix → ``θ̂_i``.
   2. Run WSC-KF / EKF / UKF / CKF / EnKF / PF at ``θ̂_i`` (no per-filter refit).
-  3. Record held-out self-NLL/obs and MAPE.
+  3. Record held-out self-NLL/obs and full-record MAPE.
 
-Aggregate mean ± SE across subjects and plot bar charts.
+Aggregate mean ± SE across subjects and plot compact Pareto summaries.
 
 This is the natural multi-patient extension of the single-subject calibrated bakeoff:
 patient-specific calibration, then population summary of filter performance.
@@ -19,7 +19,8 @@ Run:
 
 Outputs under ``experiments/AZT1D/output/``:
   ``cohort_calibrated_per_subject.csv``, ``cohort_calibrated_summary.csv``,
-  ``cohort_calibrated_bakeoff.png``, ``cohort_calibrated_params.json``
+  ``cohort_calibrated_pareto.{pdf,png}``, ``cohort_calibrated_crps.{pdf,png}``,
+  ``cohort_calibrated_params.json``
 """
 
 from __future__ import annotations
@@ -80,6 +81,15 @@ from glucose_model import (
     init_estimate,
     make_glucose_dynamics,
     mape_glucose,
+)
+from plot_style import (
+    DOUBLE_COLUMN_WIDTH,
+    METHOD_COLORS,
+    METHOD_MARKERS,
+    PALETTE,
+    SINGLE_COLUMN_WIDTH,
+    save_publication_figure,
+    style_curve_axis,
 )
 
 OUTPUT_DIR = os.path.join(HERE, "output")
@@ -665,26 +675,22 @@ def main():
             indent=2,
         )
 
-    colors = {
-        "WSC-KF": "#6A4C93",
-        "EKF": "#2E86AB",
-        "UKF": "#E8B923",
-        "CKF": "#3DA35D",
-        "EnKF": "#D97706",
-        "PF": "#F24236",
-    }
     families = ["WSC-KF", "EKF", "UKF", "CKF", "EnKF", "PF"]
     if not _args.with_ckf:
         families = [f for f in families if f != "CKF"]
 
     # Pareto: NLL / MAPE vs wall-clock
-    fig, axes = plt.subplots(1, 2, figsize=(11.0, 4.6))
-    for ax, ykey, yerrkey, ylab in zip(
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(DOUBLE_COLUMN_WIDTH, 2.55),
+    )
+    for panel_idx, (ax, ykey, yerrkey, ylab) in enumerate(zip(
         axes,
         ("nll_mean", "mape_mean"),
         ("nll_se", "mape_se"),
-        ("Held-out NLL / obs", "MAPE vs CGM [%]"),
-    ):
+        ("Held-out NLL [nats/observation]", "Full-record MAPE [%]"),
+    )):
         for fam in families:
             pts = [s for s in summary if s["filter"] == fam]
             if not pts:
@@ -696,43 +702,67 @@ def main():
             xerr = [1e3 * s["time_s_se"] for s in pts]
             ax.errorbar(
                 xs, ys, xerr=xerr, yerr=yerr,
-                fmt="o-", color=colors[fam], markersize=7, capsize=2.5,
-                linewidth=1.2 if len(pts) > 1 else 0.0,
+                fmt=METHOD_MARKERS[fam],
+                color=METHOD_COLORS[fam],
+                markerfacecolor="white",
+                markeredgewidth=0.85,
+                markersize=4.4,
+                capsize=2.0,
+                capthick=0.7,
+                elinewidth=0.7,
+                linestyle="-" if len(pts) > 1 else "none",
+                linewidth=1.1,
                 label=fam, zorder=3,
             )
             for s, x, y in zip(pts, xs, ys):
                 if s["budget"]:
                     ax.annotate(
                         str(s["budget"]), (x, y),
-                        textcoords="offset points", xytext=(4, 4),
-                        fontsize=7, color=colors[fam],
+                        textcoords="offset points", xytext=(3, 3),
+                        fontsize=6.2, color=METHOD_COLORS[fam],
                     )
-        ax.set_xlabel("Wall-clock [ms] (mean ± SE over subjects)")
+        ax.set_xlabel("Mean wall time [ms]")
         ax.set_ylabel(ylab)
         ax.set_xscale("log")
-        ax.grid(True, alpha=0.3, which="both")
-        ax.legend(frameon=False, fontsize=8)
+        ax.set_title(f"({chr(ord('a') + panel_idx)})")
+        style_curve_axis(ax, grid_axis="both")
 
-    n_ok = len(all_params)
-    fig.suptitle(
-        f"AZT1D cohort Pareto: per-subject EnKF $\\hat\\theta_i$, then budget ladders\n"
-        f"N={n_ok} subjects; $\\Delta t$={DT_ASSIM:g} min; "
-        f"WSC-KF product paths={[c.n_paths for c in WSCKF_CONFIGS]}; "
-        f"EnKF/PF={ENKF_LIST}",
-        fontsize=11,
+    axes[0].text(
+        0.02,
+        0.98,
+        r"error bars: $\pm 1$ SE",
+        transform=axes[0].transAxes,
+        ha="left",
+        va="top",
+        fontsize=6.4,
+        color=PALETTE["neutral_gray"],
     )
-    fig.tight_layout()
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.005),
+        ncol=min(6, len(labels)),
+    )
+    fig.subplots_adjust(
+        left=0.105,
+        right=0.985,
+        bottom=0.27,
+        top=0.94,
+        wspace=0.34,
+    )
     png_path = os.path.join(OUTPUT_DIR, f"cohort_calibrated_pareto{OUT_TAG}.png")
-    fig.savefig(png_path, dpi=160)
+    pareto_png, pareto_pdf = save_publication_figure(fig, png_path)
     if _args.replace_pareto_plot:
         alt = os.path.join(OUTPUT_DIR, "pareto_assimilation.png")
-        fig.savefig(alt, dpi=160)
-        print(f"Wrote {alt}")
+        alt_png, alt_pdf = save_publication_figure(fig, alt)
+        print(f"Wrote {alt_png}")
+        print(f"Wrote {alt_pdf}")
     plt.close(fig)
 
-    # CRPS vs wall-clock (mean ± scaled std over subjects; PF = mixture CRPS)
-    err_scale = 0.06  # display ± (err_scale * std); keeps ratios, reduces clutter
-    fig, ax = plt.subplots(figsize=(6.2, 4.6))
+    # CRPS vs wall-clock (mean ± SE over subjects; PF = mixture CRPS)
+    fig, ax = plt.subplots(figsize=(SINGLE_COLUMN_WIDTH, 2.55))
     for fam in families:
         pts = [s for s in summary if s["filter"] == fam]
         if not pts:
@@ -740,63 +770,83 @@ def main():
         pts = sorted(pts, key=lambda s: s["time_s_mean"])
         xs = np.asarray([1e3 * s["time_s_mean"] for s in pts])
         ys = np.asarray([s["crps_mean"] for s in pts])
-        yerr = err_scale * np.asarray([s["crps_std"] for s in pts])
-        xerr = err_scale * np.asarray([1e3 * s["time_s_std"] for s in pts])
-        col = colors[fam]
-        if len(pts) > 1:
-            ax.plot(xs, ys, "-", color=col, linewidth=1.2, zorder=2)
+        yerr = np.asarray([s["crps_se"] for s in pts])
+        xerr = np.asarray([1e3 * s["time_s_se"] for s in pts])
         ax.errorbar(
             xs, ys, xerr=xerr, yerr=yerr,
-            fmt="s", color=col, ecolor=col,
-            markersize=7, markerfacecolor="none", markeredgecolor=col,
-            markeredgewidth=1.5, capsize=2.0, elinewidth=0.9,
-            linestyle="none", label=fam, zorder=3,
+            fmt=METHOD_MARKERS[fam],
+            color=METHOD_COLORS[fam],
+            markerfacecolor="white",
+            markeredgewidth=0.85,
+            markersize=4.4,
+            capsize=2.0,
+            capthick=0.7,
+            elinewidth=0.7,
+            linestyle="-" if len(pts) > 1 else "none",
+            linewidth=1.1,
+            label="PF (mixture)" if fam == "PF" else fam,
+            zorder=3,
         )
         for s, x, y in zip(pts, xs, ys):
             # Annotate particle/ensemble budgets only (skip WSC path count).
             if s["budget"] and s["filter"] in ("EnKF", "PF"):
                 ax.annotate(
                     str(s["budget"]), (x, y),
-                    textcoords="offset points", xytext=(4, 4),
-                    fontsize=7, color=col,
+                    textcoords="offset points", xytext=(3, 3),
+                    fontsize=6.2, color=METHOD_COLORS[fam],
                 )
-    ax.set_xlabel(
-        rf"Wall-clock [ms] (mean $\pm$ {err_scale:g}\,std over subjects)"
-    )
-    ax.set_ylabel("Held-out CRPS")
+    ax.set_xlabel("Mean wall time [ms]")
+    ax.set_ylabel("Held-out CRPS [mg/dL]")
     ax.set_xscale("log")
-    ax.set_yscale("log")
-    ax.grid(True, alpha=0.3, which="both")
-    ax.legend(frameon=False, fontsize=8)
-    fig.suptitle(
-        f"AZT1D cohort CRPS Pareto ($\\Delta t$={DT_ASSIM:g} min)\n"
-        f"N={n_ok} subjects; "
-        f"WSC-KF paths={[c.n_paths for c in WSCKF_CONFIGS]}; "
-        rf"bars = $\pm${err_scale:g} std",
-        fontsize=11,
+    style_curve_axis(ax, grid_axis="both")
+    ax.text(
+        0.02,
+        0.98,
+        r"error bars: $\pm 1$ SE",
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=6.4,
+        color=PALETTE["neutral_gray"],
     )
-    fig.tight_layout()
+    fig.legend(
+        *ax.get_legend_handles_labels(),
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.005),
+        ncol=min(3, len(families)),
+    )
+    fig.subplots_adjust(left=0.19, right=0.97, bottom=0.32, top=0.98)
     crps_png = os.path.join(OUTPUT_DIR, f"cohort_calibrated_crps{OUT_TAG}.png")
-    fig.savefig(crps_png, dpi=160)
+    written_crps_png, written_crps_pdf = save_publication_figure(fig, crps_png)
     # Also refresh the untagged path when running a non-default Δt, after
     # preserving any existing Δt=5 figure. Skip when --out-suffix is set so
     # recalibrations do not clobber the previous default figures.
     if abs(DT_ASSIM - BASE_DT) > 1e-9 and not _sfx:
         untagged = os.path.join(OUTPUT_DIR, "cohort_calibrated_crps.png")
         dt5 = os.path.join(OUTPUT_DIR, "cohort_calibrated_crps_dt5.png")
-        if os.path.isfile(untagged) and not os.path.isfile(dt5):
-            import shutil
-            shutil.copy2(untagged, dt5)
-            print(f"Preserved {dt5}")
-        fig.savefig(untagged, dpi=160)
-        print(f"Wrote {untagged}")
+        import shutil
+        for source, preserved in (
+            (untagged, dt5),
+            (
+                os.path.splitext(untagged)[0] + ".pdf",
+                os.path.splitext(dt5)[0] + ".pdf",
+            ),
+        ):
+            if os.path.isfile(source) and not os.path.isfile(preserved):
+                shutil.copy2(source, preserved)
+                print(f"Preserved {preserved}")
+        untagged_png, untagged_pdf = save_publication_figure(fig, untagged)
+        print(f"Wrote {untagged_png}")
+        print(f"Wrote {untagged_pdf}")
     plt.close(fig)
 
     print(f"\nWrote {per_path}")
     print(f"Wrote {sum_path}")
     print(f"Wrote {params_path}")
-    print(f"Wrote {png_path}")
-    print(f"Wrote {crps_png}")
+    print(f"Wrote {pareto_png}")
+    print(f"Wrote {pareto_pdf}")
+    print(f"Wrote {written_crps_png}")
+    print(f"Wrote {written_crps_pdf}")
     print("\nCohort summary (mean ± SE for NLL/MAPE; CRPS mean ± std):")
     for s in summary:
         print(

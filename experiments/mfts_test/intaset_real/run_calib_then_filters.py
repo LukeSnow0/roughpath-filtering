@@ -31,9 +31,10 @@ os.environ.setdefault(
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+MFTS_DIR = os.path.abspath(os.path.join(HERE, ".."))
 EXPERIMENTS_DIR = os.path.abspath(os.path.join(HERE, "..", ".."))
 ROOT_DIR = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-for pth in (HERE, EXPERIMENTS_DIR, ROOT_DIR):
+for pth in (HERE, MFTS_DIR, EXPERIMENTS_DIR, ROOT_DIR):
     sys.path.insert(0, pth)
 
 import jax
@@ -62,6 +63,12 @@ from intaset_model import (
     prepare_filter_grids,
     save_params,
     simulate_open_loop,
+)
+from plot_style import (
+    DOUBLE_COLUMN_WIDTH,
+    PALETTE,
+    save_publication_figure,
+    style_curve_axis,
 )
 
 OUTPUT_DIR = os.path.join(HERE, "output")
@@ -573,8 +580,10 @@ with open(sum_path, "w", newline="") as f:
         w.writerow(r)
 print(f"Wrote {sum_path}")
 
-# Plot: grouped bars open-loop vs filter-calib for MAPE and NLL
-fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.4))
+# Plot: paired estimates for open-loop vs filter-calibrated parameters.
+# Points avoid the ambiguous zero baseline of bars when the NLL panel needs a
+# logarithmic scale to show both calibration regimes.
+fig, axes = plt.subplots(1, 2, figsize=(DOUBLE_COLUMN_WIDTH, 2.65))
 # Order methods for display
 order = [
     ("CD-EKF", "EKF", 0),
@@ -584,14 +593,30 @@ order = [
     ("CD-EnKF", "EnKF-100", 100),
     ("CD-EnKF", "EnKF-250", 250),
 ]
+display_labels = [
+    "CD-EKF",
+    "WSC-KF\n$P=9$",
+    "WSC-KF\n$P=81$",
+    f"WSC-KF\n$k={_k_prop}$",
+    "CD-EnKF\n$N=100$",
+    "CD-EnKF\n$N=250$",
+]
 x = np.arange(len(order))
-width = 0.35
-for ax, metric, ylab, title in (
-    (axes[0], "mape_mean", "MAPE [%]", "Held-out MAPE"),
-    (axes[1], "nll_mean", "NLL / obs", "Held-out NLL / obs"),
+offset = 0.14
+for ax, metric, std_metric, ylab, title in (
+    (axes[0], "mape_mean", "mape_std", "MAPE [%]", "MAPE"),
+    (
+        axes[1],
+        "nll_mean",
+        "nll_std",
+        "NLL [nats/observation]",
+        "NLL",
+    ),
 ):
     ol = []
     fc = []
+    ol_std = []
+    fc_std = []
     for fam, lab, bud in order:
         ol_r = next(
             r for r in summary if r["calib"] == "open-loop" and r["family"] == fam and r["label"] == lab
@@ -603,23 +628,62 @@ for ax, metric, ylab, title in (
         )
         ol.append(ol_r[metric])
         fc.append(fc_r[metric])
-    ax.bar(x - width / 2, ol, width, label="open-loop LS", color="0.65", edgecolor="0.3")
-    ax.bar(x + width / 2, fc, width, label="filter-calib", color="#2E86AB", edgecolor="0.3")
+        ol_std.append(ol_r[std_metric])
+        fc_std.append(fc_r[std_metric])
+    ax.errorbar(
+        x - offset,
+        ol,
+        yerr=ol_std,
+        label="Open-loop LS",
+        fmt="s",
+        color=PALETTE["neutral_gray"],
+        markerfacecolor="white",
+        markeredgewidth=0.8,
+        markersize=4.0,
+        elinewidth=0.8,
+        capsize=2.0,
+        capthick=0.8,
+        linestyle="none",
+        zorder=3,
+    )
+    ax.errorbar(
+        x + offset,
+        fc,
+        yerr=fc_std,
+        label="Filter calibrated",
+        fmt="o",
+        color=PALETTE["warm_red"],
+        markerfacecolor=PALETTE["warm_red"],
+        markeredgewidth=0.8,
+        markersize=4.0,
+        elinewidth=0.8,
+        capsize=2.0,
+        capthick=0.8,
+        linestyle="none",
+        zorder=3,
+    )
     ax.set_xticks(x)
-    ax.set_xticklabels([o[1] for o in order], fontsize=8, rotation=15)
+    ax.set_xticklabels(display_labels)
     ax.set_ylabel(ylab)
     ax.set_title(title)
-    ax.grid(axis="y", alpha=0.3)
-    ax.legend(fontsize=8)
-fig.suptitle(
-    f"InTaSet: calibration effect on filters "
-    f"({_args.source}, {_args.n_windows}×{_args.horizon_min:g} min holdout)",
-    fontsize=11,
+    if metric == "nll_mean" and min(np.asarray(ol) - np.asarray(ol_std)) > 0.0 and min(
+        np.asarray(fc) - np.asarray(fc_std)
+    ) > 0.0:
+        ax.set_yscale("log")
+        ax.set_title(f"{title} (log scale)")
+    style_curve_axis(ax, grid_axis="y")
+handles, labels = axes[0].get_legend_handles_labels()
+fig.legend(
+    handles,
+    labels,
+    loc="upper center",
+    bbox_to_anchor=(0.5, 0.995),
+    ncol=len(labels),
 )
-fig.tight_layout()
+fig.subplots_adjust(left=0.085, right=0.99, bottom=0.23, top=0.78, wspace=0.28)
 plot_path = os.path.join(OUTPUT_DIR, "calib_filter_bakeoff.png")
-fig.savefig(plot_path, dpi=150, bbox_inches="tight")
-plt.close()
+save_publication_figure(fig, plot_path)
+plt.close(fig)
 print(f"Wrote {plot_path}")
 
 print("\n=== Summary (mean over windows) ===")

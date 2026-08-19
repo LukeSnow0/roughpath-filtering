@@ -27,8 +27,9 @@ Run:
   python experiments/mfts_test/run_em_lambda.py --only-memory
 
 Outputs under ``experiments/mfts_test/output/``:
-  mle_lambda_sensitivity.png, mle_lambda_trace.png, mle_lambda_timing.png,
-  mle_lambda_memory.png, mle_lambda_summary.csv
+  mle_lambda_sensitivity.{png,pdf}, mle_lambda_trace.{png,pdf},
+  mle_lambda_timing.{png,pdf}, mle_lambda_memory.{png,pdf},
+  mle_lambda_summary.csv
 """
 
 from __future__ import annotations
@@ -87,6 +88,15 @@ from mfts_model import (
     init_estimate,
     make_mfts_dynamics,
     simulate_mfts,
+)
+from plot_style import (
+    DOUBLE_COLUMN_WIDTH,
+    METHOD_COLORS,
+    METHOD_MARKERS,
+    PALETTE,
+    SINGLE_COLUMN_WIDTH,
+    save_publication_figure,
+    style_curve_axis,
 )
 
 OUTPUT_DIR = os.path.join(HERE, "output")
@@ -190,13 +200,22 @@ ALPHA_MAX = float(np.log(5.0))
 WSCKF_NUM_PATHS = default_recombined_num_paths(2, CUBATURE_ORDER)
 
 COLORS = {
-    "WSC-KF-AD": "#6A4C93",
-    "WSC-KF-FD": "#9B5DE5",
-    "CD-EKF": "#2E86AB",
-    "CD-UKF": "#3DA35D",
-    "CD-EnKF": "#F6AE2D",
-    "PF": "#F24236",
-    "WSC-KF": "#6A4C93",  # alias for memory-probe labels
+    "WSC-KF-AD": METHOD_COLORS["WSC-KF-AD"],
+    "WSC-KF-FD": METHOD_COLORS["WSC-KF-FD"],
+    "CD-EKF": METHOD_COLORS["CD-EKF"],
+    "CD-UKF": METHOD_COLORS["CD-UKF"],
+    "CD-EnKF": METHOD_COLORS["CD-EnKF"],
+    "PF": METHOD_COLORS["PF"],
+    "WSC-KF": METHOD_COLORS["WSC-KF"],
+}
+MARKERS = {
+    "WSC-KF-AD": METHOD_MARKERS["WSC-KF-AD"],
+    "WSC-KF-FD": METHOD_MARKERS["WSC-KF-FD"],
+    "CD-EKF": METHOD_MARKERS["CD-EKF"],
+    "CD-UKF": METHOD_MARKERS["CD-UKF"],
+    "CD-EnKF": METHOD_MARKERS["CD-EnKF"],
+    "PF": METHOD_MARKERS["PF"],
+    "WSC-KF": METHOD_MARKERS["WSC-KF"],
 }
 AD_METHODS = ("WSC-KF-AD", "CD-EKF", "CD-UKF", "CD-EnKF", "PF")
 FD_METHODS = ()  # plain-AD run: no FD baselines in the MLE loop
@@ -237,9 +256,13 @@ def run_memory_scaling() -> list[dict]:
     n_steps_grid = (50, 100, 200, 400, 800, 1600, 3200)
     mem_methods = ("WSC-KF-ckpt", "CD-EKF", "CD-UKF")
     style = {
-        "WSC-KF-ckpt": (COLORS["WSC-KF"], "s-", "WSC-KF ckpt ODE adjoint"),
-        "CD-EKF": (COLORS["CD-EKF"], "^-", "CD-EKF VJP"),
-        "CD-UKF": (COLORS["CD-UKF"], "v-", "CD-UKF VJP"),
+        "WSC-KF-ckpt": (
+            COLORS["WSC-KF"],
+            MARKERS["WSC-KF"],
+            "WSC-KF (checkpointed)",
+        ),
+        "CD-EKF": (COLORS["CD-EKF"], MARKERS["CD-EKF"], "CD-EKF"),
+        "CD-UKF": (COLORS["CD-UKF"], MARKERS["CD-UKF"], "CD-UKF"),
     }
     rows: list[dict] = []
 
@@ -288,47 +311,58 @@ def run_memory_scaling() -> list[dict]:
     if not rows:
         return rows
 
-    fig, axes = plt.subplots(1, 2, figsize=(11.0, 4.2))
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(DOUBLE_COLUMN_WIDTH, 2.6),
+    )
     ns = np.asarray([r["n_steps"] for r in rows], dtype=float)
     series = {
         m: np.asarray([r[m] for r in rows], dtype=float) for m in mem_methods
     }
 
-    for method, (color, fmt, label) in style.items():
-        axes[0].plot(ns, series[method], fmt, color=color, lw=1.8, label=label)
-    axes[0].set_xlabel(r"RK4 steps per assimilation interval $N_{\mathrm{steps}}$")
-    axes[0].set_ylabel("Peak process RSS [MiB]")
+    for method, (color, marker, label) in style.items():
+        axes[0].plot(
+            ns,
+            series[method],
+            color=color,
+            marker=marker,
+            label=label,
+        )
+    axes[0].set_xlabel(r"RK4 steps / interval, $N_{\mathrm{steps}}$")
+    axes[0].set_ylabel("Peak RSS [MiB]")
     axes[0].set_xscale("log")
-    axes[0].legend(fontsize=8)
-    axes[0].grid(True, alpha=0.25, which="both")
-    axes[0].set_title("Absolute peak RSS")
+    axes[0].set_title("Peak memory")
+    style_curve_axis(axes[0], grid_axis="both")
 
-    for method, (color, fmt, label) in style.items():
+    for method, (color, marker, label) in style.items():
         axes[1].plot(
             ns,
             series[method] - series[method][0],
-            fmt,
             color=color,
-            lw=1.8,
+            marker=marker,
             label=label,
         )
-    axes[1].set_xlabel(r"RK4 steps per assimilation interval $N_{\mathrm{steps}}$")
-    axes[1].set_ylabel(r"$\Delta$RSS vs smallest $N_{\mathrm{steps}}$ [MiB]")
+    axes[1].set_xlabel(r"RK4 steps / interval, $N_{\mathrm{steps}}$")
+    axes[1].set_ylabel(r"$\Delta$RSS [MiB]")
     axes[1].set_xscale("log")
-    axes[1].legend(fontsize=8)
-    axes[1].grid(True, alpha=0.25, which="both")
-    axes[1].set_title(r"Growth with ODE resolution")
+    axes[1].set_title("Memory growth")
+    style_curve_axis(axes[1], grid_axis="both")
 
-    fig.suptitle(
-        f"Grad memory vs ODE resolution "
-        f"(fixed Δt={dt_mem:g}s, N_obs={n_obs_mem})",
-        fontsize=11,
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.005),
+        ncol=3,
     )
-    fig.tight_layout()
+    fig.subplots_adjust(left=0.085, right=0.995, bottom=0.28, top=0.91, wspace=0.37)
     mem_path = os.path.join(OUTPUT_DIR, "mle_lambda_memory.png")
-    fig.savefig(mem_path, dpi=150, bbox_inches="tight")
+    mem_png, mem_pdf = save_publication_figure(fig, mem_path)
     plt.close()
-    print(f"Wrote {mem_path}")
+    print(f"Wrote {mem_png}")
+    print(f"Wrote {mem_pdf}")
     return rows
 
 
@@ -732,37 +766,71 @@ else:
 
     sens_plot = list(methods_plot)
 
-    fig, ax = plt.subplots(figsize=(8, 4.5))
+    fig, ax = plt.subplots(figsize=(SINGLE_COLUMN_WIDTH, 2.65))
 
     for name in sens_plot:
 
         label = "WSC-KF" if name == "WSC-KF-AD" else name
 
-        ax.plot(lam_grid, L_by_method[name], color=COLORS[name], lw=2.0, label=label)
+        ax.plot(
+            lam_grid,
+            L_by_method[name],
+            color=COLORS[name],
+            marker=MARKERS[name],
+            markevery=max(1, len(lam_grid) // 7),
+            label=label,
+        )
 
         if name in L_stoch_std:
 
             mu, sd = L_by_method[name], L_stoch_std[name]
 
-            ax.fill_between(lam_grid, mu - sd, mu + sd, color=COLORS[name], alpha=0.2)
+            ax.fill_between(
+                lam_grid,
+                mu - sd,
+                mu + sd,
+                color=COLORS[name],
+                alpha=0.14,
+                linewidth=0,
+            )
 
-    ax.axvline(LAMBDA_TRUE, color="k", ls="--", lw=1.2, label=r"$\lambda_{\mathrm{true}}$")
+    ax.axvline(
+        LAMBDA_TRUE,
+        color=PALETTE["black"],
+        ls="--",
+        lw=1.1,
+        label="True",
+    )
 
     ax.set_xscale("log")
 
-    ax.set_xlabel(r"$\lambda$")
+    ax.set_xlabel(r"Rate, $\lambda$ [s$^{-1}$]")
 
-    ax.set_ylabel("Filter log-likelihood")
+    ax.set_ylabel("Log-likelihood [nats]")
 
-    ax.legend(fontsize=9, ncol=3)
-
-    ax.grid(True, alpha=0.25)
-
-    ax.set_title(r"Filter $L(\lambda)$ (matched $\bar F$, same data)")
-
-    fig.tight_layout()
-
-    fig.savefig(os.path.join(OUTPUT_DIR, "mle_lambda_sensitivity.png"), dpi=150, bbox_inches="tight")
+    ax.set_title(r"Likelihood sensitivity")
+    if L_stoch_std:
+        ax.text(
+            0.02,
+            0.96,
+            r"shading: $\pm 1$ SD",
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=6.5,
+            color=PALETTE["neutral_gray"],
+        )
+    style_curve_axis(ax, grid_axis="both")
+    ax.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.24),
+        ncol=3,
+    )
+    fig.subplots_adjust(left=0.19, right=0.985, bottom=0.31, top=0.91)
+    save_publication_figure(
+        fig,
+        os.path.join(OUTPUT_DIR, "mle_lambda_sensitivity.png"),
+    )
 
     plt.close()
 
@@ -920,13 +988,18 @@ else:
 
 
 
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(DOUBLE_COLUMN_WIDTH, 2.6),
+    )
 
     for name in methods_plot:
 
         rows = em_traces[name]
 
         ls = "-" if name in AD_METHODS else "--"
+        label = "WSC-KF" if name == "WSC-KF-AD" else name
 
         axes[0].plot(
 
@@ -936,11 +1009,13 @@ else:
 
             color=COLORS[name],
 
-            lw=2.0,
-
             ls=ls,
 
-            label=f"{name} ({rows[0]['mode']})",
+            marker=MARKERS[name],
+
+            markevery=max(1, len(rows) // 6),
+
+            label=label,
 
         )
 
@@ -952,41 +1027,53 @@ else:
 
             color=COLORS[name],
 
-            lw=1.8,
-
             ls=ls,
 
-            label=name,
+            marker=MARKERS[name],
+
+            markevery=max(1, len(rows) // 6),
+
+            label=label,
 
         )
 
-    axes[0].axhline(LAMBDA_TRUE, color="k", ls="--", lw=1.2, label=r"$\lambda_{\mathrm{true}}$")
+    axes[0].axhline(
+        LAMBDA_TRUE,
+        color=PALETTE["black"],
+        ls="--",
+        lw=1.1,
+        label="True",
+    )
 
     axes[0].set_xlabel("MLE iteration")
 
-    axes[0].set_ylabel(r"$\lambda$")
+    axes[0].set_ylabel(r"Rate, $\lambda$ [s$^{-1}$]")
 
-    axes[0].legend(fontsize=7, ncol=2)
-
-    axes[0].grid(True, alpha=0.25)
-
-    axes[0].set_title(r"Parameter recovery (plain pathwise AD)")
+    axes[0].set_title("Rate estimate")
+    style_curve_axis(axes[0], grid_axis="both")
 
 
 
     axes[1].set_xlabel("MLE iteration")
 
-    axes[1].set_ylabel("Filter log-likelihood")
+    axes[1].set_ylabel("Log-likelihood [nats]")
 
-    axes[1].legend(fontsize=8, ncol=3)
+    axes[1].set_title("Objective")
+    style_curve_axis(axes[1], grid_axis="both")
 
-    axes[1].grid(True, alpha=0.25)
-
-    axes[1].set_title(r"Objective $L(\lambda)$")
-
-    fig.tight_layout()
-
-    fig.savefig(os.path.join(OUTPUT_DIR, "mle_lambda_trace.png"), dpi=150, bbox_inches="tight")
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.005),
+        ncol=min(6, len(labels)),
+    )
+    fig.subplots_adjust(left=0.09, right=0.995, bottom=0.28, top=0.91, wspace=0.36)
+    save_publication_figure(
+        fig,
+        os.path.join(OUTPUT_DIR, "mle_lambda_trace.png"),
+    )
 
     plt.close()
 
@@ -1136,34 +1223,62 @@ if not SKIP_ADJOINT_SCALING:
         )
 
     if adjoint_scale_rows:
-        fig, ax = plt.subplots(figsize=(7.6, 4.4))
+        fig, ax = plt.subplots(figsize=(SINGLE_COLUMN_WIDTH, 2.6))
         ns = [r["n_obs"] for r in adjoint_scale_rows]
-        ax.plot(ns, [r["t_wsckf_scan"] for r in adjoint_scale_rows], "s-",
-                color=COLORS["WSC-KF-AD"], label="WSC-KF-AD (plain VJP)")
-        ax.plot(ns, [r["t_ekf"] for r in adjoint_scale_rows], "^-",
-                color=COLORS["CD-EKF"], label="CD-EKF VJP")
-        ax.plot(ns, [r["t_ukf"] for r in adjoint_scale_rows], "v-",
-                color=COLORS["CD-UKF"], label="CD-UKF VJP")
-        if not SKIP_STOCHASTIC:
-            ax.plot(ns, [r["t_enkf_ad"] for r in adjoint_scale_rows], "x-",
-                    color=COLORS["CD-EnKF"], label="EnKF-AD (plain VJP)")
-            ax.plot(ns, [r["t_pf_ad"] for r in adjoint_scale_rows], "+-",
-                    color=COLORS["PF"], label="PF-AD (plain VJP)")
-        ax.set_xlabel(r"Number of observations $N_{\mathrm{obs}}$")
-        ax.set_ylabel("Median grad wall time [s]")
-        ax.set_yscale("log")
-        ax.legend(fontsize=7, ncol=2)
-        ax.grid(True, alpha=0.25, which="both")
-        ax.set_title(
-            f"Plain pathwise AD grad cost vs series length\n"
-            f"(no WSC-KF checkpoint/adjoint; Δt={dt_s:g}s, dt0={dt0_s:g}s, {n_sub} RK4 steps/Δt)"
+        ax.plot(
+            ns,
+            [r["t_wsckf_scan"] for r in adjoint_scale_rows],
+            color=COLORS["WSC-KF-AD"],
+            marker=MARKERS["WSC-KF-AD"],
+            label="WSC-KF",
         )
-        fig.tight_layout()
-        fig.savefig(
-            os.path.join(OUTPUT_DIR, "mle_lambda_timing.png"), dpi=150, bbox_inches="tight"
+        ax.plot(
+            ns,
+            [r["t_ekf"] for r in adjoint_scale_rows],
+            color=COLORS["CD-EKF"],
+            marker=MARKERS["CD-EKF"],
+            label="CD-EKF",
+        )
+        ax.plot(
+            ns,
+            [r["t_ukf"] for r in adjoint_scale_rows],
+            color=COLORS["CD-UKF"],
+            marker=MARKERS["CD-UKF"],
+            label="CD-UKF",
+        )
+        if not SKIP_STOCHASTIC:
+            ax.plot(
+                ns,
+                [r["t_enkf_ad"] for r in adjoint_scale_rows],
+                color=COLORS["CD-EnKF"],
+                marker=MARKERS["CD-EnKF"],
+                label="CD-EnKF",
+            )
+            ax.plot(
+                ns,
+                [r["t_pf_ad"] for r in adjoint_scale_rows],
+                color=COLORS["PF"],
+                marker=MARKERS["PF"],
+                label="PF",
+            )
+        ax.set_xlabel(r"Observations, $N_{\mathrm{obs}}$")
+        ax.set_ylabel("Gradient time [s]")
+        ax.set_yscale("log")
+        ax.set_title("Gradient cost")
+        style_curve_axis(ax, grid_axis="both")
+        ax.legend(
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.24),
+            ncol=3,
+        )
+        fig.subplots_adjust(left=0.19, right=0.985, bottom=0.31, top=0.91)
+        timing_png, timing_pdf = save_publication_figure(
+            fig,
+            os.path.join(OUTPUT_DIR, "mle_lambda_timing.png"),
         )
         plt.close()
-        print(f"Wrote {os.path.join(OUTPUT_DIR, 'mle_lambda_timing.png')}")
+        print(f"Wrote {timing_png}")
+        print(f"Wrote {timing_pdf}")
 
 if ONLY_TIMING:
     summary_path = os.path.join(OUTPUT_DIR, "mle_lambda_timing_summary.csv")
