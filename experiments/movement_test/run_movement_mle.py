@@ -87,6 +87,16 @@ from movement_model import (
     tau_sigma_to_beta_sigma0,
     beta_sigma0_to_tau_sigma,
 )
+from mfts_test.plot_style import (
+    DOUBLE_COLUMN_WIDTH,
+    METHOD_COLORS,
+    METHOD_MARKERS,
+    PALETTE,
+    SINGLE_COLUMN_WIDTH,
+    save_publication_figure,
+    style_box_axis,
+    style_curve_axis,
+)
 
 OUTPUT_DIR = os.path.join(HERE, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -451,30 +461,30 @@ def main():
         print(f"  CD-EnKF forward:    {t_enkf_fwd:.4f}s  ({ENKF_PARTICLES}p)")
         print(f"  CD-EnKF-AD:         {t_enkf_ad:.4f}s")
 
-    fig_t, axes = plt.subplots(1, 2, figsize=(11.5, 4.6))
+    fig_t, axes = plt.subplots(1, 2, figsize=(DOUBLE_COLUMN_WIDTH, 2.65))
     ax = axes[0]
     timing_rows = [
-        ("WSC-KF fwd", t_wsckf_fwd, "C2"),
-        ("WSC-KF-AD", t_wsckf_ad, "C2"),
-        ("EKF fwd", t_ekf_fwd, "C3"),
-        ("EKF-AD", t_ekf_ad, "C3"),
+        ("WSC-KF fwd", t_wsckf_fwd, METHOD_COLORS["WSC-KF"]),
+        ("WSC-KF-AD", t_wsckf_ad, METHOD_COLORS["WSC-KF-AD"]),
+        ("EKF fwd", t_ekf_fwd, METHOD_COLORS["EKF"]),
+        ("EKF-AD", t_ekf_ad, METHOD_COLORS["EKF"]),
     ]
     if stochastic:
         timing_rows += [
-            (f"EnKF fwd\n({ENKF_PARTICLES}p)", t_enkf_fwd, "C1"),
-            ("EnKF-AD", t_enkf_ad, "C1"),
+            (f"EnKF fwd\n({ENKF_PARTICLES}p)", t_enkf_fwd, METHOD_COLORS["EnKF"]),
+            ("EnKF-AD", t_enkf_ad, METHOD_COLORS["EnKF"]),
         ]
     labels = [r[0] for r in timing_rows]
     times = np.array([r[1] for r in timing_rows], dtype=float)
     colors = [r[2] for r in timing_rows]
     xpos = np.arange(len(labels))
-    bars = ax.bar(xpos, times, color=colors, edgecolor="0.3", lw=0.6)
+    bars = ax.bar(xpos, times, color=colors, edgecolor=PALETTE["black"], lw=0.6)
     ax.set_xticks(xpos)
-    ax.set_xticklabels(labels, fontsize=8)
-    ax.set_ylabel("median wall time [s]")
+    ax.set_xticklabels(labels)
+    ax.set_ylabel("Median wall time [s]")
     ax.set_yscale("log")
-    ax.set_title(f"Per-eval on train (median of {N_TIMING})")
-    ax.grid(axis="y", alpha=0.3, which="both")
+    ax.set_title("Per evaluation")
+    style_box_axis(ax, grid_axis="y")
     for b, t in zip(bars, times):
         if np.isfinite(t) and t > 0:
             ax.text(
@@ -501,19 +511,19 @@ def main():
     ax = axes[1]
     mle_labels = ["WSC-KF-AD", "EKF-AD"]
     mle_times = [wsckf_mle_wall, ekf_mle_wall]
-    mle_colors = ["C2", "C3"]
+    mle_colors = [METHOD_COLORS["WSC-KF"], METHOD_COLORS["EKF"]]
     if stochastic:
         mle_labels.append("EnKF-AD")
         mle_times.append(enkf_mle_wall)
-        mle_colors.append("C1")
+        mle_colors.append(METHOD_COLORS["EnKF"])
     xpos = np.arange(len(mle_labels))
-    bars = ax.bar(xpos, mle_times, color=mle_colors, edgecolor="0.3", lw=0.6)
+    bars = ax.bar(xpos, mle_times, color=mle_colors, edgecolor=PALETTE["black"], lw=0.6)
     ax.set_xticks(xpos)
-    ax.set_xticklabels(mle_labels, fontsize=9)
-    ax.set_ylabel("wall time [s]")
+    ax.set_xticklabels(mle_labels)
+    ax.set_ylabel("Wall time [s]")
     ax.set_yscale("log")
-    ax.set_title(f"Train Adam MLE ({_args.mle_iters} iters)")
-    ax.grid(axis="y", alpha=0.3, which="both")
+    ax.set_title(f"Adam MLE ({_args.mle_iters} iterations)")
+    style_box_axis(ax, grid_axis="y")
     for b, t in zip(bars, mle_times):
         if np.isfinite(t) and t > 0:
             ax.text(
@@ -521,15 +531,11 @@ def main():
                 ha="center", va="bottom", fontsize=8,
             )
 
-    fig_t.suptitle(
-        f"Joint $(\\tau_v,\\sigma_v)$ timing — {track.band}, "
-        f"N_train={N_TRAIN}/{N_OBS}, dt0={DT0}, cd_solver={SOLVER}",
-        fontsize=11,
-    )
-    fig_t.tight_layout()
+    fig_t.subplots_adjust(left=0.09, right=0.99, bottom=0.22, top=0.90, wspace=0.28)
     out_png = os.path.join(OUTPUT_DIR, f"movement_timing_{SOLVER}.png")
-    fig_t.savefig(out_png, dpi=150)
-    fig_t.savefig(os.path.join(OUTPUT_DIR, "movement_timing.png"), dpi=150)
+    timing_png, timing_pdf = save_publication_figure(fig_t, out_png)
+    save_publication_figure(fig_t, os.path.join(OUTPUT_DIR, "movement_timing.png"))
+    plt.close(fig_t)
     out_csv = os.path.join(OUTPUT_DIR, f"movement_timing_{SOLVER}.csv")
     with open(out_csv, "w", newline="") as f:
         w = csv.writer(f)
@@ -705,14 +711,16 @@ def main():
 
     # ===== plots =====
     n_panels = 3 if stochastic else 2
-    fig1, axes = plt.subplots(1, n_panels, figsize=(4.6 * n_panels, 4.4), sharey=True)
+    fig1, axes = plt.subplots(
+        1, n_panels, figsize=(DOUBLE_COLUMN_WIDTH, 2.45), sharey=True
+    )
     panels = [
-        ("WSC-KF", wsckf_Z, "C2", (wsckf_tau, wsckf_sv), (wsckf_tau_tr[-1], wsckf_sv_tr[-1])),
-        ("CD-EKF", ekf_Z, "C3", (ekf_tau, ekf_sv), (ekf_tau_tr[-1], ekf_sv_tr[-1])),
+        ("WSC-KF", wsckf_Z, METHOD_COLORS["WSC-KF"], (wsckf_tau, wsckf_sv), (wsckf_tau_tr[-1], wsckf_sv_tr[-1])),
+        ("CD-EKF", ekf_Z, METHOD_COLORS["CD-EKF"], (ekf_tau, ekf_sv), (ekf_tau_tr[-1], ekf_sv_tr[-1])),
     ]
     if stochastic:
         panels.append(
-            ("CD-EnKF", enkf_Z, "C1", (enkf_tau, enkf_sv),
+            ("CD-EnKF", enkf_Z, METHOD_COLORS["CD-EnKF"], (enkf_tau, enkf_sv),
              (enkf_tau_tr[-1], enkf_sv_tr[-1]))
         )
     finite_all = np.concatenate([Z[np.isfinite(Z)] for _, Z, *_ in panels])
@@ -724,95 +732,98 @@ def main():
         pcm = ax.pcolormesh(
             Tau, Sv, Z, shading="auto", cmap="viridis", vmin=vmin, vmax=vmax
         )
-        ax.plot(*grid_star, "*", color="white", ms=14, markeredgecolor="k",
+        ax.plot(*grid_star, "*", color="white", ms=6, markeredgecolor=PALETTE["black"],
                 label="grid argmax")
-        ax.plot(*mle_star, "o", color=color, ms=8, markeredgecolor="k",
+        ax.plot(*mle_star, "o", color=color, ms=4.5, markeredgecolor=PALETTE["black"],
                 label="Adam MLE")
         ax.set_xscale("log")
         ax.set_yscale("log")
         ax.set_xlabel(r"velocity autocorr $\tau_v$ [h]")
         ax.set_title(name)
-        ax.legend(fontsize=7, loc="lower left")
-        fig1.colorbar(pcm, ax=ax, fraction=0.046, pad=0.04)
+        style_box_axis(ax)
     axes[0].set_ylabel(r"velocity scale $\sigma_v$ [km/h]")
-    fig1.suptitle(
-        f"Train filter log-likelihood $L(\\tau_v,\\sigma_v)$ — {track.band}, "
-        f"N_train={N_TRAIN}/{N_OBS}",
-        fontsize=11,
+    cbar = fig1.colorbar(pcm, ax=list(np.atleast_1d(axes)), fraction=0.025, pad=0.025)
+    cbar.set_label("Train log-likelihood [nats]")
+    fig1.legend(
+        *np.atleast_1d(axes)[0].get_legend_handles_labels(),
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.005),
+        ncol=2,
     )
-    fig1.tight_layout()
-    fig1.savefig(os.path.join(OUTPUT_DIR, "movement_loglik.png"), dpi=150)
+    fig1.subplots_adjust(left=0.09, right=0.90, bottom=0.27, top=0.90, wspace=0.22)
+    save_publication_figure(fig1, os.path.join(OUTPUT_DIR, "movement_loglik.png"))
+    plt.close(fig1)
 
-    fig2, axes2 = plt.subplots(1, 2, figsize=(11.0, 4.6))
+    fig2, axes2 = plt.subplots(1, 2, figsize=(DOUBLE_COLUMN_WIDTH, 2.55))
     ax = axes2[0]
-    ax.plot(wsckf_tau_tr, wsckf_sv_tr, "o-", color="C2", ms=4, label="WSC-KF-AD")
-    ax.plot(ekf_tau_tr, ekf_sv_tr, "s-", color="C3", ms=4, label="EKF-AD")
+    ax.plot(wsckf_tau_tr, wsckf_sv_tr, "o-", color=METHOD_COLORS["WSC-KF"], ms=3.5, markerfacecolor="white", label="WSC-KF-AD")
+    ax.plot(ekf_tau_tr, ekf_sv_tr, "s-", color=METHOD_COLORS["EKF"], ms=3.5, markerfacecolor="white", label="EKF-AD")
     if stochastic:
-        ax.plot(enkf_tau_tr, enkf_sv_tr, "D-", color="C1", ms=4, label="EnKF-AD")
-    ax.plot(wsckf_tau, wsckf_sv, "*", color="C2", ms=14, markeredgecolor="k")
+        ax.plot(enkf_tau_tr, enkf_sv_tr, "^-", color=METHOD_COLORS["EnKF"], ms=3.5, markerfacecolor="white", label="EnKF-AD")
+    ax.plot(wsckf_tau, wsckf_sv, "*", color=METHOD_COLORS["WSC-KF"], ms=6, markeredgecolor=PALETTE["black"])
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlabel(r"$\tau_v$ [h]")
     ax.set_ylabel(r"$\sigma_v$ [km/h]")
     ax.set_title("Adam path (train likelihood)")
-    ax.legend(fontsize=8)
-    ax.grid(alpha=0.3, which="both")
+    style_curve_axis(ax, grid_axis="both")
 
     ax = axes2[1]
     it = np.arange(_args.mle_iters)
-    ax.plot(it, wsckf_tau_tr, "o-", color="C2", ms=3, label=r"WSC-KF $\tau_v$")
-    ax.plot(it, wsckf_sv_tr, "o--", color="C2", ms=3, alpha=0.7, label=r"WSC-KF $\sigma_v$")
-    ax.plot(it, ekf_tau_tr, "s-", color="C3", ms=3, label=r"EKF $\tau_v$")
-    ax.plot(it, ekf_sv_tr, "s--", color="C3", ms=3, alpha=0.7, label=r"EKF $\sigma_v$")
+    ax.plot(it, wsckf_tau_tr, "o-", color=METHOD_COLORS["WSC-KF"], ms=3, label=r"WSC-KF $\tau_v$")
+    ax.plot(it, wsckf_sv_tr, "o--", color=METHOD_COLORS["WSC-KF"], ms=3, alpha=0.7, label=r"WSC-KF $\sigma_v$")
+    ax.plot(it, ekf_tau_tr, "s-", color=METHOD_COLORS["EKF"], ms=3, label=r"EKF $\tau_v$")
+    ax.plot(it, ekf_sv_tr, "s--", color=METHOD_COLORS["EKF"], ms=3, alpha=0.7, label=r"EKF $\sigma_v$")
     if stochastic:
-        ax.plot(it, enkf_tau_tr, "D-", color="C1", ms=3, label=r"EnKF $\tau_v$")
-        ax.plot(it, enkf_sv_tr, "D--", color="C1", ms=3, alpha=0.7, label=r"EnKF $\sigma_v$")
+        ax.plot(it, enkf_tau_tr, "^-", color=METHOD_COLORS["EnKF"], ms=3, label=r"EnKF $\tau_v$")
+        ax.plot(it, enkf_sv_tr, "^--", color=METHOD_COLORS["EnKF"], ms=3, alpha=0.7, label=r"EnKF $\sigma_v$")
     ax.set_xlabel("MLE iteration")
     ax.set_ylabel("parameter value")
     ax.set_yscale("log")
     ax.set_title("Per-parameter traces")
-    ax.legend(fontsize=7, ncol=2)
-    ax.grid(alpha=0.3, which="both")
-    fig2.suptitle(
-        f"Train-only gradient filter-MLE of $(\\tau_v,\\sigma_v)$ "
-        f"(N_train={N_TRAIN})",
-        fontsize=11,
+    style_curve_axis(ax, grid_axis="both")
+    fig2.legend(
+        *axes2[1].get_legend_handles_labels(),
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.005),
+        ncol=3,
     )
-    fig2.tight_layout()
-    fig2.savefig(os.path.join(OUTPUT_DIR, "movement_mle_trace.png"), dpi=150)
+    fig2.subplots_adjust(left=0.09, right=0.99, bottom=0.31, top=0.90, wspace=0.28)
+    save_publication_figure(fig2, os.path.join(OUTPUT_DIR, "movement_mle_trace.png"))
+    plt.close(fig2)
 
     # track: train vs held-out GPS
-    fig3, ax = plt.subplots(figsize=(7, 7))
+    fig3, ax = plt.subplots(figsize=(SINGLE_COLUMN_WIDTH, 3.2))
     ax.plot(
-        obs_xy[:N_TRAIN, 0], obs_xy[:N_TRAIN, 1], ".", ms=3, color="0.55",
+        obs_xy[:N_TRAIN, 0], obs_xy[:N_TRAIN, 1], ".", ms=2.2, color=PALETTE["neutral_gray"], alpha=0.65,
         label=f"GPS train (n={N_TRAIN})",
     )
     if DO_HELDOUT:
         ax.plot(
-            obs_xy[N_TRAIN:, 0], obs_xy[N_TRAIN:, 1], ".", ms=3, color="0.85",
+            obs_xy[N_TRAIN:, 0], obs_xy[N_TRAIN:, 1], ".", ms=2.2, color=PALETTE["black"], alpha=0.70,
             label=f"GPS held-out (n={N_HELD})",
         )
     ax.plot(
-        filt_xy[:, 0], filt_xy[:, 1], "-", lw=1.0, color="C2",
+        filt_xy[:, 0], filt_xy[:, 1], "-", lw=1.25, color=METHOD_COLORS["WSC-KF"],
         label=(
             f"WSC-KF filtered mean @ train MLE\n"
             f"$\\hat\\tau_v$={wsckf_tau_tr[-1]:.2f}h, $\\hat\\sigma_v$={wsckf_sv_tr[-1]:.2f}"
         ),
     )
-    ax.plot(obs_xy[0, 0], obs_xy[0, 1], "o", color="green", label="start")
+    ax.plot(obs_xy[0, 0], obs_xy[0, 1], "o", color=METHOD_COLORS["WSC-KF"], label="Start")
     if DO_HELDOUT:
         ax.plot(
-            obs_xy[N_TRAIN, 0], obs_xy[N_TRAIN, 1], "s", color="C0", ms=6,
-            label="holdout start",
+            obs_xy[N_TRAIN, 0], obs_xy[N_TRAIN, 1], "s", color=PALETTE["black"], ms=4.5,
+            label="Holdout start",
         )
-    ax.set_xlabel("east (km, centred)")
-    ax.set_ylabel("north (km, centred)")
+    ax.set_xlabel("East [km, centred]")
+    ax.set_ylabel("North [km, centred]")
     ax.set_aspect("equal", adjustable="datalim")
-    ax.set_title(f"{track.species} {track.band}: GPS + WSC-KF @ train MLE")
-    ax.legend(fontsize=8)
-    ax.grid(alpha=0.3)
-    fig3.tight_layout()
-    fig3.savefig(os.path.join(OUTPUT_DIR, "movement_track.png"), dpi=150)
+    style_box_axis(ax)
+    fig3.legend(*ax.get_legend_handles_labels(), loc="lower center", bbox_to_anchor=(0.5, 0.005), ncol=2)
+    fig3.subplots_adjust(left=0.18, right=0.98, bottom=0.29, top=0.98)
+    save_publication_figure(fig3, os.path.join(OUTPUT_DIR, "movement_track.png"))
+    plt.close(fig3)
 
     if DO_HELDOUT:
         # ---- comparison figure: θ̂ plane | reference held-out NLL | track ----
@@ -820,8 +831,8 @@ def main():
         compare.append(
             {
                 "name": "WSC-KF",
-                "color": "#2ca02c",
-                "marker": "o",
+                "color": METHOD_COLORS["WSC-KF"],
+                "marker": METHOD_MARKERS["WSC-KF"],
                 "tau": float(wsckf_tau_tr[-1]),
                 "sv": float(wsckf_sv_tr[-1]),
                 "held": float(enkf_ref_at_wsckf),
@@ -833,8 +844,8 @@ def main():
         compare.append(
             {
                 "name": "EKF",
-                "color": "#d62728",
-                "marker": "s",
+                "color": METHOD_COLORS["EKF"],
+                "marker": METHOD_MARKERS["EKF"],
                 "tau": float(ekf_tau_tr[-1]),
                 "sv": float(ekf_sv_tr[-1]),
                 "held": float(enkf_ref_at_ekf),
@@ -847,8 +858,8 @@ def main():
             compare.append(
                 {
                     "name": "EnKF",
-                    "color": "#1f77b4",
-                    "marker": "D",
+                    "color": METHOD_COLORS["EnKF"],
+                    "marker": METHOD_MARKERS["EnKF"],
                     "tau": float(enkf_tau_tr[-1]),
                     "sv": float(enkf_sv_tr[-1]),
                     "held": float(enkf_ref_at_enkf),
@@ -858,7 +869,7 @@ def main():
                 }
             )
 
-        fig_c = plt.figure(figsize=(12.8, 4.4))
+        fig_c = plt.figure(figsize=(DOUBLE_COLUMN_WIDTH, 2.75))
         gs = fig_c.add_gridspec(1, 3, width_ratios=[1.15, 0.95, 1.15], wspace=0.32)
 
         # A — parameter estimates from train MLE
@@ -878,16 +889,15 @@ def main():
             )
             ax_a.plot(
                 rec["tau"], rec["sv"], rec["marker"], color=rec["color"],
-                ms=10, markeredgecolor="k", markeredgewidth=0.8, zorder=3,
+                ms=4.5, markeredgecolor=PALETTE["black"], markeredgewidth=0.6, zorder=3,
                 label=rf"{rec['name']}  $(\hat\tau_v,\hat\sigma_v)$",
             )
         ax_a.set_xscale("log")
         ax_a.set_yscale("log")
-        ax_a.set_xlabel(r"velocity autocorr $\tau_v$ [h]")
-        ax_a.set_ylabel(r"velocity scale $\sigma_v$ [km/h]")
-        ax_a.set_title("A  Train MLE in parameter plane")
-        ax_a.legend(fontsize=7.5, loc="best", framealpha=0.92)
-        ax_a.grid(True, which="both", alpha=0.25)
+        ax_a.set_xlabel(r"Velocity autocorr. $\tau_v$ [h]")
+        ax_a.set_ylabel(r"Velocity scale $\sigma_v$ [km/h]")
+        ax_a.set_title("(a) Train MLE")
+        style_box_axis(ax_a)
 
         # B — shared reference held-out score at each θ̂
         ax_b = fig_c.add_subplot(gs[0, 1])
@@ -899,8 +909,8 @@ def main():
         ax_b.bar(
             xpos, vals,
             yerr=errs if np.any(errs > 0) else None,
-            color=cols, edgecolor="0.2", lw=0.7, width=0.62,
-            capsize=4, ecolor="0.15", zorder=3,
+            color=cols, edgecolor=PALETTE["black"], lw=0.7, width=0.62,
+            capsize=2.0, ecolor=PALETTE["black"], zorder=3,
         )
         y0 = float(np.nanmin(vals - np.nan_to_num(errs)))
         y1 = float(np.nanmax(vals + np.nan_to_num(errs)))
@@ -910,11 +920,9 @@ def main():
         ax_b.set_xticklabels(
             [rf"$\hat\theta_{{\mathrm{{{n}}}}}$" for n in names], fontsize=10
         )
-        ax_b.set_ylabel(
-            f"held-out NLL / obs\n(ref EnKF-{REF_ENKF_PARTICLES}p)"
-        )
-        ax_b.set_title("B  Reference score at each $\\hat\\theta$")
-        ax_b.grid(axis="y", alpha=0.3, zorder=0)
+        ax_b.set_ylabel("Held-out NLL [nats/observation]")
+        ax_b.set_title("(b) Reference score")
+        style_box_axis(ax_b, grid_axis="y")
         best = float(np.nanmin(vals))
         best_name = names[int(np.nanargmin(vals))]
         for x, v, e in zip(xpos, vals, errs):
@@ -929,66 +937,64 @@ def main():
             0.98, 0.02,
             f"best: $\\hat\\theta_{{\\mathrm{{{best_name}}}}}$",
             transform=ax_b.transAxes, ha="right", va="bottom",
-            fontsize=7.5, color="0.35",
+            fontsize=6.4, color=PALETTE["neutral_gray"],
         )
 
         # C — spatial split
         ax_c = fig_c.add_subplot(gs[0, 2])
         ax_c.plot(
             obs_xy[:N_TRAIN, 0], obs_xy[:N_TRAIN, 1], ".", ms=2.8,
-            color="0.45", label="GPS train", zorder=1,
+            color=PALETTE["neutral_gray"], alpha=0.65, label="GPS train", zorder=1,
         )
         ax_c.plot(
             obs_xy[N_TRAIN:, 0], obs_xy[N_TRAIN:, 1], ".", ms=2.8,
-            color="#c9b458", label="GPS held-out", zorder=1,
+            color=PALETTE["black"], alpha=0.70, label="GPS held-out", zorder=1,
         )
         ax_c.plot(
-            filt_xy[:, 0], filt_xy[:, 1], "-", lw=1.1, color="#2ca02c",
+            filt_xy[:, 0], filt_xy[:, 1], "-", lw=1.2, color=METHOD_COLORS["WSC-KF"],
             label="WSC-KF mean @ train MLE", zorder=2,
         )
-        ax_c.plot(obs_xy[0, 0], obs_xy[0, 1], "o", color="#2ca02c", ms=6, zorder=3)
+        ax_c.plot(obs_xy[0, 0], obs_xy[0, 1], "o", color=METHOD_COLORS["WSC-KF"], ms=4.5, zorder=3)
         ax_c.plot(
-            obs_xy[N_TRAIN, 0], obs_xy[N_TRAIN, 1], "s", color="#1f77b4",
-            ms=6, markeredgecolor="k", markeredgewidth=0.5, zorder=3,
+            obs_xy[N_TRAIN, 0], obs_xy[N_TRAIN, 1], "s", color=PALETTE["black"],
+            ms=4.5, markeredgecolor=PALETTE["black"], markeredgewidth=0.5, zorder=3,
             label="holdout start",
         )
-        ax_c.set_xlabel("east (km, centred)")
-        ax_c.set_ylabel("north (km, centred)")
+        ax_c.set_xlabel("East [km, centred]")
+        ax_c.set_ylabel("North [km, centred]")
         ax_c.set_aspect("equal", adjustable="datalim")
-        ax_c.set_title("C  Train / held-out split")
-        ax_c.legend(fontsize=7, loc="best", framealpha=0.9)
-        ax_c.grid(alpha=0.25)
+        ax_c.set_title("(c) Train / held-out split")
+        style_box_axis(ax_c)
 
-        fig_c.suptitle(
-            f"{track.band}: train-fit $\\hat\\theta$ → held-out NLL under "
-            f"ref EnKF-{REF_ENKF_PARTICLES}p  "
-            f"(N_train={N_TRAIN}, N_held={N_HELD})",
-            fontsize=11.5,
-            y=1.02,
+        handles_a, labels_a = ax_a.get_legend_handles_labels()
+        handles_c, labels_c = ax_c.get_legend_handles_labels()
+        fig_c.legend(
+            handles_a + handles_c,
+            labels_a + labels_c,
+            loc="lower center",
+            bbox_to_anchor=(0.5, 0.005),
+            ncol=4,
         )
-        fig_c.savefig(
-            os.path.join(OUTPUT_DIR, "movement_heldout_compare.png"),
-            dpi=160, bbox_inches="tight",
-        )
-        fig_h, ax = plt.subplots(figsize=(4.8, 3.8))
+        fig_c.subplots_adjust(left=0.08, right=0.99, bottom=0.27, top=0.91, wspace=0.32)
+        save_publication_figure(fig_c, os.path.join(OUTPUT_DIR, "movement_heldout_compare.png"))
+        fig_h, ax = plt.subplots(figsize=(SINGLE_COLUMN_WIDTH, 2.3))
         ax.bar(
             xpos, vals,
             yerr=errs if np.any(errs > 0) else None,
-            color=cols, edgecolor="0.2", lw=0.6, width=0.65,
-            capsize=4, ecolor="0.2",
+            color=cols, edgecolor=PALETTE["black"], lw=0.6, width=0.65,
+            capsize=2.0, ecolor=PALETTE["black"],
         )
         ax.set_ylim(y0 - pad, y1 + 1.6 * pad)
         ax.set_xticks(xpos)
         ax.set_xticklabels(
             [rf"$\hat\theta_{{\mathrm{{{n}}}}}$" for n in names]
         )
-        ax.set_ylabel(f"held-out NLL / obs (ref EnKF-{REF_ENKF_PARTICLES}p)")
-        ax.set_title("Reference held-out NLL at each $\\hat\\theta$")
-        ax.grid(axis="y", alpha=0.3)
+        ax.set_ylabel("Held-out NLL [nats/observation]")
+        style_box_axis(ax, grid_axis="y")
         for x, v in zip(xpos, vals):
             ax.text(x, v, f"{v:.3f}", ha="center", va="bottom", fontsize=9)
-        fig_h.tight_layout()
-        fig_h.savefig(os.path.join(OUTPUT_DIR, "movement_heldout.png"), dpi=150)
+        fig_h.subplots_adjust(left=0.21, right=0.98, bottom=0.24, top=0.97)
+        save_publication_figure(fig_h, os.path.join(OUTPUT_DIR, "movement_heldout.png"))
         plt.close(fig_c)
         plt.close(fig_h)
 
