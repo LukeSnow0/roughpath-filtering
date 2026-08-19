@@ -22,14 +22,17 @@ Run:
       --subject 1 --n-obs 2016 --mle-iters 30 --grid 8
 
 Outputs under ``experiments/AZT1D/output/``:
-  ``glucose_loglik.png``, ``glucose_mle_trace.png``, ``glucose_track.png``,
-  ``glucose_heldout_compare.png``, ``glucose_summary.csv``
+  ``calibrated_params_enkf.json``,
+  ``glucose_loglik.{pdf,png}``, ``glucose_mle_trace.{pdf,png}``,
+  ``glucose_track.{pdf,png}``, ``glucose_heldout_compare.{pdf,png}``,
+  ``glucose_summary.csv``
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import sys
 import time
@@ -68,7 +71,22 @@ from cd_dynamax_mirror.filters import (
 )
 
 from azt1d_data import load_azt1d_series
-from glucose_model import GlucoseParams, wsckf_glucose_dynamics, init_estimate, make_glucose_dynamics, mape_glucose
+from glucose_model import (
+    GlucoseParams,
+    init_estimate,
+    make_glucose_dynamics,
+    mape_glucose,
+    wsckf_glucose_dynamics,
+)
+from plot_style import (
+    DOUBLE_COLUMN_WIDTH,
+    METHOD_COLORS,
+    METHOD_MARKERS,
+    PALETTE,
+    save_publication_figure,
+    style_box_axis,
+    style_curve_axis,
+)
 
 OUTPUT_DIR = os.path.join(HERE, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -589,160 +607,304 @@ def main():
 
     # ---- plots ----
     panel_specs = [
-        ("WSC-KF", wsckf_Z, "C2", (wsckf_p3_g, wsckf_sg_g), theta["WSC-KF"]),
-        ("CD-EKF", ekf_Z, "C3", (ekf_p3_g, ekf_sg_g), theta["EKF"]),
+        ("WSC-KF", wsckf_Z, (wsckf_p3_g, wsckf_sg_g), theta["WSC-KF"]),
+        ("CD-EKF", ekf_Z, (ekf_p3_g, ekf_sg_g), theta["EKF"]),
     ]
     if do_ukf:
-        panel_specs.append(("CD-UKF", ukf_Z, "C4", (ukf_p3_g, ukf_sg_g), theta["UKF"]))
+        panel_specs.append(("CD-UKF", ukf_Z, (ukf_p3_g, ukf_sg_g), theta["UKF"]))
     if stochastic:
-        panel_specs.append(("CD-EnKF", enkf_Z, "C1", (enkf_p3_g, enkf_sg_g), theta["EnKF"]))
-        panel_specs.append(("PF", pf_Z, "C5", (pf_p3_g, pf_sg_g), theta["PF"]))
+        panel_specs.append(("CD-EnKF", enkf_Z, (enkf_p3_g, enkf_sg_g), theta["EnKF"]))
+        panel_specs.append(("PF", pf_Z, (pf_p3_g, pf_sg_g), theta["PF"]))
 
     n_panels = len(panel_specs)
     ncols = min(3, n_panels)
     nrows = int(np.ceil(n_panels / ncols))
     fig1, axes = plt.subplots(
-        nrows, ncols, figsize=(4.4 * ncols, 4.0 * nrows), sharey=True, squeeze=False
+        nrows,
+        ncols,
+        figsize=(DOUBLE_COLUMN_WIDTH, 1.65 * nrows + 0.42),
+        sharex=True,
+        sharey=True,
+        squeeze=False,
     )
     finite_all = np.concatenate([Z[np.isfinite(Z)] for _, Z, *_ in panel_specs])
     vmax = float(np.nanmax(finite_all))
     vmin = vmax - max(200.0, 0.15 * abs(vmax) if vmax != 0 else 200.0)
     P3, SG = np.meshgrid(p3_axis, sg_axis, indexing="ij")
-    for idx, (name, Z, color, grid_star, mle_star) in enumerate(panel_specs):
+    heat_handles = None
+    used_axes = []
+    for idx, (name, Z, grid_star, mle_star) in enumerate(panel_specs):
         ax = axes[idx // ncols, idx % ncols]
+        used_axes.append(ax)
         pcm = ax.pcolormesh(P3, SG, Z, shading="auto", cmap="viridis", vmin=vmin, vmax=vmax)
-        ax.plot(*grid_star, "*", color="white", ms=12, markeredgecolor="k", label="grid argmax")
-        ax.plot(*mle_star, "o", color=color, ms=7, markeredgecolor="k", label="Adam MLE")
+        grid_handle, = ax.plot(
+            *grid_star,
+            marker="*",
+            linestyle="none",
+            color="white",
+            markersize=7.0,
+            markeredgecolor=PALETTE["black"],
+            markeredgewidth=0.65,
+            label="Grid maximum",
+            zorder=3,
+        )
+        mle_handle, = ax.plot(
+            *mle_star,
+            marker=METHOD_MARKERS[name],
+            linestyle="none",
+            color=METHOD_COLORS[name],
+            markersize=4.8,
+            markeredgecolor=PALETTE["black"],
+            markeredgewidth=0.55,
+            label="Adam MLE",
+            zorder=3,
+        )
+        if heat_handles is None:
+            heat_handles = (grid_handle, mle_handle)
         ax.set_xscale("log")
         ax.set_yscale("log")
-        ax.set_xlabel(r"$p_3$")
         ax.set_title(name)
-        ax.legend(fontsize=6, loc="lower left")
-        fig1.colorbar(pcm, ax=ax, fraction=0.046, pad=0.04)
+        style_box_axis(ax)
+        if idx // ncols == nrows - 1:
+            ax.set_xlabel(r"$p_3$ [U$^{-1}$]")
         if idx % ncols == 0:
-            ax.set_ylabel(r"$\sigma_G$")
+            ax.set_ylabel(r"$\sigma_G$ [(mg/dL/min)$^{1/2}$]")
+    blank_axes = []
     for idx in range(n_panels, nrows * ncols):
-        axes[idx // ncols, idx % ncols].axis("off")
-    fig1.suptitle(
-        f"Train $L(p_3,\\sigma_G)$ — AZT1D subject {series.subject}, "
-        f"N_train={N_TRAIN}/{N_OBS}",
-        fontsize=11,
+        blank_ax = axes[idx // ncols, idx % ncols]
+        blank_ax.axis("off")
+        blank_axes.append(blank_ax)
+    cbar = fig1.colorbar(
+        pcm,
+        ax=used_axes,
+        fraction=0.026,
+        pad=0.025,
+        aspect=25,
     )
-    fig1.tight_layout()
-    fig1.savefig(os.path.join(OUTPUT_DIR, "glucose_loglik.png"), dpi=150)
+    cbar.set_label(r"$L_{\mathrm{train}}$ [nats]")
+    if blank_axes:
+        blank_axes[0].legend(
+            heat_handles,
+            ("Grid maximum", "Adam MLE"),
+            loc="center",
+            ncol=1,
+        )
+    else:
+        fig1.legend(
+            heat_handles,
+            ("Grid maximum", "Adam MLE"),
+            loc="lower center",
+            bbox_to_anchor=(0.5, 0.01),
+            ncol=2,
+        )
+    fig1.subplots_adjust(
+        left=0.09,
+        right=0.90,
+        bottom=0.25 if nrows == 1 else 0.16,
+        top=0.89 if nrows == 1 else 0.94,
+        wspace=0.18,
+        hspace=0.30,
+    )
+    save_publication_figure(fig1, os.path.join(OUTPUT_DIR, "glucose_loglik.png"))
+    plt.close(fig1)
 
-    fig2, axes2 = plt.subplots(1, 2, figsize=(11.0, 4.6))
+    fig2, axes2 = plt.subplots(
+        1,
+        2,
+        figsize=(DOUBLE_COLUMN_WIDTH, 2.35),
+    )
     ax = axes2[0]
     styles = [
-        ("WSC-KF", wsckf_p3_tr, wsckf_sg_tr, "C2", "o-"),
-        ("EKF", ekf_p3_tr, ekf_sg_tr, "C3", "s-"),
+        ("WSC-KF", wsckf_p3_tr, wsckf_sg_tr),
+        ("CD-EKF", ekf_p3_tr, ekf_sg_tr),
     ]
     if do_ukf:
-        styles.append(("UKF", ukf_p3_tr, ukf_sg_tr, "C4", "^-"))
+        styles.append(("CD-UKF", ukf_p3_tr, ukf_sg_tr))
     if stochastic:
-        styles.append(("EnKF", enkf_p3_tr, enkf_sg_tr, "C1", "D-"))
-        styles.append(("PF", pf_p3_tr, pf_sg_tr, "C5", "v-"))
-    for name, p3_tr, sg_tr, color, mk in styles:
-        ax.plot(p3_tr, sg_tr, mk, color=color, ms=4, label=f"{name}-AD")
+        styles.append(("CD-EnKF", enkf_p3_tr, enkf_sg_tr))
+        styles.append(("PF", pf_p3_tr, pf_sg_tr))
+    for name, p3_tr, sg_tr in styles:
+        ax.plot(
+            p3_tr,
+            sg_tr,
+            color=METHOD_COLORS[name],
+            marker=METHOD_MARKERS[name],
+            markersize=3.2,
+            markeredgewidth=0,
+            label=name,
+        )
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.set_xlabel(r"$p_3$")
-    ax.set_ylabel(r"$\sigma_G$")
-    ax.set_title("Adam path (train likelihood)")
-    ax.legend(fontsize=8)
-    ax.grid(alpha=0.3, which="both")
+    ax.set_xlabel(r"$p_3$ [U$^{-1}$]")
+    ax.set_ylabel(r"$\sigma_G$ [(mg/dL/min)$^{1/2}$]")
+    ax.set_title("(a) Parameter path")
+    style_curve_axis(ax, grid_axis="both")
 
     ax = axes2[1]
-    ll_styles = [("WSC-KF", wsckf_ll_tr, "C2", "o-"), ("EKF", ekf_ll_tr, "C3", "s-")]
+    ll_styles = [("WSC-KF", wsckf_ll_tr), ("CD-EKF", ekf_ll_tr)]
     if do_ukf:
-        ll_styles.append(("UKF", ukf_ll_tr, "C4", "^-"))
+        ll_styles.append(("CD-UKF", ukf_ll_tr))
     if stochastic:
-        ll_styles.append(("EnKF", enkf_ll_tr, "C1", "D-"))
-        ll_styles.append(("PF", pf_ll_tr, "C5", "v-"))
-    for name, ll_tr, color, mk in ll_styles:
-        ax.plot(np.arange(len(ll_tr)), ll_tr, mk, color=color, ms=3, label=name)
+        ll_styles.append(("CD-EnKF", enkf_ll_tr))
+        ll_styles.append(("PF", pf_ll_tr))
+    for name, ll_tr in ll_styles:
+        ax.plot(
+            np.arange(1, len(ll_tr) + 1),
+            ll_tr,
+            color=METHOD_COLORS[name],
+            marker=METHOD_MARKERS[name],
+            markersize=3.0,
+            markeredgewidth=0,
+            label=name,
+        )
     ax.set_xlabel("MLE iteration")
-    ax.set_ylabel("train log-likelihood")
-    ax.set_title("Train L traces")
-    ax.legend(fontsize=8)
-    ax.grid(alpha=0.3)
-    fig2.suptitle(
-        f"Train-only filter-MLE of $(p_3,\\sigma_G)$ (N_train={N_TRAIN})",
-        fontsize=11,
+    ax.set_ylabel("Train log-likelihood [nats]")
+    ax.set_title("(b) Training objective")
+    style_curve_axis(ax, grid_axis="y")
+    handles, labels = axes2[0].get_legend_handles_labels()
+    fig2.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.01),
+        ncol=min(5, len(labels)),
     )
-    fig2.tight_layout()
-    fig2.savefig(os.path.join(OUTPUT_DIR, "glucose_mle_trace.png"), dpi=150)
+    fig2.subplots_adjust(left=0.10, right=0.985, bottom=0.25, top=0.90, wspace=0.30)
+    save_publication_figure(fig2, os.path.join(OUTPUT_DIR, "glucose_mle_trace.png"))
+    plt.close(fig2)
 
     t_h = series.t_min / 60.0
-    fig3, ax = plt.subplots(figsize=(10.5, 4.2))
-    ax.plot(t_h[:N_TRAIN], cgm[:N_TRAIN], ".", ms=2, color="0.55", label="CGM train")
+    fig3, ax = plt.subplots(figsize=(DOUBLE_COLUMN_WIDTH, 2.25))
+    ax.plot(
+        t_h[:N_TRAIN],
+        cgm[:N_TRAIN],
+        linestyle="none",
+        marker=".",
+        markersize=2.3,
+        color=PALETTE["neutral_gray"],
+        alpha=0.70,
+        label="CGM (train)",
+    )
     if DO_HELDOUT:
-        ax.plot(t_h[N_TRAIN:], cgm[N_TRAIN:], ".", ms=2, color="0.8", label="CGM held-out")
+        ax.plot(
+            t_h[N_TRAIN:],
+            cgm[N_TRAIN:],
+            linestyle="none",
+            marker=".",
+            markersize=2.3,
+            color=PALETTE["black"],
+            alpha=0.72,
+            label="CGM (held-out)",
+        )
     ax.plot(
         t_h,
         g_hat[1:] if g_hat.shape[0] == N_OBS + 1 else g_hat[:N_OBS],
-        "-",
-        lw=1.0,
-        color="C2",
-        label=f"WSC-KF @ train MLE (MAPE={mape_wsckf:.2f}%)",
+        color=METHOD_COLORS["WSC-KF"],
+        linewidth=1.25,
+        label=f"WSC-KF estimate (MAPE={mape_wsckf:.2f}%)",
     )
     if DO_HELDOUT:
-        ax.axvline(t_h[N_TRAIN], color="C0", ls="--", lw=0.8, label="holdout start")
-    ax.set_xlabel("time [h]")
-    ax.set_ylabel("glucose [mg/dL]")
-    ax.set_title(f"AZT1D subject {series.subject}: CGM + WSC-KF @ train MLE")
-    ax.legend(fontsize=8)
-    ax.grid(alpha=0.3)
-    fig3.tight_layout()
-    fig3.savefig(os.path.join(OUTPUT_DIR, "glucose_track.png"), dpi=150)
+        ax.axvline(
+            t_h[N_TRAIN],
+            color=PALETTE["black"],
+            linestyle="--",
+            linewidth=0.8,
+            label="Holdout start",
+        )
+    ax.set_xlabel("Time [h]")
+    ax.set_ylabel("Glucose [mg/dL]")
+    style_curve_axis(ax, grid_axis="y")
+    handles, labels = ax.get_legend_handles_labels()
+    fig3.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.01),
+        ncol=len(labels),
+    )
+    fig3.subplots_adjust(left=0.085, right=0.99, bottom=0.27, top=0.97)
+    save_publication_figure(fig3, os.path.join(OUTPUT_DIR, "glucose_track.png"))
+    plt.close(fig3)
 
     if DO_HELDOUT:
-        fig4, axes4 = plt.subplots(1, 2, figsize=(11.0, 4.2))
+        fig4, axes4 = plt.subplots(
+            1,
+            2,
+            figsize=(DOUBLE_COLUMN_WIDTH, 2.35),
+        )
         ax = axes4[0]
         compare = [
-            ("WSC-KF", theta["WSC-KF"], enkf_ref["WSC-KF"], enkf_ref_std["WSC-KF"], "#2ca02c", "o", wsckf_p3_tr, wsckf_sg_tr),
-            ("EKF", theta["EKF"], enkf_ref["EKF"], enkf_ref_std["EKF"], "#d62728", "s", ekf_p3_tr, ekf_sg_tr),
+            ("WSC-KF", theta["WSC-KF"], enkf_ref["WSC-KF"], enkf_ref_std["WSC-KF"], wsckf_p3_tr, wsckf_sg_tr),
+            ("CD-EKF", theta["EKF"], enkf_ref["EKF"], enkf_ref_std["EKF"], ekf_p3_tr, ekf_sg_tr),
         ]
         if do_ukf:
             compare.append(
-                ("UKF", theta["UKF"], enkf_ref["UKF"], enkf_ref_std["UKF"], "#9467bd", "^", ukf_p3_tr, ukf_sg_tr)
+                ("CD-UKF", theta["UKF"], enkf_ref["UKF"], enkf_ref_std["UKF"], ukf_p3_tr, ukf_sg_tr)
             )
         if stochastic:
             compare.append(
-                ("EnKF", theta["EnKF"], enkf_ref["EnKF"], enkf_ref_std["EnKF"], "#ff7f0e", "D", enkf_p3_tr, enkf_sg_tr)
+                ("CD-EnKF", theta["EnKF"], enkf_ref["EnKF"], enkf_ref_std["EnKF"], enkf_p3_tr, enkf_sg_tr)
             )
             compare.append(
-                ("PF", theta["PF"], enkf_ref["PF"], enkf_ref_std["PF"], "#17becf", "v", pf_p3_tr, pf_sg_tr)
+                ("PF", theta["PF"], enkf_ref["PF"], enkf_ref_std["PF"], pf_p3_tr, pf_sg_tr)
             )
-        for name, th, held, err, color, mk, p3_tr, sg_tr in compare:
-            ax.plot(th[0], th[1], mk, color=color, ms=10, markeredgecolor="k", label=name)
-            ax.plot(p3_tr, sg_tr, "-", color=color, alpha=0.35, lw=1)
+        for name, th, held, err, p3_tr, sg_tr in compare:
+            color = METHOD_COLORS[name]
+            ax.plot(p3_tr, sg_tr, color=color, alpha=0.48, linewidth=0.9)
+            ax.plot(
+                th[0],
+                th[1],
+                marker=METHOD_MARKERS[name],
+                linestyle="none",
+                color=color,
+                markersize=5.0,
+                markeredgecolor=PALETTE["black"],
+                markeredgewidth=0.5,
+                label=name,
+            )
         ax.set_xscale("log")
         ax.set_yscale("log")
-        ax.set_xlabel(r"$p_3$")
-        ax.set_ylabel(r"$\sigma_G$")
-        ax.set_title(r"Train $\hat\theta$")
-        ax.legend(fontsize=8)
-        ax.grid(alpha=0.3, which="both")
+        ax.set_xlabel(r"$p_3$ [U$^{-1}$]")
+        ax.set_ylabel(r"$\sigma_G$ [(mg/dL/min)$^{1/2}$]")
+        ax.set_title("(a) MLE parameters")
+        style_curve_axis(ax, grid_axis="both")
 
         ax = axes4[1]
         names = [c[0] for c in compare]
-        helds = [c[2] for c in compare]
-        errs = [c[3] for c in compare]
-        colors = [c[4] for c in compare]
-        xpos = np.arange(len(names))
-        ax.bar(xpos, helds, yerr=errs, color=colors, edgecolor="0.3", lw=0.6, capsize=4)
-        ax.set_xticks(xpos)
-        ax.set_xticklabels(names)
-        ax.set_ylabel("ref-EnKF held-out NLL / obs")
-        ax.set_title(f"Shared reference score (EnKF-{REF_ENKF_PARTICLES})")
-        ax.grid(axis="y", alpha=0.3)
-        fig4.suptitle(
-            f"AZT1D subject {series.subject}: filter-MLE held-out comparison",
-            fontsize=11,
+        ypos = np.arange(len(names))
+        for y, (name, _, held, err, _, _) in zip(ypos, compare):
+            ax.errorbar(
+                held,
+                y,
+                xerr=err,
+                fmt=METHOD_MARKERS[name],
+                color=METHOD_COLORS[name],
+                markersize=4.5,
+                markeredgecolor=PALETTE["black"],
+                markeredgewidth=0.45,
+                capsize=2.2,
+                elinewidth=0.9,
+            )
+        ax.set_yticks(ypos)
+        ax.set_yticklabels(names)
+        ax.invert_yaxis()
+        ax.set_xlabel("Held-out NLL [nats/observation]")
+        ax.set_title(r"(b) Reference-EnKF score ($\pm 1$ SD)")
+        style_curve_axis(ax, grid_axis="x")
+        handles, labels = axes4[0].get_legend_handles_labels()
+        fig4.legend(
+            handles,
+            labels,
+            loc="lower center",
+            bbox_to_anchor=(0.5, 0.01),
+            ncol=min(5, len(labels)),
         )
-        fig4.tight_layout()
-        fig4.savefig(os.path.join(OUTPUT_DIR, "glucose_heldout_compare.png"), dpi=150)
+        fig4.subplots_adjust(left=0.10, right=0.985, bottom=0.25, top=0.90, wspace=0.34)
+        save_publication_figure(
+            fig4,
+            os.path.join(OUTPUT_DIR, "glucose_heldout_compare.png"),
+        )
+        plt.close(fig4)
 
     train_ll = {
         "WSC-KF": float(wsckf_ll_tr[-1]),
@@ -800,8 +962,28 @@ def main():
                 }
             )
 
+    calib_path = None
+    if stochastic:
+        calib_path = os.path.join(OUTPUT_DIR, "calibrated_params_enkf.json")
+        with open(calib_path, "w") as f:
+            json.dump(
+                {
+                    "subject": int(series.subject),
+                    "p3": theta["EnKF"][0],
+                    "sigma_g": theta["EnKF"][1],
+                    "meas_std": float(P.meas_std),
+                    "n_obs": N_OBS,
+                    "n_train": N_TRAIN,
+                    "method": f"CD-EnKF-{_args.enkf_particles}",
+                },
+                f,
+                indent=2,
+            )
+
     print(f"\nWrote {sum_path}")
-    print(f"Wrote {OUTPUT_DIR}/glucose_*.png")
+    if calib_path is not None:
+        print(f"Wrote {calib_path}")
+    print(f"Wrote {OUTPUT_DIR}/glucose_*.{{pdf,png}}")
 
 
 if __name__ == "__main__":
