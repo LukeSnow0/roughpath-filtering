@@ -8,23 +8,24 @@ Textbook Itô Heston (not log-price)::
 ``E[LLᵀ]_{SS} = E[S² v]`` does not close at second order, so CD freeze-at-mean
 moment ODEs are *not* the true covariance equations (unlike ``(log S, v)``).
 
-Protocol: one predict step from a point mass ``P0 = 0``. Mean errors use the
-closed affine mean (:func:`heston_model.exact_heston_sv_mean`).
+Protocol: one predict step from a point mass ``P0 = 0``.
+- Mean errors use the closed affine mean (:func:`heston_model.exact_heston_sv_mean`).
+- Cov errors use a high-budget antithetic MC reference with the same C^∞
+  diffusion map as the filters.
 
-Diffusion uses the globally ``C^∞`` map ``φ(v)=(v²+ε²)^{1/4}`` in place of
-``√v`` (``ε=θ``) so every derivative of the noise fields is bounded. Drift is
-unchanged, so the exact mean is the same as textbook Heston. This tests whether
-the leftover ``δ²`` m=5 rate was due to CIR ``√v`` regularity.
+Diffusion uses ``φ(v)=(v²+ε²)^{1/4}`` in place of ``√v`` (``ε=θ``).
 
-Cubature paths are the explicit multi-D Lyons–Victoir formulae
-(``multidim_method="lv"``). Degrees ``m=3,5`` only.
+Cubature paths are explicit multi-D Lyons–Victoir (``multidim_method="lv"``).
 
 Run:
   uv run --extra experiments python experiments/heston_test/weak_error_delta_scaling.py
+  uv run --extra experiments python experiments/heston_test/weak_error_delta_scaling.py \\
+      --mc-paths 4000000 --mc-dt 1e-4
 """
 
 from __future__ import annotations
 
+import argparse
 import csv
 import os
 import sys
@@ -56,20 +57,19 @@ from heston_model import (
     HestonParams,
     exact_heston_sv_mean,
     make_heston_sv_dynamics,
+    mc_heston_sv_mean_cov,
 )
 from wsckf.library import ito_to_stratonovich_dynamics, precompute_cubature_paths, predict
 
 OUTPUT_DIR = os.path.join(HERE, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Feller-friendly defaults (2 κ θ = 0.16 > ξ² = 0.09). State is [S, v].
 PARAMS = HestonParams()
 V0 = float(PARAMS.theta if PARAMS.v0 is None else PARAMS.v0)
-S0 = float(np.exp(PARAMS.x0))  # log-price x0=0 → S0=1
+S0 = float(np.exp(PARAMS.x0))
 X0 = np.array([S0, V0], dtype=np.float64)
 
-INNER_STEPS = 128  # RK4 steps per interval → dt0 = δ/128
-# C^∞ stand-in for √v: φ(v)=(v²+ε²)^{1/4}. Drift (hence the exact mean) unchanged.
+INNER_STEPS = 128
 SMOOTH_VOL_EPS = float(PARAMS.theta)
 ITO_DRIFT, DIFFUSION, QC_FN, _, _ = make_heston_sv_dynamics(
     PARAMS, smooth_vol_eps=SMOOTH_VOL_EPS
@@ -80,7 +80,6 @@ CKF_PARAMS = UKFParams(alpha=1.0, beta=0.0, kappa=0.0)
 
 
 def wsckf_predict(delta: float, lyons_degree: int, k: int = 1):
-    """Point-mass predict with library multi-D LV paths (incl. Lévy area)."""
     integration_dt = delta / INNER_STEPS
     ts, path_values, path_weights = precompute_cubature_paths(
         horizon=float(delta),
@@ -106,7 +105,6 @@ def wsckf_predict(delta: float, lyons_degree: int, k: int = 1):
 
 
 def cd_predict(delta: float, which: str):
-    """CD-EKF / UKF / CKF predict from ``P0 = 0`` (moment ODEs, frozen L)."""
     m = jnp.asarray(X0)
     P = jnp.zeros((2, 2))
     n_inner = INNER_STEPS
@@ -153,15 +151,16 @@ def cd_predict(delta: float, which: str):
     return np.asarray(m_pred), np.asarray(P_pred)
 
 
-def fit_slope(deltas, errs, dmax=0.25, floor=1e-15):
-    d = np.asarray(deltas)
-    e = np.asarray(errs)
-    mask = (d <= dmax) & (e > floor)
+def fit_slope(deltas, errs, dmin=None, dmax=0.35, floor=1e-15):
+    d = np.asarray(deltas, dtype=np.float64)
+    e = np.asarray(errs, dtype=np.float64)
+    mask = (e > floor) & (d <= dmax)
+    if dmin is not None:
+        mask &= d >= float(dmin)
     if mask.sum() < 2:
         mask = e > floor
     if mask.sum() < 2:
         return float("nan")
-    # Guard against all-zero / underflow floors.
     if np.all(e[mask] <= floor * 10):
         return float("nan")
     return float(np.polyfit(np.log(d[mask]), np.log(e[mask]), 1)[0])
@@ -184,14 +183,15 @@ def _plot_scaling(
     png_path: str,
     guides: list[tuple[float, np.ndarray, str, str]],
     ncol: int = 3,
+    fit_dmin: float | None = None,
+    fit_dmax: float = 0.35,
 ):
-    """``series``: name -> (errs, color, marker_style)."""
     AXIS_FS, LEGEND_FS, TICK_FS = 13, 11, 11
     rng_floor = 1e-18
     fig, ax = plt.subplots(figsize=(6.2, 4.8))
     handles = []
     for name, (errs, color, fmt) in series.items():
-        slope = fit_slope(deltas, errs)
+        slope = fit_slope(deltas, errs, dmin=fit_dmin, dmax=fit_dmax)
         label = name if not np.isfinite(slope) else rf"{name} (fit={slope:.2f})"
         (ln,) = ax.loglog(
             deltas, np.maximum(errs, rng_floor), fmt, color=color, label=label
@@ -212,7 +212,7 @@ def _plot_scaling(
                 ls=ls,
             )
         )
-    ax.set_xlabel(r"assimilation interval $\delta$", fontsize=AXIS_FS)
+    ax.set_xlabel(r"assimilation interval $\tau$", fontsize=AXIS_FS)
     ax.set_ylabel(ylabel, fontsize=AXIS_FS)
     ax.set_xlim(deltas[0], deltas[-1])
     ax.tick_params(axis="both", which="major", labelsize=TICK_FS)
@@ -233,19 +233,111 @@ def _plot_scaling(
 
 
 def main():
-    # Small-δ asymptotic (LV rates) down through 10^{-3}; large-δ for prefactors.
-    deltas = np.logspace(np.log10(1e-3), np.log10(1.5), 16)
+    parser = argparse.ArgumentParser(description="Heston (S,v) weak-error δ-scaling")
+    parser.add_argument(
+        "--mc-paths",
+        type=int,
+        default=2_000_000,
+        dest="mc_paths",
+        help="Independent Z draws for cov MC (antithetic → 2× trajectories)",
+    )
+    parser.add_argument(
+        "--mc-steps",
+        type=int,
+        default=2048,
+        dest="mc_steps",
+        help="Fixed Euler steps for every δ (shared across methods)",
+    )
+    parser.add_argument(
+        "--mc-batch",
+        type=int,
+        default=150_000,
+        dest="mc_batch",
+        help="Path batch size for streaming MC moment accumulation",
+    )
+    parser.add_argument(
+        "--mc-dt",
+        type=float,
+        default=1e-4,
+        dest="mc_dt",
+        help="Unused if --mc-steps is set; kept for CLI compatibility",
+    )
+    parser.add_argument("--mc-seed", type=int, default=0, dest="mc_seed")
+    parser.add_argument(
+        "--mc-seeds",
+        type=int,
+        default=1,
+        dest="mc_seeds",
+        help="Independent MC seeds averaged into P_ref (reduces floor)",
+    )
+    parser.add_argument(
+        "--delta-min",
+        type=float,
+        default=0.15,
+        dest="delta_min",
+        help="Smallest assimilation interval δ",
+    )
+    parser.add_argument(
+        "--delta-max",
+        type=float,
+        default=0.55,
+        dest="delta_max",
+        help="Largest assimilation interval δ",
+    )
+    parser.add_argument(
+        "--n-deltas",
+        type=int,
+        default=10,
+        dest="n_deltas",
+        help="Number of log-spaced δ values",
+    )
+    parser.add_argument(
+        "--fit-dmin",
+        type=float,
+        default=0.15,
+        dest="fit_dmin",
+        help="Lower δ for reported/plot slope fits",
+    )
+    parser.add_argument(
+        "--fit-dmax",
+        type=float,
+        default=0.50,
+        dest="fit_dmax",
+        help="Upper δ for reported/plot slope fits",
+    )
+    parser.add_argument(
+        "--skip-cov",
+        action="store_true",
+        dest="skip_cov",
+        help="Only compute mean errors (no MC cov)",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        default="",
+        help="Optional suffix for output filenames (e.g. _zoom)",
+    )
+    args = parser.parse_args()
+
+    deltas = np.logspace(np.log10(args.delta_min), np.log10(args.delta_max), int(args.n_deltas))
     wsckf_degrees = (3, 5)
     wsckf_colors = {3: "#6A4C93", 5: "#9B5DE5"}
+    tag = args.tag
 
     print(
         f"Heston (S,v) C^∞-vol weak-error δ-scaling  "
         f"φ(v)=(v²+ε²)^{{1/4}} ε={SMOOTH_VOL_EPS:g}  "
         f"κ={PARAMS.kappa:g} θ={PARAMS.theta:g} ξ={PARAMS.xi:g} ρ={PARAMS.rho:g}  "
-        f"x0={X0.tolist()}  (P0=0, mean=exact)\n"
+        f"x0={X0.tolist()}  (P0=0)\n"
+        f"δ ∈ [{args.delta_min:g}, {args.delta_max:g}] ({len(deltas)} pts); "
+        f"fit window [{args.fit_dmin:g}, {args.fit_dmax:g}]\n"
+        f"MC cov: n_paths={args.mc_paths} (×2 antithetic) ×{args.mc_seeds} seed(s), "
+        f"steps={args.mc_steps}, batch={args.mc_batch}, smooth_vol_eps={SMOOTH_VOL_EPS:g}\n"
     )
 
+    # --- Mean (exact reference) ---
     ws_mean_err: dict[int, np.ndarray] = {}
+    ws_cov_err: dict[int, np.ndarray] = {m: [] for m in wsckf_degrees}
     for m in wsckf_degrees:
         em = []
         for d in deltas:
@@ -255,6 +347,7 @@ def main():
         ws_mean_err[m] = np.array(em)
 
     ekf_mean, ukf_mean, ckf_mean = [], [], []
+    ekf_cov, ukf_cov, ckf_cov = [], [], []
     for d in deltas:
         m_ref = exact_heston_sv_mean(float(d), X0, PARAMS)
         for which, em_list in (
@@ -266,37 +359,129 @@ def main():
             em_list.append(float(np.linalg.norm(m_hat - m_ref)))
     ekf_mean, ukf_mean, ckf_mean = map(np.array, (ekf_mean, ukf_mean, ckf_mean))
 
-    print("Mean weak-error slope vs delta:")
+    print(
+        f"Mean weak-error slope vs delta "
+        f"(exact mean ref, fit window δ∈[{args.fit_dmin:g},{args.fit_dmax:g}]):"
+    )
     for m in wsckf_degrees:
         print(
-            f"    WSC-KF m={m}: slope = {fit_slope(deltas, ws_mean_err[m]):.2f}"
+            f"    WSC-KF m={m}: slope = "
+            f"{fit_slope(deltas, ws_mean_err[m], dmin=args.fit_dmin, dmax=args.fit_dmax):.2f}"
             f"   (theory {(m + 1) / 2:.1f})"
         )
-    print(f"    CD-EKF  : slope = {fit_slope(deltas, ekf_mean):.2f}")
-    print(f"    CD-UKF  : slope = {fit_slope(deltas, ukf_mean):.2f}")
-    print(f"    CD-CKF  : slope = {fit_slope(deltas, ckf_mean):.2f}")
+    print(
+        f"    CD-EKF  : slope = "
+        f"{fit_slope(deltas, ekf_mean, dmin=args.fit_dmin, dmax=args.fit_dmax):.2f}"
+    )
+    print(
+        f"    CD-UKF  : slope = "
+        f"{fit_slope(deltas, ukf_mean, dmin=args.fit_dmin, dmax=args.fit_dmax):.2f}"
+    )
+    print(
+        f"    CD-CKF  : slope = "
+        f"{fit_slope(deltas, ckf_mean, dmin=args.fit_dmin, dmax=args.fit_dmax):.2f}"
+    )
 
-    csv_path = os.path.join(OUTPUT_DIR, "weak_error_delta_scaling_sv_smooth.csv")
+    # --- Cov (high-budget MC reference, same φ) ---
+    if not args.skip_cov:
+        print("\nComputing high-budget MC covariance references...")
+        for i, d in enumerate(deltas):
+            # Fixed step count avoids per-δ JIT blowups and keeps large-δ
+            # runs from OOMing; bias is shared across methods at each δ.
+            n_steps = int(args.mc_steps)
+            n_seeds = max(1, int(args.mc_seeds))
+            print(
+                f"  δ={float(d):.4g}  MC steps={n_steps}  "
+                f"paths={args.mc_paths}×2 ×{n_seeds} seed(s) ...",
+                flush=True,
+            )
+            P_acc = np.zeros((2, 2), dtype=np.float64)
+            for s in range(n_seeds):
+                _, P_s = mc_heston_sv_mean_cov(
+                    float(d),
+                    X0,
+                    PARAMS,
+                    n_paths=int(args.mc_paths),
+                    n_steps=n_steps,
+                    seed=int(args.mc_seed) + i * 1009 + s,
+                    smooth_vol_eps=SMOOTH_VOL_EPS,
+                    batch_paths=int(args.mc_batch),
+                )
+                P_acc += np.asarray(P_s, dtype=np.float64)
+            P_ref = P_acc / float(n_seeds)
+
+            for m in wsckf_degrees:
+                _, P_hat = wsckf_predict(float(d), lyons_degree=m, k=1)
+                ws_cov_err[m].append(float(np.linalg.norm(P_hat - P_ref, ord="fro")))
+
+            for which, clist in (
+                ("ekf", ekf_cov),
+                ("ukf", ukf_cov),
+                ("ckf", ckf_cov),
+            ):
+                _, P_hat = cd_predict(float(d), which)
+                clist.append(float(np.linalg.norm(P_hat - P_ref, ord="fro")))
+
+        for m in wsckf_degrees:
+            ws_cov_err[m] = np.array(ws_cov_err[m])
+        ekf_cov, ukf_cov, ckf_cov = map(np.array, (ekf_cov, ukf_cov, ckf_cov))
+
+        print(
+            f"\nCov weak-error slope vs delta "
+            f"(MC ref, fit window δ∈[{args.fit_dmin:g},{args.fit_dmax:g}]):"
+        )
+        for m in wsckf_degrees:
+            print(
+                f"    WSC-KF m={m}: slope = "
+                f"{fit_slope(deltas, ws_cov_err[m], dmin=args.fit_dmin, dmax=args.fit_dmax):.2f}"
+                f"   (theory {(m + 1) / 2:.1f})"
+            )
+        print(
+            f"    CD-EKF  : slope = "
+            f"{fit_slope(deltas, ekf_cov, dmin=args.fit_dmin, dmax=args.fit_dmax):.2f}"
+        )
+        print(
+            f"    CD-UKF  : slope = "
+            f"{fit_slope(deltas, ukf_cov, dmin=args.fit_dmin, dmax=args.fit_dmax):.2f}"
+        )
+        print(
+            f"    CD-CKF  : slope = "
+            f"{fit_slope(deltas, ckf_cov, dmin=args.fit_dmin, dmax=args.fit_dmax):.2f}"
+        )
+
+    csv_path = os.path.join(OUTPUT_DIR, f"weak_error_delta_scaling_sv{tag}.csv")
     with open(csv_path, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(
+        header = (
             ["delta"]
             + [f"wsckf_mean_err_m{m}" for m in wsckf_degrees]
             + ["ekf_mean_err", "ukf_mean_err", "ckf_mean_err"]
         )
+        if not args.skip_cov:
+            header += (
+                [f"wsckf_cov_err_m{m}" for m in wsckf_degrees]
+                + ["ekf_cov_err", "ukf_cov_err", "ckf_cov_err"]
+            )
+        w.writerow(header)
         for i, d in enumerate(deltas):
-            w.writerow(
+            row = (
                 [d]
                 + [ws_mean_err[m][i] for m in wsckf_degrees]
                 + [ekf_mean[i], ukf_mean[i], ckf_mean[i]]
             )
+            if not args.skip_cov:
+                row += (
+                    [ws_cov_err[m][i] for m in wsckf_degrees]
+                    + [ekf_cov[i], ukf_cov[i], ckf_cov[i]]
+                )
+            w.writerow(row)
 
-    png_mean = os.path.join(OUTPUT_DIR, "weak_error_delta_scaling_sv_mean.png")
+    png_mean = os.path.join(OUTPUT_DIR, f"weak_error_delta_scaling_sv_mean{tag}.png")
     _plot_scaling(
         deltas,
         {
-            rf"WSC-KF $m$=3": (ws_mean_err[3], wsckf_colors[3], "o-"),
-            rf"WSC-KF $m$=5": (ws_mean_err[5], wsckf_colors[5], "o-"),
+            r"WSC-KF $m$=3": (ws_mean_err[3], wsckf_colors[3], "o-"),
+            r"WSC-KF $m$=5": (ws_mean_err[5], wsckf_colors[5], "o-"),
             "CD-EKF": (ekf_mean, "C3", "s-"),
             "CD-UKF": (ukf_mean, "C0", "^-"),
             "CD-CKF": (ckf_mean, "#2E86AB", "D-"),
@@ -304,13 +489,38 @@ def main():
         ylabel=r"$\|\hat m - m\|_2$",
         png_path=png_mean,
         guides=[
-            (2.0, ws_mean_err[3], r"$\propto\delta^{2}$", "--"),
-            (3.0, ws_mean_err[5], r"$\propto\delta^{3}$", ":"),
+            (2.0, ws_mean_err[3], r"$\propto\tau^{2}$", "--"),
+            (3.0, ws_mean_err[5], r"$\propto\tau^{3}$", ":"),
         ],
         ncol=2,
+        fit_dmin=args.fit_dmin,
+        fit_dmax=args.fit_dmax,
     )
-
     print(f"\nSaved plot -> {png_mean}")
+
+    if not args.skip_cov:
+        png_cov = os.path.join(OUTPUT_DIR, f"weak_error_delta_scaling_sv_cov{tag}.png")
+        _plot_scaling(
+            deltas,
+            {
+                r"WSC-KF $m$=3": (ws_cov_err[3], wsckf_colors[3], "o-"),
+                r"WSC-KF $m$=5": (ws_cov_err[5], wsckf_colors[5], "o-"),
+                "CD-EKF": (ekf_cov, "C3", "s-"),
+                "CD-UKF": (ukf_cov, "C0", "^-"),
+                "CD-CKF": (ckf_cov, "#2E86AB", "D-"),
+            },
+            ylabel=r"$\|\hat P - P\|_F$",
+            png_path=png_cov,
+            guides=[
+                (2.0, ekf_cov, r"$\propto\tau^{2}$", "--"),
+                (3.0, ws_cov_err[5], r"$\propto\tau^{3}$", ":"),
+            ],
+            ncol=2,
+            fit_dmin=args.fit_dmin,
+            fit_dmax=args.fit_dmax,
+        )
+        print(f"Saved plot -> {png_cov}")
+
     print(f"Saved data -> {csv_path}")
 
 

@@ -1,0 +1,10 @@
+updated: 15:25:54
+run alive: yes
+run: filter_nll diff_scale=2, 20 seeds, EnKF/PF={50,100,500,2000}
+seeds completed: 20/20 (100%)
+current seed: 119
+seeds seen: [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119]
+last log line:
+  Wrote /Users/lukesnow-basis/Documents/code/cubature-filtering/experiments/heston_test/output/filter_nll/filter_rmse_pareto.png
+
+DONE

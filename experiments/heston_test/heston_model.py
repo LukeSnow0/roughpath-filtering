@@ -287,11 +287,18 @@ def mc_heston_sv_mean_cov(
     n_paths: int = 1_000_000,
     n_steps: int | None = None,
     seed: int = 0,
+    smooth_vol_eps: float | None = None,
+    batch_paths: int = 250_000,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Monte Carlo Itô-Euler estimate of ``(E[x], Cov(x))`` for ``x=[S,v]``.
 
     Uses antithetic Brownian increments. ``n_paths`` is the number of
     independent ``Z`` draws; the estimator uses ``2 n_paths`` trajectories.
+    Paths are processed in batches of ``batch_paths`` and moments are
+    accumulated with a numerically stable streaming update.
+
+    If ``smooth_vol_eps`` is set, diffusion uses ``φ(v)=(v²+ε²)^{1/4}`` instead
+    of ``√max(v,ε)``, matching :func:`make_heston_sv_dynamics`.
     """
     import jax
     import jax.random as jr
@@ -301,6 +308,7 @@ def mc_heston_sv_mean_cov(
         n_steps = max(256, int(np.ceil(float(delta) / 5e-4)))
     n_steps = int(n_steps)
     n_paths = int(n_paths)
+    batch_paths = int(max(1, min(batch_paths, n_paths)))
     S0 = jnp.asarray(x0[0], dtype=jnp.float64)
     v0 = jnp.asarray(x0[1], dtype=jnp.float64)
     mu, kappa, theta = p.mu, p.kappa, p.theta
@@ -308,21 +316,27 @@ def mc_heston_sv_mean_cov(
     rho_bar = float(np.sqrt(max(0.0, 1.0 - rho * rho)))
     dt = jnp.asarray(delta / n_steps, dtype=jnp.float64)
     sqrt_dt = jnp.sqrt(dt)
+    eps2 = None if smooth_vol_eps is None else float(smooth_vol_eps) ** 2
 
-    def one_batch(key):
-        S = jnp.full((n_paths,), S0, dtype=jnp.float64)
-        v = jnp.full((n_paths,), v0, dtype=jnp.float64)
+    def _phi(v):
+        if eps2 is None:
+            return jnp.sqrt(jnp.maximum(v, v_eps))
+        return jnp.power(v * v + eps2, 0.25)
+
+    def one_batch(key, n_batch: int):
+        S = jnp.full((n_batch,), S0, dtype=jnp.float64)
+        v = jnp.full((n_batch,), v0, dtype=jnp.float64)
         Sm = S.copy()
         vm = v.copy()
 
         def body(carry, k):
             S_, v_, Sm_, vm_ = carry
-            z = jr.normal(k, (n_paths, 2), dtype=jnp.float64)
+            z = jr.normal(k, (n_batch, 2), dtype=jnp.float64)
             dW = z * sqrt_dt
             dWm = -dW
 
             def step(S__, v__, dW__):
-                sv = s * jnp.sqrt(jnp.maximum(v__, v_eps))
+                sv = s * _phi(v__)
                 dS = mu * S__ * dt + S__ * sv * dW__[:, 0]
                 dv = kappa * (theta - v__) * dt + xi * sv * (
                     rho * dW__[:, 0] + rho_bar * dW__[:, 1]
@@ -340,8 +354,45 @@ def mc_heston_sv_mean_cov(
         )
         mean = jnp.mean(xx, axis=0)
         xc = xx - mean
-        cov = (xc.T @ xc) / xx.shape[0]
-        return mean, 0.5 * (cov + cov.T)
+        # Unnormalized scatter; caller converts with total count.
+        scatter = xc.T @ xc
+        return mean, scatter, xx.shape[0]
 
-    mean, cov = jax.jit(one_batch, static_argnums=())(jr.key(int(seed)))
-    return np.asarray(mean), np.asarray(cov)
+    # Stream batches: Chan-style mean/cov merge.
+    total_n = 0
+    mean = np.zeros(2, dtype=np.float64)
+    scatter = np.zeros((2, 2), dtype=np.float64)
+    key = jr.key(int(seed))
+    remaining = n_paths
+    batch_i = 0
+    # Cache jitted kernels by batch size (last batch may be smaller).
+    jitted: dict[int, object] = {}
+
+    while remaining > 0:
+        n_batch = min(batch_paths, remaining)
+        if n_batch not in jitted:
+            jitted[n_batch] = jax.jit(lambda k, nb=n_batch: one_batch(k, nb))
+        key, sub = jr.split(key)
+        b_mean, b_scatter, b_n = jitted[n_batch](sub)
+        b_mean = np.asarray(b_mean)
+        b_scatter = np.asarray(b_scatter)
+        b_n = int(b_n)
+        if total_n == 0:
+            mean = b_mean
+            scatter = b_scatter
+            total_n = b_n
+        else:
+            delta_m = b_mean - mean
+            mean = mean + delta_m * (b_n / (total_n + b_n))
+            scatter = (
+                scatter
+                + b_scatter
+                + np.outer(delta_m, delta_m) * (total_n * b_n / (total_n + b_n))
+            )
+            total_n += b_n
+        remaining -= n_batch
+        batch_i += 1
+
+    cov = scatter / float(total_n)
+    cov = 0.5 * (cov + cov.T)
+    return mean, cov
