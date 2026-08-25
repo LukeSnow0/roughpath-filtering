@@ -263,7 +263,11 @@ def _plot_metric_pareto(
             continue
         xs = np.asarray([1e3 * r["time_s_mean"] for r in pts])
         ys = np.asarray([r[y_mean_key] for r in pts])
-        ystd = np.asarray([r[y_std_key] for r in pts], dtype=np.float64) * float(band_scale)
+        ystd_raw = np.asarray([r[y_std_key] for r in pts], dtype=np.float64)
+        xstd = np.asarray(
+            [1e3 * float(r.get("time_s_std", 0.0)) for r in pts], dtype=np.float64
+        )
+        ystd = ystd_raw * float(band_scale)
         if clip_band is not None:
             ystd = np.minimum(ystd, float(clip_band))
         all_xs.extend(xs.tolist())
@@ -306,7 +310,13 @@ def _plot_metric_pareto(
                 )
                 continue
             pts = [p for p, k in zip(pts, keep) if k]
-            xs, ys, ystd = xs[keep], ys[keep], ystd[keep]
+            xs, ys, ystd, ystd_raw, xstd = (
+                xs[keep],
+                ys[keep],
+                ystd[keep],
+                ystd_raw[keep],
+                xstd[keep],
+            )
             series_first_inrange[color_key] = (float(xs[0]), float(ys[0]))
 
         xlim_xs.extend(float(x) for x in xs)
@@ -321,9 +331,33 @@ def _plot_metric_pareto(
                 alpha=band_alpha,
                 lw=0,
             )
+            ax.errorbar(
+                xs,
+                ys,
+                xerr=xstd * float(band_scale),
+                yerr=ystd,
+                fmt="none",
+                ecolor=color,
+                elinewidth=0.9,
+                capsize=2.0,
+                alpha=0.75,
+                zorder=3,
+            )
             ax.plot(xs, ys, marker, color=color, markerfacecolor="white", markersize=4.5, label=disp)
         else:
             ax.fill_between(xs, ys - ystd, ys + ystd, color=color, alpha=band_alpha, lw=0)
+            ax.errorbar(
+                xs,
+                ys,
+                xerr=xstd * float(band_scale),
+                yerr=ystd,
+                fmt="none",
+                ecolor=color,
+                elinewidth=0.9,
+                capsize=2.0,
+                alpha=0.75,
+                zorder=3,
+            )
             ax.plot(
                 xs,
                 ys,
@@ -480,7 +514,7 @@ def _pred_nll_focus_ylim(summary: list[dict]) -> tuple[float, float, tuple[str, 
     vals = [float(r["pred_nll_per_obs_mean"]) for r in summary]
     best = min(vals)
     y_lo = best - 0.08
-    y_hi = 1.5
+    y_hi = -0.5
     off: list[str] = []
     for fam in ("CD-UKF", "CD-CKF", "KLV-PF"):
         fam_vals = [float(r["pred_nll_per_obs_mean"]) for r in summary if r["family"] == fam]
@@ -528,19 +562,20 @@ def _plot_all_paretos(
         ylabel="Predictive NLL [nats / observation]",
         outfile="filter_pred_nll_pareto.png",
         ylim=(pred_lo, pred_hi),
-        band_scale=0.30,
-        clip_band=0.035,
+        band_scale=0.55,
+        clip_band=0.06,
         band_alpha=0.10,
         offscale_families=off_fams,
         park_outliers=True,
         diff_scale=diff_scale,
-        # WSC box (purple): [x_min, 10^2] × [y_min, -1.4]
-        # Gaussian box (blue): [x_min, 10^0] × [-1.2, y_max]
-        # Particle box (red): [2·10^2, x_max] × [y_min, -1.4]
+        # Three regions for the Pareto story (15-seed means):
+        #   left  — Gaussian filters (cheap, higher / parked NLL)
+        #   mid   — efficient WSC-KF front (beats Gaussians, cheaper than large EnKF/PF)
+        #   right — EnKF (≥100) / large PF (accurate, expensive)
         shade_regions=[
-            (None, 1e2, None, -1.4, "WSC-KF-m3"),
-            (None, 1e0, -1.2, None, "CD-EKF"),
-            (2e2, None, None, -1.4, "PF"),
+            (None, 7.0, -1.42, None, "CD-EKF"),
+            (18.0, 1.1e2, None, -1.48, "WSC-KF-m3"),
+            (1.3e2, None, None, -1.55, "PF"),
         ],
         figsize=(0.78 * DOUBLE_COLUMN_WIDTH, 2.85),
         x_pad=(1.15, 1.25),
