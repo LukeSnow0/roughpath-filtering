@@ -36,6 +36,13 @@ from wsckf.filter.filtering import predict, update
 from wsckf.library import ito_to_stratonovich_dynamics, precompute_cubature_paths
 
 
+def _spd(A, jitter: float = 1e-12):
+    """Symmetric eigen-clip onto the SPD cone (TME truncations need not be PD)."""
+    A = 0.5 * (A + A.T)
+    w, V = jnp.linalg.eigh(A)
+    return (V * jnp.maximum(w, jitter)) @ V.T
+
+
 def mixture_obs_logpdf(y, samples, weights, h, R):
     """Log density of y under Σ_j w_j N(h(x_j), R)."""
     weights = jnp.asarray(weights, dtype=jnp.float64)
@@ -247,3 +254,150 @@ def run_pf_predictive_nll(
         return (x_pred[idx], key), ll_pred, ll_filt, jnp.sum(w[:, None] * x_pred, axis=0)
 
     return _scan_nlls(body, (particles, key), ys.shape[0])
+
+
+def run_tme_predictive_nll(
+    *,
+    drift,
+    L_fn,
+    h,
+    R,
+    ys,
+    m0,
+    P0,
+    dt,
+    order: int,
+    ukf_params: UKFParams,
+):
+    """TME Gaussian filter (Zhao et al., TAC 2021) with mixture predictive NLL."""
+    from tme import assemble_tme_jax, cached_eval_fn
+
+    n = m0.shape[0]
+    alpha, beta, kappa = ukf_params.alpha, ukf_params.beta, ukf_params.kappa
+    lamb = alpha**2 * (n + kappa) - n
+    w_mean, w_cov, _W = _ukf_weights(n, alpha, beta, lamb)
+    eval_all = cached_eval_fn(drift, L_fn, int(order))
+
+    def moments_at(x):
+        return assemble_tme_jax(eval_all(x), float(dt), int(order))
+
+    def body(carry, step_k):
+        m, P = carry
+        X = _ukf_sigmas(m, P, n, lamb)
+        a_i, S_i = vmap(moments_at)(X)
+        S_i = vmap(_spd)(S_i)
+        m_pred = w_mean @ a_i
+        second = vmap(lambda a, S: S + jnp.outer(a, a))(a_i, S_i)
+        P_pred = _spd(jnp.tensordot(w_mean, second, axes=1) - jnp.outer(m_pred, m_pred))
+
+        def one_ll(a, S, w):
+            z = h(a)
+            H = jax.jacfwd(h)(a)
+            Sy = psd(H @ S @ H.T + R)
+            ll = gaussian_logpdf(ys[step_k], z, Sy)
+            return jnp.where(w > 0, jnp.log(w) + ll, -jnp.inf)
+
+        ll_pred = logsumexp(vmap(one_ll)(a_i, S_i, w_mean))
+        m, P = _ekf_update(m_pred, P_pred, h, R, ys[step_k], 1)
+        S_y = psd(jax.jacfwd(h)(m_pred) @ P_pred @ jax.jacfwd(h)(m_pred).T + R)
+        ll_filt = gaussian_logpdf(ys[step_k], h(m_pred), S_y)
+        return (m, P), ll_pred, ll_filt, m
+
+    return _scan_nlls(body, (m0, P0), ys.shape[0])
+
+
+def _kl_wdot(t, Z, horizon: float):
+    """Truncated KL / Fourier derivative of Brownian motion on ``[0, horizon]``.
+
+    ``Z`` has shape ``(n_modes, noise_dim)``. ``Ẇ_t = Σ_k Z_k √(2/T) cos(ω_k t)``.
+    """
+    n_modes = Z.shape[0]
+    k = jnp.arange(1, n_modes + 1, dtype=t.dtype)
+    omega = (k - 0.5) * jnp.pi / horizon
+    coef = jnp.sqrt(2.0 / horizon) * jnp.cos(omega * t)
+    return coef @ Z
+
+
+def run_seukf_predictive_nll(
+    *,
+    drift,
+    L_fn,
+    h,
+    R,
+    ys,
+    m0,
+    P0,
+    dt,
+    dt0,
+    n_modes: int,
+    ukf_params: UKFParams,
+):
+    """Series-expansion UKF (Lyons, Särkkä, Storkey, TSP 2014).
+
+    Truncated Fourier / KL Brownian motion; one unscented transform of the joint
+    ``(x_0, Z_{1:N})`` per assimilation interval; Wong–Zakai ODE in the
+    Stratonovich interpretation.
+    """
+    from wsckf.library import ito_to_stratonovich_dynamics
+
+    strat_drift, strat_L = ito_to_stratonovich_dynamics(drift, L_fn)
+    n_x = int(m0.shape[0])
+    n_modes = int(n_modes)
+    noise_dim = 2
+    n_z = n_modes * noise_dim
+    n_aug = n_x + n_z
+    alpha, beta, kappa = ukf_params.alpha, ukf_params.beta, ukf_params.kappa
+    lamb = alpha**2 * (n_aug + kappa) - n_aug
+    w_mean, w_cov, _W = _ukf_weights(n_aug, alpha, beta, lamb)
+    n_inner = _rk4_n_steps(dt, dt0)
+    horizon = jnp.asarray(dt, dtype=jnp.float64)
+
+    def ode_rhs(t, x, Z):
+        wdot = _kl_wdot(t, Z, horizon)
+        return strat_drift(t, x) + strat_L(t, x) @ wdot
+
+    def integrate_one(x0, Z):
+        def body(x, i):
+            ti = (i.astype(x.dtype)) * (horizon / n_inner)
+            t1 = ti + horizon / n_inner
+            dtp = horizon / n_inner
+            t_mid = ti + 0.5 * dtp
+            k1 = ode_rhs(ti, x, Z)
+            k2 = ode_rhs(t_mid, x + 0.5 * dtp * k1, Z)
+            k3 = ode_rhs(t_mid, x + 0.5 * dtp * k2, Z)
+            k4 = ode_rhs(t1, x + dtp * k3, Z)
+            return x + (dtp / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4), None
+
+        x1, _ = lax.scan(body, x0, jnp.arange(n_inner))
+        return x1
+
+    def body(carry, step_k):
+        m, P = carry
+        m_aug = jnp.concatenate([m, jnp.zeros(n_z, dtype=m.dtype)])
+        P_aug = jnp.block(
+            [
+                [P, jnp.zeros((n_x, n_z), dtype=P.dtype)],
+                [jnp.zeros((n_z, n_x), dtype=P.dtype), jnp.eye(n_z, dtype=P.dtype)],
+            ]
+        )
+        sigmas = _ukf_sigmas(m_aug, P_aug, n_aug, lamb)
+        X0 = sigmas[:, :n_x]
+        Z = sigmas[:, n_x:].reshape(sigmas.shape[0], n_modes, noise_dim)
+        Xf = vmap(integrate_one)(X0, Z)
+        m_pred = w_mean @ Xf
+        P_pred = psd(jnp.tensordot(w_cov, _outer_pts(Xf, m_pred), axes=1))
+        ll_pred = mixture_obs_logpdf(ys[step_k], Xf, w_mean, h, R)
+        n = n_x
+        lamb_x = ukf_params.alpha**2 * (n + ukf_params.kappa) - n
+        w_mx, w_cx, _ = _ukf_weights(n, ukf_params.alpha, ukf_params.beta, lamb_x)
+        ll_filt, m, P, _, _ = _ukf_update(
+            m_pred, P_pred, h, R, ys[step_k], n, lamb_x, w_mx, w_cx, 1
+        )
+        return (m, P), ll_pred, ll_filt, m
+
+    return _scan_nlls(body, (m0, P0), ys.shape[0])
+
+
+def _outer_pts(X, m):
+    d = X - m
+    return vmap(lambda e: jnp.outer(e, e))(d)

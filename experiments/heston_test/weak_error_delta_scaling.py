@@ -17,10 +17,15 @@ Diffusion uses ``φ(v)=(v²+ε²)^{1/4}`` in place of ``√v`` (``ε=θ``).
 
 Cubature paths are explicit multi-D Lyons–Victoir (``multidim_method="lv"``).
 
+TME-2 / TME-3 (Zhao et al., TAC 2021) are overlaid as generator-Taylor
+point-mass predictors of the same Itô dynamics.
+
 Run:
   uv run --extra experiments python experiments/heston_test/weak_error_delta_scaling.py
   uv run --extra experiments python experiments/heston_test/weak_error_delta_scaling.py \\
       --mc-paths 4000000 --mc-dt 1e-4
+  uv run --extra experiments python experiments/heston_test/weak_error_delta_scaling.py \\
+      --plot-from-csv weak_error_delta_scaling_sv.csv
 """
 
 from __future__ import annotations
@@ -59,6 +64,7 @@ from heston_model import (
     make_heston_sv_dynamics,
     mc_heston_sv_mean_cov,
 )
+from tme import tme_mean_cov
 from wsckf.library import ito_to_stratonovich_dynamics, precompute_cubature_paths, predict
 
 OUTPUT_DIR = os.path.join(HERE, "output")
@@ -77,6 +83,11 @@ ITO_DRIFT, DIFFUSION, QC_FN, _, _ = make_heston_sv_dynamics(
 STRAT_DRIFT, STRAT_DIFF = ito_to_stratonovich_dynamics(ITO_DRIFT, DIFFUSION)
 
 CKF_PARAMS = UKFParams(alpha=1.0, beta=0.0, kappa=0.0)
+TME_ORDERS = (2, 3)
+TME_COLORS = {2: "#E69F00", 3: "#8DA35B"}
+TME_FMTS = {2: "v--", 3: "P--"}
+MC_CACHE_DIR = os.path.join(OUTPUT_DIR, "mc_cache")
+os.makedirs(MC_CACHE_DIR, exist_ok=True)
 
 
 def wsckf_predict(delta: float, lyons_degree: int, k: int = 1):
@@ -151,6 +162,54 @@ def cd_predict(delta: float, which: str):
     return np.asarray(m_pred), np.asarray(P_pred)
 
 
+def tme_predict(delta: float, order: int):
+    """Point-mass TME-M predict (Zhao et al., TAC 2021)."""
+    return tme_mean_cov(X0, float(delta), int(order), ITO_DRIFT, DIFFUSION)
+
+
+def _mc_cache_path(delta: float, *, n_paths: int, n_steps: int, seed: int, n_seeds: int) -> str:
+    tag = (
+        f"sv_d{float(delta):.12g}_n{int(n_paths)}_steps{int(n_steps)}"
+        f"_seed{int(seed)}_seeds{int(n_seeds)}_eps{SMOOTH_VOL_EPS:g}"
+    )
+    return os.path.join(MC_CACHE_DIR, f"{tag}.npz")
+
+
+def mc_ref_cov(
+    delta: float,
+    *,
+    n_paths: int,
+    n_steps: int,
+    seed: int,
+    n_seeds: int,
+    batch_paths: int,
+) -> np.ndarray:
+    """High-budget MC covariance, cached under ``output/mc_cache/``."""
+    path = _mc_cache_path(
+        delta, n_paths=n_paths, n_steps=n_steps, seed=seed, n_seeds=n_seeds
+    )
+    if os.path.isfile(path):
+        data = np.load(path)
+        return np.asarray(data["P_ref"], dtype=np.float64)
+
+    P_acc = np.zeros((2, 2), dtype=np.float64)
+    for s in range(max(1, int(n_seeds))):
+        _, P_s = mc_heston_sv_mean_cov(
+            float(delta),
+            X0,
+            PARAMS,
+            n_paths=int(n_paths),
+            n_steps=int(n_steps),
+            seed=int(seed) + s,
+            smooth_vol_eps=SMOOTH_VOL_EPS,
+            batch_paths=int(batch_paths),
+        )
+        P_acc += np.asarray(P_s, dtype=np.float64)
+    P_ref = P_acc / float(max(1, int(n_seeds)))
+    np.savez(path, P_ref=P_ref)
+    return P_ref
+
+
 def fit_slope(deltas, errs, dmin=None, dmax=0.35, floor=1e-15):
     d = np.asarray(deltas, dtype=np.float64)
     e = np.asarray(errs, dtype=np.float64)
@@ -185,6 +244,7 @@ def _plot_scaling(
     ncol: int = 3,
     fit_dmin: float | None = None,
     fit_dmax: float = 0.35,
+    xlim: tuple[float, float] | None = None,
 ):
     AXIS_FS, LEGEND_FS, TICK_FS = 13, 11, 11
     rng_floor = 1e-18
@@ -214,7 +274,8 @@ def _plot_scaling(
         )
     ax.set_xlabel(r"assimilation interval $\tau$", fontsize=AXIS_FS)
     ax.set_ylabel(ylabel, fontsize=AXIS_FS)
-    ax.set_xlim(deltas[0], deltas[-1])
+    x0, x1 = (deltas[0], deltas[-1]) if xlim is None else xlim
+    ax.set_xlim(x0, x1)
     ax.tick_params(axis="both", which="major", labelsize=TICK_FS)
     ax.grid(True, which="both", alpha=0.3)
     ax.legend(
@@ -230,6 +291,93 @@ def _plot_scaling(
     fig.tight_layout()
     fig.savefig(png_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
+
+
+def _write_scaling_plots(
+    plot_rows: list[dict[str, float]],
+    *,
+    plot_tag: str,
+    fit_dmin: float,
+    fit_dmax: float,
+    xlim: tuple[float, float] | None,
+    skip_cov: bool,
+    wsckf_colors: dict[int, str] | None = None,
+):
+    if wsckf_colors is None:
+        wsckf_colors = {3: "#6A4C93", 5: "#9B5DE5"}
+
+    def _col(name: str) -> np.ndarray:
+        return np.asarray([float(r[name]) for r in plot_rows], dtype=np.float64)
+
+    def _nonzero(series: dict) -> dict:
+        return {
+            name: spec
+            for name, spec in series.items()
+            if np.nanmax(np.asarray(spec[0], dtype=np.float64)) > 1e-15
+        }
+
+    plot_deltas = _col("delta")
+    mean_series = _nonzero(
+        {
+            r"WSC-KF $m$=3": (_col("wsckf_mean_err_m3"), wsckf_colors[3], "o-"),
+            r"WSC-KF $m$=5": (_col("wsckf_mean_err_m5"), wsckf_colors[5], "o-"),
+            r"TME-2": (_col("tme_mean_err_m2"), TME_COLORS[2], TME_FMTS[2]),
+            r"TME-3": (_col("tme_mean_err_m3"), TME_COLORS[3], TME_FMTS[3]),
+            "CD-EKF": (_col("ekf_mean_err"), "C3", "s-"),
+            "CD-UKF": (_col("ukf_mean_err"), "C0", "^-"),
+            "CD-CKF": (_col("ckf_mean_err"), "#2E86AB", "D-"),
+        }
+    )
+    mean_guides = [
+        (2.0, _col("wsckf_mean_err_m3"), r"$\propto\tau^{2}$", "--"),
+        (3.0, _col("wsckf_mean_err_m5"), r"$\propto\tau^{3}$", ":"),
+    ]
+    if "TME-3" in mean_series:
+        mean_guides.append(
+            (4.0, _col("tme_mean_err_m3"), r"$\propto\tau^{4}$", "-.")
+        )
+    png_mean = os.path.join(OUTPUT_DIR, f"weak_error_delta_scaling_sv_mean{plot_tag}.png")
+    _plot_scaling(
+        plot_deltas,
+        mean_series,
+        ylabel=r"$\|\hat m - m\|_2$",
+        png_path=png_mean,
+        guides=mean_guides,
+        ncol=3,
+        fit_dmin=fit_dmin,
+        fit_dmax=fit_dmax,
+        xlim=xlim,
+    )
+    print(f"\nSaved plot -> {png_mean}")
+
+    if skip_cov:
+        return
+    cov_series = {
+        r"WSC-KF $m$=3": (_col("wsckf_cov_err_m3"), wsckf_colors[3], "o-"),
+        r"WSC-KF $m$=5": (_col("wsckf_cov_err_m5"), wsckf_colors[5], "o-"),
+        r"TME-2": (_col("tme_cov_err_m2"), TME_COLORS[2], TME_FMTS[2]),
+        r"TME-3": (_col("tme_cov_err_m3"), TME_COLORS[3], TME_FMTS[3]),
+        "CD-EKF": (_col("ekf_cov_err"), "C3", "s-"),
+        "CD-UKF": (_col("ukf_cov_err"), "C0", "^-"),
+        "CD-CKF": (_col("ckf_cov_err"), "#2E86AB", "D-"),
+    }
+    png_cov = os.path.join(OUTPUT_DIR, f"weak_error_delta_scaling_sv_cov{plot_tag}.png")
+    _plot_scaling(
+        plot_deltas,
+        cov_series,
+        ylabel=r"$\|\hat P - P\|_F$",
+        png_path=png_cov,
+        guides=[
+            (2.0, _col("ekf_cov_err"), r"$\propto\tau^{2}$", "--"),
+            (3.0, _col("wsckf_cov_err_m5"), r"$\propto\tau^{3}$", ":"),
+            (4.0, _col("tme_cov_err_m3"), r"$\propto\tau^{4}$", "-."),
+        ],
+        ncol=3,
+        fit_dmin=fit_dmin,
+        fit_dmax=fit_dmax,
+        xlim=xlim,
+    )
+    print(f"Saved plot -> {png_cov}")
 
 
 def main():
@@ -317,12 +465,75 @@ def main():
         default="",
         help="Optional suffix for output filenames (e.g. _zoom)",
     )
+    parser.add_argument(
+        "--append-csv",
+        type=str,
+        default="",
+        dest="append_csv",
+        help="Merge new rows into this existing CSV (by delta); also rewrite plots from merged data",
+    )
+    parser.add_argument(
+        "--xlim-min",
+        type=float,
+        default=None,
+        dest="xlim_min",
+        help="Optional plot x-axis lower limit",
+    )
+    parser.add_argument(
+        "--xlim-max",
+        type=float,
+        default=None,
+        dest="xlim_max",
+        help="Optional plot x-axis upper limit",
+    )
+    parser.add_argument(
+        "--plot-from-csv",
+        type=str,
+        default="",
+        dest="plot_from_csv",
+        help="Only rewrite mean/cov plots from an existing CSV (no new solves)",
+    )
     args = parser.parse_args()
+
+    if args.plot_from_csv:
+        csv_in = args.plot_from_csv
+        if not os.path.isabs(csv_in):
+            csv_in = os.path.join(OUTPUT_DIR, csv_in)
+        plot_rows = []
+        with open(csv_in, newline="") as f:
+            for r in csv.DictReader(f):
+                plot_rows.append({k: float(r[k]) for k in r if r[k] != ""})
+        base = os.path.basename(csv_in)
+        prefix = "weak_error_delta_scaling_sv"
+        plot_tag = args.tag
+        if base.startswith(prefix) and base.endswith(".csv"):
+            plot_tag = base[len(prefix) : -4]
+        xlim = None
+        if args.xlim_min is not None or args.xlim_max is not None:
+            xlim = (
+                float(args.xlim_min if args.xlim_min is not None else args.delta_min),
+                float(args.xlim_max if args.xlim_max is not None else args.delta_max),
+            )
+        _write_scaling_plots(
+            plot_rows,
+            plot_tag=plot_tag,
+            fit_dmin=args.fit_dmin,
+            fit_dmax=args.fit_dmax,
+            xlim=xlim,
+            skip_cov=args.skip_cov or ("wsckf_cov_err_m3" not in plot_rows[0]),
+        )
+        return
 
     deltas = np.logspace(np.log10(args.delta_min), np.log10(args.delta_max), int(args.n_deltas))
     wsckf_degrees = (3, 5)
     wsckf_colors = {3: "#6A4C93", 5: "#9B5DE5"}
     tag = args.tag
+    xlim = None
+    if args.xlim_min is not None or args.xlim_max is not None:
+        xlim = (
+            float(args.xlim_min if args.xlim_min is not None else args.delta_min),
+            float(args.xlim_max if args.xlim_max is not None else args.delta_max),
+        )
 
     print(
         f"Heston (S,v) C^∞-vol weak-error δ-scaling  "
@@ -336,8 +547,14 @@ def main():
     )
 
     # --- Mean (exact reference) ---
+    print("Compiling TME generator iterates (JAX jacfwd)...", flush=True)
+    tme_predict(float(deltas[0]), order=max(TME_ORDERS))
+    print("  TME ready.", flush=True)
+
     ws_mean_err: dict[int, np.ndarray] = {}
     ws_cov_err: dict[int, np.ndarray] = {m: [] for m in wsckf_degrees}
+    tme_mean_err: dict[int, np.ndarray] = {}
+    tme_cov_err: dict[int, list[float]] = {m: [] for m in TME_ORDERS}
     for m in wsckf_degrees:
         em = []
         for d in deltas:
@@ -345,6 +562,14 @@ def main():
             m_hat, _ = wsckf_predict(float(d), lyons_degree=m, k=1)
             em.append(float(np.linalg.norm(m_hat - m_ref)))
         ws_mean_err[m] = np.array(em)
+
+    for m in TME_ORDERS:
+        em = []
+        for d in deltas:
+            m_ref = exact_heston_sv_mean(float(d), X0, PARAMS)
+            m_hat, _ = tme_predict(float(d), order=m)
+            em.append(float(np.linalg.norm(m_hat - m_ref)))
+        tme_mean_err[m] = np.array(em)
 
     ekf_mean, ukf_mean, ckf_mean = [], [], []
     ekf_cov, ukf_cov, ckf_cov = [], [], []
@@ -368,6 +593,12 @@ def main():
             f"    WSC-KF m={m}: slope = "
             f"{fit_slope(deltas, ws_mean_err[m], dmin=args.fit_dmin, dmax=args.fit_dmax):.2f}"
             f"   (theory {(m + 1) / 2:.1f})"
+        )
+    for m in TME_ORDERS:
+        print(
+            f"    TME-{m}   : slope = "
+            f"{fit_slope(deltas, tme_mean_err[m], dmin=args.fit_dmin, dmax=args.fit_dmax):.2f}"
+            f"   (Taylor remainder O(τ^{m + 1}))"
         )
     print(
         f"    CD-EKF  : slope = "
@@ -395,24 +626,22 @@ def main():
                 f"paths={args.mc_paths}×2 ×{n_seeds} seed(s) ...",
                 flush=True,
             )
-            P_acc = np.zeros((2, 2), dtype=np.float64)
-            for s in range(n_seeds):
-                _, P_s = mc_heston_sv_mean_cov(
-                    float(d),
-                    X0,
-                    PARAMS,
-                    n_paths=int(args.mc_paths),
-                    n_steps=n_steps,
-                    seed=int(args.mc_seed) + i * 1009 + s,
-                    smooth_vol_eps=SMOOTH_VOL_EPS,
-                    batch_paths=int(args.mc_batch),
-                )
-                P_acc += np.asarray(P_s, dtype=np.float64)
-            P_ref = P_acc / float(n_seeds)
+            P_ref = mc_ref_cov(
+                float(d),
+                n_paths=int(args.mc_paths),
+                n_steps=n_steps,
+                seed=int(args.mc_seed) + i * 1009,
+                n_seeds=n_seeds,
+                batch_paths=int(args.mc_batch),
+            )
 
             for m in wsckf_degrees:
                 _, P_hat = wsckf_predict(float(d), lyons_degree=m, k=1)
                 ws_cov_err[m].append(float(np.linalg.norm(P_hat - P_ref, ord="fro")))
+
+            for m in TME_ORDERS:
+                _, P_hat = tme_predict(float(d), order=m)
+                tme_cov_err[m].append(float(np.linalg.norm(P_hat - P_ref, ord="fro")))
 
             for which, clist in (
                 ("ekf", ekf_cov),
@@ -424,6 +653,8 @@ def main():
 
         for m in wsckf_degrees:
             ws_cov_err[m] = np.array(ws_cov_err[m])
+        for m in TME_ORDERS:
+            tme_cov_err[m] = np.array(tme_cov_err[m])
         ekf_cov, ukf_cov, ckf_cov = map(np.array, (ekf_cov, ukf_cov, ckf_cov))
 
         print(
@@ -435,6 +666,12 @@ def main():
                 f"    WSC-KF m={m}: slope = "
                 f"{fit_slope(deltas, ws_cov_err[m], dmin=args.fit_dmin, dmax=args.fit_dmax):.2f}"
                 f"   (theory {(m + 1) / 2:.1f})"
+            )
+        for m in TME_ORDERS:
+            print(
+                f"    TME-{m}   : slope = "
+                f"{fit_slope(deltas, tme_cov_err[m], dmin=args.fit_dmin, dmax=args.fit_dmax):.2f}"
+                f"   (Taylor remainder O(τ^{m + 1}))"
             )
         print(
             f"    CD-EKF  : slope = "
@@ -450,77 +687,88 @@ def main():
         )
 
     csv_path = os.path.join(OUTPUT_DIR, f"weak_error_delta_scaling_sv{tag}.csv")
-    with open(csv_path, "w", newline="") as f:
-        w = csv.writer(f)
-        header = (
-            ["delta"]
-            + [f"wsckf_mean_err_m{m}" for m in wsckf_degrees]
-            + ["ekf_mean_err", "ukf_mean_err", "ckf_mean_err"]
+    header = (
+        ["delta"]
+        + [f"wsckf_mean_err_m{m}" for m in wsckf_degrees]
+        + [f"tme_mean_err_m{m}" for m in TME_ORDERS]
+        + ["ekf_mean_err", "ukf_mean_err", "ckf_mean_err"]
+    )
+    if not args.skip_cov:
+        header += (
+            [f"wsckf_cov_err_m{m}" for m in wsckf_degrees]
+            + [f"tme_cov_err_m{m}" for m in TME_ORDERS]
+            + ["ekf_cov_err", "ukf_cov_err", "ckf_cov_err"]
         )
-        if not args.skip_cov:
-            header += (
-                [f"wsckf_cov_err_m{m}" for m in wsckf_degrees]
-                + ["ekf_cov_err", "ukf_cov_err", "ckf_cov_err"]
-            )
-        w.writerow(header)
-        for i, d in enumerate(deltas):
-            row = (
-                [d]
-                + [ws_mean_err[m][i] for m in wsckf_degrees]
-                + [ekf_mean[i], ukf_mean[i], ckf_mean[i]]
-            )
-            if not args.skip_cov:
-                row += (
-                    [ws_cov_err[m][i] for m in wsckf_degrees]
-                    + [ekf_cov[i], ukf_cov[i], ckf_cov[i]]
-                )
-            w.writerow(row)
 
-    png_mean = os.path.join(OUTPUT_DIR, f"weak_error_delta_scaling_sv_mean{tag}.png")
-    _plot_scaling(
-        deltas,
-        {
-            r"WSC-KF $m$=3": (ws_mean_err[3], wsckf_colors[3], "o-"),
-            r"WSC-KF $m$=5": (ws_mean_err[5], wsckf_colors[5], "o-"),
-            "CD-EKF": (ekf_mean, "C3", "s-"),
-            "CD-UKF": (ukf_mean, "C0", "^-"),
-            "CD-CKF": (ckf_mean, "#2E86AB", "D-"),
-        },
-        ylabel=r"$\|\hat m - m\|_2$",
-        png_path=png_mean,
-        guides=[
-            (2.0, ws_mean_err[3], r"$\propto\tau^{2}$", "--"),
-            (3.0, ws_mean_err[5], r"$\propto\tau^{3}$", ":"),
-        ],
-        ncol=2,
+    new_rows: list[dict[str, float]] = []
+    for i, d in enumerate(deltas):
+        row = {
+            "delta": float(d),
+            "wsckf_mean_err_m3": float(ws_mean_err[3][i]),
+            "wsckf_mean_err_m5": float(ws_mean_err[5][i]),
+            "tme_mean_err_m2": float(tme_mean_err[2][i]),
+            "tme_mean_err_m3": float(tme_mean_err[3][i]),
+            "ekf_mean_err": float(ekf_mean[i]),
+            "ukf_mean_err": float(ukf_mean[i]),
+            "ckf_mean_err": float(ckf_mean[i]),
+        }
+        if not args.skip_cov:
+            row.update(
+                {
+                    "wsckf_cov_err_m3": float(ws_cov_err[3][i]),
+                    "wsckf_cov_err_m5": float(ws_cov_err[5][i]),
+                    "tme_cov_err_m2": float(tme_cov_err[2][i]),
+                    "tme_cov_err_m3": float(tme_cov_err[3][i]),
+                    "ekf_cov_err": float(ekf_cov[i]),
+                    "ukf_cov_err": float(ukf_cov[i]),
+                    "ckf_cov_err": float(ckf_cov[i]),
+                }
+            )
+        new_rows.append(row)
+
+    def _write_rows(path: str, rows: list[dict[str, float]]) -> None:
+        with open(path, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=header)
+            w.writeheader()
+            for r in rows:
+                w.writerow({k: r.get(k, "") for k in header})
+
+    _write_rows(csv_path, new_rows)
+
+    plot_rows = new_rows
+    if args.append_csv:
+        merge_path = args.append_csv
+        if not os.path.isabs(merge_path):
+            merge_path = os.path.join(OUTPUT_DIR, merge_path)
+        existing: list[dict[str, float]] = []
+        if os.path.isfile(merge_path):
+            with open(merge_path, newline="") as f:
+                for r in csv.DictReader(f):
+                    existing.append({k: float(r[k]) for k in r if r[k] != ""})
+        by_delta = {round(float(r["delta"]), 12): r for r in existing}
+        for r in new_rows:
+            key = round(float(r["delta"]), 12)
+            by_delta[key] = {**by_delta.get(key, {}), **r}
+        plot_rows = [by_delta[k] for k in sorted(by_delta)]
+        _write_rows(merge_path, plot_rows)
+        print(f"Append-merged {len(new_rows)} rows into {merge_path} (now {len(plot_rows)} rows)")
+
+    plot_tag = tag
+    if args.append_csv:
+        base = os.path.basename(args.append_csv)
+        prefix = "weak_error_delta_scaling_sv"
+        if base.startswith(prefix) and base.endswith(".csv"):
+            plot_tag = base[len(prefix) : -4]
+
+    _write_scaling_plots(
+        plot_rows,
+        plot_tag=plot_tag,
         fit_dmin=args.fit_dmin,
         fit_dmax=args.fit_dmax,
+        xlim=xlim,
+        skip_cov=args.skip_cov,
+        wsckf_colors=wsckf_colors,
     )
-    print(f"\nSaved plot -> {png_mean}")
-
-    if not args.skip_cov:
-        png_cov = os.path.join(OUTPUT_DIR, f"weak_error_delta_scaling_sv_cov{tag}.png")
-        _plot_scaling(
-            deltas,
-            {
-                r"WSC-KF $m$=3": (ws_cov_err[3], wsckf_colors[3], "o-"),
-                r"WSC-KF $m$=5": (ws_cov_err[5], wsckf_colors[5], "o-"),
-                "CD-EKF": (ekf_cov, "C3", "s-"),
-                "CD-UKF": (ukf_cov, "C0", "^-"),
-                "CD-CKF": (ckf_cov, "#2E86AB", "D-"),
-            },
-            ylabel=r"$\|\hat P - P\|_F$",
-            png_path=png_cov,
-            guides=[
-                (2.0, ekf_cov, r"$\propto\tau^{2}$", "--"),
-                (3.0, ws_cov_err[5], r"$\propto\tau^{3}$", ":"),
-            ],
-            ncol=2,
-            fit_dmin=args.fit_dmin,
-            fit_dmax=args.fit_dmax,
-        )
-        print(f"Saved plot -> {png_cov}")
-
     print(f"Saved data -> {csv_path}")
 
 

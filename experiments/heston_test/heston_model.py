@@ -2,14 +2,14 @@
 
 State ``x = [X, v]`` with ``X = log S``:
 
-    dX = (μ − v/2) dt + √v_ε dW¹
-    dv = κ(θ − v) dt + ξ √v_ε (ρ dW¹ + √(1−ρ²) dW²)
+    dX = (μ − v/2) dt + φ(v) dW¹
+    dv = κ(θ − v) dt + ξ φ(v) (ρ dW¹ + √(1−ρ²) dW²)
 
     y_k = X_k + ε_k,   ε ~ N(0, R)
 
 Correlation is encoded in the diffusion factor ``L`` with ``Qc = I₂``.
-The floor ``v_ε = max(v, ε)`` keeps √v defined for filters that wander
-slightly negative.
+Volatility is the shifted-softplus square root ``φ`` (globally Lipschitz
+and ``C^∞``), matching ``√v`` for ``v ≫ ε+δ``.
 """
 
 from __future__ import annotations
@@ -28,16 +28,32 @@ class HestonParams:
     xi: float = 0.3
     rho: float = -0.7
     v_eps: float = 1e-8
+    vol_eps: float = 1e-3  # softplus floor ε
+    vol_delta: float = 1e-3  # softplus width δ
     meas_std: float = 0.02  # log-price observation noise
     diff_scale: float = 1.0  # multiplies L (process-noise power)
     x0: float = 0.0  # initial log-price
     v0: float | None = None  # default: theta
 
 
+def shifted_softplus_sqrt_np(v, eps: float, delta: float):
+    """φ(v) = √(ε + δ log(1 + exp((v−ε)/δ))), NumPy."""
+    eps = float(eps)
+    delta = float(delta)
+    return np.sqrt(eps + delta * np.logaddexp(0.0, (np.asarray(v) - eps) / delta))
+
+
+def shifted_softplus_sqrt_jnp(v, eps: float, delta: float):
+    """φ(v) = √(ε + δ log(1 + exp((v−ε)/δ))), JAX."""
+    eps = jnp.asarray(eps, dtype=v.dtype)
+    delta = jnp.asarray(delta, dtype=v.dtype)
+    return jnp.sqrt(eps + delta * jnp.logaddexp(0.0, (v - eps) / delta))
+
+
 def make_heston_dynamics(p: HestonParams):
     """Return ``(drift, L, Qc, obs, R)`` for CD / WSC-KF filters."""
     mu, kappa, theta, xi, rho = p.mu, p.kappa, p.theta, p.xi, p.rho
-    v_eps = p.v_eps
+    vol_eps, vol_delta = float(p.vol_eps), float(p.vol_delta)
     diff_scale = p.diff_scale
     rho_bar = float(np.sqrt(max(0.0, 1.0 - rho * rho)))
 
@@ -46,7 +62,7 @@ def make_heston_dynamics(p: HestonParams):
         return jnp.array([mu - 0.5 * v, kappa * (theta - v)])
 
     def L_fn(t: float, x: jnp.ndarray) -> jnp.ndarray:
-        sqrt_v = jnp.sqrt(jnp.maximum(x[1], v_eps))
+        sqrt_v = shifted_softplus_sqrt_jnp(x[1], vol_eps, vol_delta)
         return diff_scale * jnp.array(
             [
                 [sqrt_v, 0.0],
@@ -136,15 +152,14 @@ def simulate_heston(
     x = np.array([p.x0, v0], dtype=np.float64)
     rho, xi = p.rho, p.xi
     rho_bar = float(np.sqrt(max(0.0, 1.0 - rho * rho)))
-    v_eps = p.v_eps
+    vol_eps, vol_delta = float(p.vol_eps), float(p.vol_delta)
 
     true_fine = [x.copy()]
     times_fine = np.arange(n_fine + 1, dtype=np.float64) * dt
     ys_list: list[np.ndarray] = []
 
     for step in range(n_fine):
-        v = max(x[1], v_eps)
-        sqrt_v = np.sqrt(v)
+        sqrt_v = float(shifted_softplus_sqrt_np(x[1], vol_eps, vol_delta))
         scale = p.diff_scale
         dW = rng.standard_normal(2) * np.sqrt(dt)
         dX = (p.mu - 0.5 * x[1]) * dt + scale * sqrt_v * dW[0]
