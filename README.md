@@ -249,6 +249,10 @@ uv run --extra experiments python experiments/heston_test/run_pareto_budget.py
 Outputs under `experiments/heston_test/output/` (budget vs RMSE Pareto curves
 and CSVs). Overlay helper: `plot_pareto_L_overlay.py`.
 
+Archived CSVs and manuscript figures for the Lévy-area / Heston numerics
+live in [`experiments/numerics_section/`](experiments/numerics_section/);
+see that README to rebuild.
+
 ### Path-construction diagnostics
 
 [`experiments/multiplicative_noise_test/`](experiments/multiplicative_noise_test/)
@@ -316,16 +320,22 @@ cubature-filtering/
 │   ├── mfts_test/               # Nielsen four-tank benchmark
 │   ├── l63_test/                # Lorenz-63 tracking benchmark
 │   ├── heston_test/             # Heston SV twin / Pareto budget
+│   ├── numerics_section/        # Archived CSVs + manuscript figures
 │   ├── multiplicative_noise_test/  # Product vs LV path diagnostics
 │   ├── AZT1D/                   # Real CGM / insulin filtering
 │   ├── movement_test/           # Real GPS movement filtering
 │   └── paths_display/           # Presentation figures
 ├── tests/                       # pytest suite
 ├── EXPOSITION.md                # Mathematical overview
+├── LICENSE                      # MIT
 ├── pyproject.toml
 ├── uv.lock
 └── requirements.txt
 ```
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
 
 ## References
 

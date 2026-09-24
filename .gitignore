@@ -171,6 +171,8 @@ dist/
 *.png
 *.jpg
 *.pdf
+!experiments/numerics_section/figures/*.png
+!experiments/numerics_section/figures/*.pdf
 *-dot
 *.DS_Store
 .vscode/
@@ -183,8 +185,19 @@ cuthbertlib/
 # Test output directories
 .output/
 
+# Cached MC covariance references for Heston weak-error scaling
+experiments/heston_test/output/mc_cache/
+
 *.ttf
+
+# Matplotlib font caches, local run logs, experiment backups
+**/.mplcache/
+*.bak
+*.bak_*
+PROGRESS.txt
+watch_progress.py
+watch_progress.pid
+progress_watcher.log
 
 # AZT1D raw release (third-party; keep scripts under experiments/AZT1D/ tracked)
 experiments/AZT1D/AZT1D 2025/
-experiments/AZT1D/.mplcache/
