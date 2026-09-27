@@ -27,6 +27,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.lines import Line2D
+from matplotlib.ticker import NullFormatter
 
 from mfts_test.plot_style import (
     DOUBLE_COLUMN_WIDTH,
@@ -410,11 +411,24 @@ def _filter_polyline(
     )
 
 
-def plot_levy_filter(ax, rows: list[dict]) -> None:
-    """Sequential cosine NLL. Type-II singles are drawn at their true NLL (not parked)."""
-    y_hi = 12.0
-    y_lo = 0.75
+# (family, label, annotation, color, marker, xytext, ha, va) for single filters.
+LEVY_FILTER_SINGLES = [
+    ("CD-EKF", "EKF", None, EKF_C, "s", (0, 8), "center", "bottom"),
+    ("CD-CKF", "CKF", "EKF, CKF", CKF_C, "X", (8, 0), "left", "center"),
+    ("SE-UKF", "N8", "SE-UKF", SEUKF_C, "X", (6, 6), "left", "bottom"),
+    ("TME", "TME-2", "TME-2", TME_C, "P", (0, 8), "center", "bottom"),
+    ("WSC-KF-m3", "m3-k1", r"$m$=3, $N_\tau$=1", WSC3, "D", (0, 8), "center", "bottom"),
+    ("WSC-KF-m3", "m3-k3", r"$m$=3, $N_\tau$=3", WSC3, "D", (-6, -11), "right", "top"),
+    ("WSC-KF-m5", "m5-k2", r"$m$=5, $N_\tau$=2", WSC5, "s", (5, 6), "left", "bottom"),
+    ("CD-EnKF", "EnKF-5", "5", ENKF_C, "o", (-7, 8), "right", "bottom"),
+    ("CD-EnKF", "EnKF-100", "100", ENKF_C, "o", (4, 6), "left", "bottom"),
+    ("PF", "PF-5", "5", PF_C, "v", (6, -10), "left", "top"),
+    ("PF", "PF-500", "500", PF_C, "v", (5, -11), "left", "top"),
+]
 
+
+def plot_filter_pareto(ax, rows: list[dict], *, singles, xlim, ylim, yscale="log") -> None:
+    """Sequential predictive NLL vs wall-clock. Type-II singles are drawn at their true NLL."""
     _filter_polyline(
         ax, rows,
         [
@@ -452,19 +466,6 @@ def plot_levy_filter(ax, rows: list[dict]) -> None:
         lw=1.9, ms=6.8, z=6, mew=0.7,
     )
 
-    singles = [
-        ("CD-EKF", "EKF", None, EKF_C, "s", (0, 8), "center", "bottom"),
-        ("CD-CKF", "CKF", "EKF, CKF", CKF_C, "X", (8, 0), "left", "center"),
-        ("SE-UKF", "N8", "SE-UKF", SEUKF_C, "X", (6, 6), "left", "bottom"),
-        ("TME", "TME-2", "TME-2", TME_C, "P", (0, 8), "center", "bottom"),
-        ("WSC-KF-m3", "m3-k1", r"$m$=3, $N_\tau$=1", WSC3, "D", (0, 8), "center", "bottom"),
-        ("WSC-KF-m3", "m3-k3", r"$m$=3, $N_\tau$=3", WSC3, "D", (-6, -11), "right", "top"),
-        ("WSC-KF-m5", "m5-k2", r"$m$=5, $N_\tau$=2", WSC5, "s", (5, 6), "left", "bottom"),
-        ("CD-EnKF", "EnKF-5", "5", ENKF_C, "o", (-7, 8), "right", "bottom"),
-        ("CD-EnKF", "EnKF-100", "100", ENKF_C, "o", (4, 6), "left", "bottom"),
-        ("PF", "PF-5", "5", PF_C, "v", (6, -10), "left", "top"),
-        ("PF", "PF-500", "500", PF_C, "v", (5, -11), "left", "top"),
-    ]
     drawn = {("WSC-KF-m3", "m3-k1"), ("WSC-KF-m3", "m3-k3"),
              ("WSC-KF-m5", "m5-k1"), ("WSC-KF-m5", "m5-k2")}
     for fam, lab, disp, color, marker, xytext, ha, va in singles:
@@ -481,10 +482,17 @@ def plot_levy_filter(ax, rows: list[dict]) -> None:
     ax.set_xlabel("Wall-clock / track [ms]")
     ax.set_ylabel("Predictive NLL [nats / obs.]")
     ax.set_xscale("log")
-    ax.set_yscale("log")
-    ax.set_xlim(0.025, 36)
-    ax.set_ylim(y_lo, y_hi)
+    ax.set_yscale(yscale)
+    ax.set_xlim(*xlim)
+    ax.set_ylim(*ylim)
     style_curve_axis(ax, grid_axis="both")
+
+
+def plot_levy_filter(ax, rows: list[dict]) -> None:
+    """Sequential cosine NLL on the Lévy-area SDE."""
+    plot_filter_pareto(
+        ax, rows, singles=LEVY_FILTER_SINGLES, xlim=(0.025, 36), ylim=(0.75, 12.0)
+    )
 
 
 def _levy_legend_filter():
@@ -584,12 +592,174 @@ def plot_levy_area() -> None:
     plt.close(fig3)
 
 
+SIN_FIT_WINDOW = (0.02, 0.2)
+
+SIN_FILTER_SINGLES = [
+    ("CD-EKF", "EKF", "EKF", EKF_C, "s", (6, 0), "left", "center"),
+    ("CD-CKF", "CKF", "CKF", CKF_C, "X", (6, 0), "left", "center"),
+    ("SE-UKF", "N8", "SE-UKF", SEUKF_C, "X", (-5, 5), "right", "bottom"),
+    ("TME", "TME-2", "TME-2", TME_C, "P", (0, 8), "center", "bottom"),
+    ("WSC-KF-m3", "m3-k1", r"$m$=3, $N_\tau$=1", WSC3, "D", (0, -9), "center", "top"),
+    ("WSC-KF-m3", "m3-k3", r"$m$=3, $N_\tau$=3", WSC3, "D", (-2, 8), "left", "bottom"),
+    ("WSC-KF-m5", "m5-k1", r"$m$=5, $N_\tau$=1", WSC5, "s", (-6, -6), "right", "top"),
+    ("WSC-KF-m5", "m5-k2", r"$m$=5, $N_\tau$=2", WSC5, "s", (0, 7), "center", "bottom"),
+    ("CD-EnKF", "EnKF-5", "5", ENKF_C, "o", (-7, 4), "right", "bottom"),
+    ("CD-EnKF", "EnKF-500", "500", ENKF_C, "o", (4, 5), "left", "bottom"),
+    ("PF", "PF-5", "5", PF_C, "v", (6, -2), "left", "top"),
+    ("PF", "PF-500", "500", PF_C, "v", (6, -2), "left", "top"),
+]
+
+
+def plot_sin_weak_error(rows: list[dict]) -> None:
+    """One-step weak error on dx² = sin(x¹) dW² from (1, 0), for two functionals.
+
+    From a point mass CD-EKF and CD-CKF coincide (one node, L at the mean). The
+    stochastic Taylor expansion does not terminate here, so m=3 and m=5 show
+    their generic orders 2 and 3.
+    """
+    taus = np.array([r["delta"] for r in rows])
+    series = [
+        (("ckf_err", "ckf_err2"), CKF_C, "X-", "CD-EKF / CD-CKF"),
+        (("tme2_err", "tme2_err2"), TME_C, "P-.", "TME-2"),
+        (("wsckf_err_m3", "wsckf_err2_m3"), WSC3, "D--", r"WSC-KF $m$=3"),
+        (("wsckf_err_m5", "wsckf_err2_m5"), WSC5, "s-", r"WSC-KF $m$=5"),
+    ]
+    panels = (
+        (r"$\mathbb{E}[\cos(\omega x^{2}_{\tau})]$", "(a)"),
+        (r"$\mathbb{E}[(x^{2}_{\tau})^{2}]$", "(b)"),
+    )
+    fig, axes = plt.subplots(1, 2, figsize=(DOUBLE_COLUMN_WIDTH, 2.55))
+    handles = []
+    for p, (ax, (title, tag)) in enumerate(zip(axes, panels)):
+        for keys, color, fmt, _lab in series:
+            ys = np.array([max(float(r[keys[p]]), 1e-16) for r in rows])
+            # CD-CKF is drawn wider so it stays visible where WSC m=3 coincides with it.
+            lw = 2.4 if keys[0] == "ckf_err" else 1.35
+            (line,) = ax.loglog(
+                taus, ys, fmt, color=color, markerfacecolor="white", markersize=4.6, lw=lw
+            )
+            if p == 0:
+                handles.append(line)
+        x_ref = np.array([taus[0], taus[-1]])
+        for slope, keys, ls in ((2.0, series[0][0], "--"), (3.0, series[3][0], ":")):
+            y0 = 0.35 * float(rows[0][keys[p]])
+            ax.loglog(x_ref, y0 * (x_ref / taus[0]) ** slope, ls, color="0.45", lw=0.95, zorder=1)
+        ax.set_title(title, fontweight="normal")
+        ax.set_xlabel(r"Forecast interval $\tau$")
+        ax.set_xticks([0.02, 0.05, 0.1, 0.2, 0.5])
+        ax.set_xticklabels(["0.02", "0.05", "0.1", "0.2", "0.5"])
+        ax.xaxis.set_minor_formatter(NullFormatter())
+        ax.text(0.5, -0.30, tag, transform=ax.transAxes, ha="center", va="top", fontsize=8.5)
+        style_curve_axis(ax, grid_axis="both")
+    axes[0].set_ylabel("One-step weak error")
+
+    labels = []
+    for keys, _color, _fmt, lab in series:
+        fits = [
+            _fit_slope(taus, np.array([float(r[k]) for r in rows]), *SIN_FIT_WINDOW)
+            for k in keys
+        ]
+        labels.append(f"{lab} (slopes {fits[0]:.2f} / {fits[1]:.2f})")
+    ref = [
+        Line2D([0], [0], color="0.45", lw=0.95, ls="--", label=r"$\propto\tau^{2}$"),
+        Line2D([0], [0], color="0.45", lw=0.95, ls=":", label=r"$\propto\tau^{3}$"),
+    ]
+    fig.legend(
+        handles=handles + ref,
+        labels=labels + [h.get_label() for h in ref],
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.0),
+        ncol=3,
+        fontsize=6.8,
+        frameon=False,
+        columnspacing=1.2,
+    )
+    fig.subplots_adjust(left=0.08, right=0.99, bottom=0.25, top=0.74, wspace=0.22)
+    save_publication_figure(fig, os.path.join(FIG, "fig_sin_area_weak_error.png"))
+    plt.close(fig)
+
+
+def plot_sin_filter(rows: list[dict]) -> None:
+    """Sequential sine-observation NLL on dx² = sin(x¹) dW²."""
+    fig, ax = plt.subplots(figsize=(0.62 * DOUBLE_COLUMN_WIDTH, 3.05))
+    plot_filter_pareto(
+        ax, rows, singles=SIN_FILTER_SINGLES, xlim=(0.01, 60), ylim=(0.9, 2.15), yscale="linear"
+    )
+    fig.legend(
+        handles=_levy_legend_filter(),
+        loc="lower center",
+        bbox_to_anchor=(0.56, -0.02),
+        ncol=3,
+        fontsize=5.8,
+        frameon=False,
+        handletextpad=0.28,
+        columnspacing=0.9,
+    )
+    fig.subplots_adjust(left=0.14, right=0.98, bottom=0.24, top=0.97)
+    save_publication_figure(fig, os.path.join(FIG, "fig_sin_area_filter.png"))
+    plt.close(fig)
+
+
+def _sci(x: float) -> str:
+    """``3.8\\times10^{-2}`` for LaTeX tables."""
+    mantissa, exponent = f"{x:.1e}".split("e")
+    return rf"${mantissa}\times10^{{{int(exponent)}}}$"
+
+
+def write_sin_one_step_table(moment: list[dict], char: list[dict]) -> None:
+    """LaTeX table of one-step errors at τ = 0.5 on the sin(x¹) system (Table 1 analogue)."""
+    entries = [
+        ("CD-EKF", "EKF", "CD-EKF"),
+        ("CD-CKF", "CKF", "CD-CKF"),
+        ("SE-UKF", "N8", "SE-UKF ($N=8$)"),
+        ("TME", "TME-2", "TME-2"),
+        ("TME", "TME-3", "TME-3"),
+        ("WSC-KF-m3", "m3-k1", r"WSC-KF $m=3$, $N_\tau=1$"),
+        ("WSC-KF-m3", "m3-k2", r"WSC-KF $m=3$, $N_\tau=2$"),
+        ("WSC-KF-m3", "m3-k3", r"WSC-KF $m=3$, $N_\tau=3$"),
+        ("WSC-KF-m5", "m5-k1", r"WSC-KF $m=5$, $N_\tau=1$"),
+        ("WSC-KF-m5", "m5-k2", r"WSC-KF $m=5$, $N_\tau=2$"),
+        ("CD-EnKF", "EnKF-25", "CD-EnKF ($n=25$)"),
+        ("CD-EnKF", "EnKF-100", "CD-EnKF ($n=100$)"),
+        ("CD-EnKF", "EnKF-2000", r"CD-EnKF ($n=2\,000$)"),
+    ]
+
+    def cell(r):
+        if r["n_seeds"] > 1:
+            return rf"{_sci(r['abs_err'])} $\pm$ {_sci(_sem(r['abs_err_std'], r['n_seeds']))}"
+        return _sci(r["abs_err"])
+
+    lines = [
+        r"\begin{tabular}{lrrr}",
+        r"\toprule",
+        r"Method & Paths & $|\Delta\mathbb{E}[(x^2)^2]|$ & $|\Delta\mathbb{E}[\cos(\omega x^2)]|$ \\",
+        r"\midrule",
+    ]
+    for fam, lab, name in entries:
+        m, c = _find(moment, fam, lab), _find(char, fam, lab)
+        paths = f"{int(m['budget'])}" if fam.startswith(("WSC", "CD-EnKF")) else "--"
+        lines.append(rf"{name} & {paths} & {cell(m)} & {cell(c)} \\")
+    lines += [r"\bottomrule", r"\end{tabular}", ""]
+    with open(os.path.join(FIG, "tab_sin_area_one_step.tex"), "w") as f:
+        f.write("\n".join(lines))
+
+
+def plot_sin_area() -> None:
+    plot_sin_weak_error(_load(os.path.join(DATA, "sin_area_weak_error.csv")))
+    plot_sin_filter(_load(os.path.join(DATA, "sin_area_filter_pareto.csv")))
+    write_sin_one_step_table(
+        _load(os.path.join(DATA, "sin_area_moment_pareto.csv")),
+        _load(os.path.join(DATA, "sin_area_char_pareto.csv")),
+    )
+
+
 def main() -> None:
     levy_weak = _load(os.path.join(DATA, "levy_area_weak_error.csv"))
     plot_levy_weak_error(levy_weak)
     heston_weak = _load(os.path.join(DATA, "heston_weak_error.csv"))
     plot_weak_error(heston_weak)
     plot_levy_area()
+    plot_sin_area()
     print(f"Wrote figures in {FIG}")
 
 
