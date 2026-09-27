@@ -79,7 +79,9 @@ def build_filter(
         get_observations: Function to get ``(observation_fn, chol_R, y)`` from model inputs.
         noise_dim: Dimension of the Brownian driver.
         dt: Length of one assimilation interval.
-        integration_dt: Inner integration step size for the Stratonovich solver.
+        integration_dt: Maximum inner step size for the Stratonovich solver. The
+            grid also contains every corner of the piecewise-linear cubature
+            paths, so each RK4 step integrates the exact driver.
         cubature_order: Cubature order ``k`` (number of macro segments).
         cubature_gamma: Macro-segment time-grid concentration exponent.
         num_paths: Number of Wiener paths (meaning depends on ``multidim_paths``).

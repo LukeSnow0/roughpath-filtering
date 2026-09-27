@@ -59,8 +59,7 @@ from cd_dynamax_mirror.filters import (
 )
 from cuthbert import filter as run_filter
 from wsckf import build_filter
-from wsckf.library import product_path_count
-from wsckf.library.cubature_paths import build_recombined_cubature_paths
+from wsckf.library import precompute_cubature_paths, product_path_count
 from mfts_test.plot_style import (
     METHOD_COLORS,
     METHOD_MARKERS,
@@ -492,13 +491,13 @@ for seed in seeds_to_run:
             budget = cfg.n_paths
         else:
             # Build explicitly so scored budget is the actual support size.
-            n_steps = max(1, int(round(dt / dt0)))
-            ts_path = np.linspace(0.0, float(dt), n_steps + 1, dtype=np.float64)
-            pv, pw = build_recombined_cubature_paths(
-                ts_path,
+            ts_path, pv, pw = precompute_cubature_paths(
+                horizon=float(dt),
                 noise_dim=noise_dim,
-                k=cfg.k,
-                recombined_num_paths=cfg.n_paths,
+                integration_dt=dt0,
+                cubature_order=cfg.k,
+                num_paths=cfg.n_paths,
+                multidim_method="recombined",
             )
             actual_p = int(pv.shape[0])
             label = f"rec-P{actual_p}"
@@ -509,13 +508,7 @@ for seed in seeds_to_run:
                 )
             if _have(seed, cfg.family, label, budget):
                 continue
-            build_kwargs = dict(
-                wiener_paths=(
-                    jnp.asarray(ts_path),
-                    jnp.asarray(pv),
-                    jnp.asarray(pw),
-                ),
-            )
+            build_kwargs = dict(wiener_paths=(ts_path, pv, pw))
         wsckf = build_filter(
             get_init_params=lambda mi: (m0, chol_P0),
             get_dynamics=lambda mi: (

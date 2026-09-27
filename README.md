@@ -173,7 +173,9 @@ step propagates spatial cubature nodes along deterministic Wiener-space cubature
 paths; the update is a square-root sigma-point Kalman correction. In
 `build_filter`, `cubature_order` (*k*, default 2) is the number of
 macro-segments and `lyons_degree` (*m* ∈ {3, 5}, default 5) is the
-Lyons–Victoir degree. Wiener path construction defaults to
+Lyons–Victoir degree. The paths are piecewise linear, and the RK4 integration
+grid contains every path corner, so `integration_dt` is a maximum step size
+rather than an exact one. Wiener path construction defaults to
 ``multidim_paths="auto"``:
 
 - **`auto`** (default): for ``d=2`` with ``lyons_degree=5``, explicit multi-D
