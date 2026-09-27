@@ -86,11 +86,13 @@ def build_filter(
             If ``None``, a method-specific default is used.
         multidim_paths: Multidimensional path construction:
             ``"auto"`` (default: explicit multi-D Lyons–Victoir ``"lv"`` for
-            ``lyons_degree=5`` and ``d>1`` when the support is below the
+            ``lyons_degree=5`` and ``d=2`` when the support is within the
             path-count threshold, else ``"recombined"``; 1D always uses the
             classical 1D formulae),
-            ``"lv"`` (Gaussian cubature × Bernoulli Lévy area; d=2 uses the
-            planar √22 + perpendicular triangle construction),
+            ``"lv"`` (Lyons & Victoir 2004, Theorem 5.9: a fixed path with the
+            required log-signature, scaled coordinate-wise by Gauss–Hermite
+            nodes and paired with its coordinate reversal; degree 5 needs
+            ``d ≤ 2``, degree 3 is the Stroud rule for any ``d``),
             ``"product"`` (tensor product of 1D Lyons paths), or
             ``"recombined"`` (moment-matched sparse measure).
         seed: Seed for Rademacher candidate generation.
@@ -104,11 +106,11 @@ def build_filter(
             pure ODE, so this enables memory-efficient ODE adjoints through the
             filter likelihood (see :func:`wsckf.library.integrate_stratonovich_cde`).
         lyons_degree: Explicit Lyons–Victoir degree ``m ∈ {3, 5}``. Default
-            ``5`` is the three-path 1D formula, or the multi-D LV lift when
-            ``d>1`` and ``multidim_paths`` is ``"auto"`` or ``"lv"``.
+            ``5`` is the three-path 1D formula, or the multi-D LV construction
+            when ``d=2`` and ``multidim_paths`` is ``"auto"`` or ``"lv"``.
         wiener_paths: Optional precomputed ``(ts, path_values, path_weights)``
             arrays. When set, library cubature construction is skipped (used for
-            experiment-side path builders such as explicit multi-D LV).
+            experiment-side path builders).
         num_iter: Number of measurement-update iterations (iterated WSC-KF).
             ``1`` is the standard single update; ``>1`` re-linearizes with
             spatial cubature about the current estimate.

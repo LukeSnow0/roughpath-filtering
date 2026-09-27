@@ -19,7 +19,8 @@ The WSC-KF treats the filtering distribution as Gaussian (like the EKF/EnKF) but
 unlike the EKF, requires no Jacobian of the dynamics, and unlike the EnKF/PF,
 uses a small set of *deterministic* cubature paths rather than Monte-Carlo
 samples. Multidimensional path constructions: `lv` (explicit Lyons–Victoir
-multi-D formulae, including Lévy area at degree 5), `product` (tensor product of
+multi-D formulae, Theorem 5.9 of Lyons & Victoir 2004; degree 5 for `d ≤ 2`,
+including Lévy area), `product` (tensor product of
 1D Lyons paths), and `recombined` (recursive KLV cubature expansion with
 high-order recombination/RMP after each macro-segment; Algorithm 1 of Snow &
 Krishnamurthy, 2025).
