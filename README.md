@@ -369,8 +369,7 @@ cubature-filtering/
 ├── EXPOSITION.md                # Mathematical overview
 ├── LICENSE                      # MIT
 ├── pyproject.toml
-├── uv.lock
-└── requirements.txt
+└── uv.lock
 ```
 
 ## License
