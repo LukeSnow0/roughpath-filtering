@@ -14,10 +14,11 @@ Run:
   python experiments/l63_test/run_rmse_vs_interval.py
   python experiments/l63_test/run_rmse_vs_interval.py --solver rk4
   python experiments/l63_test/run_rmse_vs_interval.py --deltas 0.05,0.1,0.35,0.7,1.4,3.5
-  python experiments/l63_test/run_rmse_vs_interval.py --wsckf-paths 2,84 --lv-degrees 3,5
+  python experiments/l63_test/run_rmse_vs_interval.py --wsckf-paths 2,84 --lv-degrees 3
 
 Compares library recombined KLV (1D-product expand + RMP) against explicit
-multi-D Lyons–Victoir paths from ``lyons_victoir_paths.py``.
+multi-D Lyons–Victoir paths (``multidim_method="lv"``). With d = 3 only m = 3 is
+available; the library implements LV m = 5 for d <= 2.
 
 Outputs:
   ``experiments/l63_test/output/rmse_vs_interval.png``
@@ -66,9 +67,11 @@ from cd_dynamax_mirror.filters import (
 )
 from cuthbert import filter as run_filter
 from wsckf import build_filter
-from wsckf.library import default_recombined_num_paths
-from lyons_victoir_paths import describe as lv_describe
-from lyons_victoir_paths import precompute_lv_paths
+from wsckf.library import (
+    default_num_paths,
+    default_recombined_num_paths,
+    precompute_cubature_paths,
+)
 from mfts_test.plot_style import (
     DOUBLE_COLUMN_WIDTH,
     METHOD_COLORS,
@@ -113,10 +116,10 @@ _parser.add_argument(
 _parser.add_argument(
     "--lv-degrees",
     type=str,
-    default="3,5",
+    default="3",
     dest="lv_degrees",
     help="Comma-separated explicit multi-D Lyons–Victoir degrees m "
-    "(default 3,5). Empty string skips LV WSC-KF.",
+    "(default 3; m=5 needs noise_dim <= 2). Empty string skips LV WSC-KF.",
 )
 _parser.add_argument(
     "--solver",
@@ -492,11 +495,13 @@ def run_filters_at_interval(
         )
 
     for m in LV_DEGREES:
-        ts_lv, pv_lv, pw_lv = precompute_lv_paths(
+        ts_lv, pv_lv, pw_lv = precompute_cubature_paths(
             horizon=dt,
             noise_dim=noise_dim,
             integration_dt=dt0,
-            lyons_degree=m,  # type: ignore[arg-type]
+            cubature_order=1,
+            multidim_method="lv",
+            lyons_degree=m,
         )
         _run_wsckf(
             lv_label(m),
@@ -621,7 +626,10 @@ print(
     f"WSC-KF recombined: k={CUBATURE_ORDER} | path budgets={WSCKF_PATH_BUDGETS} "
     f"(moment-safe default={_DEFAULT_WSCKF_PATHS})"
 )
-print(f"WSC-KF LV multi-D: degrees={LV_DEGREES} | {lv_describe(noise_dim)}")
+print(
+    "WSC-KF LV multi-D: "
+    + ", ".join(f"m={m}: {default_num_paths(noise_dim, 1, 'lv', lyons_degree=m)} paths" for m in LV_DEGREES)
+)
 print(f"Requested Delta_t: {DELTA_T_REQ}")
 print(f"Timing: median of {N_TIMING} runs after JIT warmup")
 print("-" * 78)
