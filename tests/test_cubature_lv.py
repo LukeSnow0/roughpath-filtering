@@ -23,7 +23,7 @@ from wsckf.library import (
     product_path_count,
     select_multidim_paths,
 )
-from wsckf.library.cubature_paths import build_lyons_victoir_multid_paths
+from wsckf.library.cubature_paths import _cubature_knot_paths
 
 
 def _unit_paths(noise_dim, *, method, lyons_degree=5, k=1, n_steps=40):
@@ -102,18 +102,29 @@ def _brownian_expected_signature(noise_dim, depth):
     return out
 
 
+@pytest.mark.parametrize("k", [1, 2])
 @pytest.mark.parametrize("noise_dim", [1, 2])
 @pytest.mark.parametrize("lyons_degree", [3, 5])
-def test_lv_paths_match_brownian_expected_signature(noise_dim, lyons_degree):
+def test_lv_paths_match_brownian_expected_signature(noise_dim, lyons_degree, k):
     """Degree-m Wiener cubature matches E[S(t, B)] on every word of degree <= m.
 
-    The time letter counts twice towards the degree. The grid holds every multiple
-    of 1/12, so the path corners at j/3 (d=1) and j/4 (d=2) are sampled exactly.
+    The time letter counts twice towards the degree. Paths come from
+    ``precompute_cubature_paths`` with 10 integration steps per interval, a grid
+    that holds the path corners (j/3, j/4, macro-segment boundaries) only if it
+    is built around them, and are rescaled to unit time.
     """
-    ts = np.linspace(0.0, 1.0, 13)
-    paths, weights = build_lyons_victoir_multid_paths(
-        ts, noise_dim, lyons_degree=lyons_degree, k=1
+    horizon = 0.1
+    ts, paths, weights = precompute_cubature_paths(
+        horizon=horizon,
+        noise_dim=noise_dim,
+        integration_dt=horizon / 10,
+        cubature_order=k,
+        multidim_method="lv",
+        lyons_degree=lyons_degree,
     )
+    ts = np.asarray(ts) / horizon
+    paths = np.asarray(paths) / np.sqrt(horizon)
+    weights = np.asarray(weights)
     time = np.broadcast_to(ts[None, :, None], (len(weights), len(ts), 1))
     sigs = [_signature(p, lyons_degree) for p in np.concatenate([time, paths], axis=2)]
     expected = _brownian_expected_signature(noise_dim, lyons_degree)
@@ -124,6 +135,50 @@ def test_lv_paths_match_brownian_expected_signature(noise_dim, lyons_degree):
                 assert cubature[word] == pytest.approx(
                     expected[level][word], abs=1e-9
                 ), word
+
+
+@pytest.mark.parametrize("k", [1, 2, 3])
+@pytest.mark.parametrize(
+    "noise_dim, method, lyons_degree",
+    [
+        (1, "auto", 3),
+        (1, "auto", 5),
+        (2, "lv", 3),
+        (2, "lv", 5),
+        (2, "product", 5),
+        (2, "recombined", 5),
+    ],
+)
+def test_precompute_grid_contains_path_corners(noise_dim, method, lyons_degree, k):
+    """The integration grid holds every path corner, so RK4 sees the exact driver."""
+    horizon, integration_dt = 0.1, 0.01
+    ts, paths, _ = precompute_cubature_paths(
+        horizon=horizon,
+        noise_dim=noise_dim,
+        integration_dt=integration_dt,
+        cubature_order=k,
+        multidim_method=method,
+        lyons_degree=lyons_degree,
+    )
+    ts, paths = np.asarray(ts), np.asarray(paths)
+    assert ts[0] == 0.0
+    assert ts[-1] == pytest.approx(horizon, abs=1e-15)
+    assert np.max(np.diff(ts)) <= integration_dt * (1.0 + 1e-12)
+
+    knots, values, _ = _cubature_knot_paths(
+        noise_dim,
+        k=k,
+        gamma=0.6,
+        multidim_method=method,
+        lyons_degree=lyons_degree,
+        num_paths=None,
+        recombination_degree=3,
+    )
+    corner_idx = np.searchsorted(ts, knots * horizon)
+    np.testing.assert_array_equal(ts[corner_idx], knots * horizon)
+    np.testing.assert_allclose(
+        paths[:, corner_idx, :], np.sqrt(horizon) * values, rtol=0.0, atol=1e-14
+    )
 
 
 def test_oned_deg5_still_three_paths():
@@ -165,7 +220,8 @@ def test_lv_m5_matches_levy_area_sde_second_moment():
     np.testing.assert_allclose(second, 0.5 * delta**2, atol=1e-10)
 
 
-def test_lv_m5_weak_order_on_nonnilpotent_sde():
+@pytest.mark.parametrize("steps_per_interval", [10, 128])
+def test_lv_m5_weak_order_on_nonnilpotent_sde(steps_per_interval):
     """dx¹=dW¹, dx²=sin(x¹) dW² from (1, 0): LV m=5 has local weak error O(δ³).
 
     Unlike dx²=x¹ dW², this SDE is not nilpotent, so every level of the expected
@@ -185,7 +241,7 @@ def test_lv_m5_weak_order_on_nonnilpotent_sde():
         ts, paths, weights = precompute_cubature_paths(
             horizon=delta,
             noise_dim=2,
-            integration_dt=delta / 128,
+            integration_dt=delta / steps_per_interval,
             cubature_order=1,
             multidim_method="lv",
             lyons_degree=5,

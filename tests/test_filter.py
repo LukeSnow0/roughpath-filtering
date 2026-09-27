@@ -85,8 +85,10 @@ def test_linear_gaussian_1d_regression():
     final_var = float((states.chol_cov[-1] @ states.chol_cov[-1].T)[0, 0])
     final_loglik = float(states.log_normalizing_constant[-1])
 
-    # References recomputed after fixing Wiener-path Brownian scaling
-    # (ω_T = √T · ω_1) in ``precompute_cubature_paths``.
-    assert final_mean == pytest.approx(-0.0257306255, rel=1e-5, abs=1e-5)
-    assert final_var == pytest.approx(0.0082392945, rel=1e-4, abs=1e-5)
-    assert final_loglik == pytest.approx(1.4505350276, rel=1e-3, abs=1e-3)
+    # References recomputed after aligning the integration grid with the path
+    # corners in ``precompute_cubature_paths``. Against the exact Kalman filter for
+    # this OU model (mean -0.0258029626, var 0.0082487752, loglik 1.4498717327),
+    # the errors dropped from 7.2e-5 / 9.5e-6 / 6.6e-4 to 9.9e-6 / 1.3e-6 / 9.1e-5.
+    assert final_mean == pytest.approx(-0.0257930207, rel=1e-5, abs=1e-5)
+    assert final_var == pytest.approx(0.0082474720, rel=1e-4, abs=1e-5)
+    assert final_loglik == pytest.approx(1.4499629833, rel=1e-3, abs=1e-3)
