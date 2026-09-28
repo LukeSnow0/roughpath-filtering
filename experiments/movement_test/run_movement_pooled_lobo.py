@@ -508,7 +508,7 @@ ax.set_yscale("log")
 ax.set_xlabel(r"$\tau_v$ [h]")
 ax.set_ylabel(r"$\sigma_v$ [km/h]")
 ax.set_title("(a) Pooled train MLE")
-style_curve_axis(ax, grid_axis="both")
+style_curve_axis(ax)
 
 if ax_b is not None:
     names = [method_labels[m] for m in methods]
@@ -533,7 +533,7 @@ if ax_b is not None:
     ax_b.set_xticklabels(names)
     ax_b.set_ylabel("LOBO NLL [nats/observation]")
     ax_b.set_title("(b) Leave-one-bird-out")
-    style_box_axis(ax_b, grid_axis="y")
+    style_box_axis(ax_b)
     best = min(finite) if finite else float("nan")
     for x, m, s in zip(xpos, means, stds):
         if not np.isfinite(m):

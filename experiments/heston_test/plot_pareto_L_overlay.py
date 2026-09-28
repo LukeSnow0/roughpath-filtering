@@ -193,7 +193,7 @@ def main():
         n_seeds = summary[0]["n_seeds"] if summary else 0
         ax.set_title(rf"$L$-scale = {L} ({n_seeds} seeds)")
         ax.set_xscale("log")
-        style_curve_axis(ax, grid_axis="both")
+        style_curve_axis(ax)
         ax.set_xlabel("Wall-clock time [ms]")
     axes[0].set_ylabel("Fine-grid RMSE")
 

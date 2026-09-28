@@ -20,6 +20,7 @@ experiments/numerics_section/
     sin_area_moment_pareto.csv
     sin_area_char_pareto.csv
     sin_area_filter_pareto.csv
+    sin_area_filter_pareto_K100.csv   # K = 100 observations per track
   figures/
     fig_levy_area_weak_error.{png,pdf}
     fig_levy_area_split.{png,pdf}
@@ -30,6 +31,7 @@ experiments/numerics_section/
     fig_heston_weak_error.{png,pdf}
     fig_sin_area_weak_error.{png,pdf}
     fig_sin_area_filter.{png,pdf}
+    fig_sin_area_filter_K100.{png,pdf}
     tab_sin_area_one_step.tex
 ```
 
@@ -72,6 +74,8 @@ E[cos(ω x²)] from the Feynman–Kac PDE solved in a Fourier basis.
 - `fig_sin_area_filter`: mixture predictive NLL of `y = sin(ω x²) + ε`
   (R^{1/2}=0.25, K=8, Δ=0.5, 60 tracks) versus wall-clock. The odd observation
   breaks the x² → −x² symmetry, so latent RMSE is also informative (CSV only).
+- `fig_sin_area_filter_K100`: the same comparison with K = 100 observations
+  per track.
 - `tab_sin_area_one_step.tex`: one-step errors at τ = 0.5 (Table 1 analogue);
   EnKF entries are mean ± standard error over seeds.
 
@@ -102,6 +106,10 @@ cp experiments/heston_test/output/levy_area/levy_area_filter_pareto.csv \
    experiments/numerics_section/data/levy_area_filter_pareto.csv
 cp experiments/heston_test/output/weak_error_delta_scaling_sv.csv \
    experiments/numerics_section/data/heston_weak_error.csv
+.venv/bin/python experiments/heston_test/levy_area_filter_pareto.py --model sin_area \
+    --n-obs 100 --seeds $(seq -s, 100 159) --enkf 5,10,25,50,100,500 --pf 5,10,25,50,100,500
+# the K = 100 run writes sin_area_filter_pareto.csv; copy it to sin_area_filter_pareto_K100.csv
+# before rerunning K = 8
 for f in weak_error moment_pareto char_pareto filter_pareto; do
   cp experiments/heston_test/output/sin_area/sin_area_$f.csv \
      experiments/numerics_section/data/sin_area_$f.csv

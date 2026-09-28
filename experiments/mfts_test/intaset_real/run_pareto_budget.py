@@ -1062,7 +1062,7 @@ def _plot_pareto_metric(metric: str, ylabel: str, title: str, out_name: str):
     if all_x_lows:
         ax.set_xlim(min(all_x_lows) / 1.12, max(all_x_highs) * 1.12)
     ax.set_title(title)
-    style_curve_axis(ax, grid_axis="both")
+    style_curve_axis(ax)
     ax.legend(
         loc="lower center",
         bbox_to_anchor=(0.5, 0.01),

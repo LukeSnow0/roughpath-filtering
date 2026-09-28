@@ -483,7 +483,7 @@ def main():
     ax1.set_xlabel(r"Assimilation interval $\delta$")
     ax1.set_ylabel(r"$|\widehat{\mathrm{E}}[x_\delta]-\mathrm{E}[x_\delta]|$")
     ax1.set_xlim(deltas[0], deltas[-1])
-    style_curve_axis(ax1, grid_axis="both")
+    style_curve_axis(ax1)
     mean_legend_handles = [h_ws[0], h_ws[3], h_ws[1], h_g3, h_ws[2]]
     fig1.legend(
         handles=mean_legend_handles,
@@ -569,7 +569,7 @@ def main():
     ax2.set_xlabel(r"Assimilation interval $\delta$")
     ax2.set_ylabel(r"$\|\widehat P-P\|_F$")
     ax2.set_xlim(deltas[0], deltas[-1])
-    style_curve_axis(ax2, grid_axis="both")
+    style_curve_axis(ax2)
     ax2.text(
         0.03,
         0.96,

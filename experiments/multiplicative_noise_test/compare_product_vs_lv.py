@@ -244,7 +244,7 @@ def main():
 
     ax.set_xlabel(r"Assimilation interval $\delta$")
     ax.set_ylabel(r"$|\widehat{\mathbb{E}}[(x^{2})^2]-\delta^{2}/2|$")
-    style_curve_axis(ax, grid_axis="both")
+    style_curve_axis(ax)
     ax.legend(
         loc="upper center",
         bbox_to_anchor=(0.5, 1.34),

@@ -624,7 +624,7 @@ def main():
         ax.set_xlabel(r"Disturbance-noise scale $\sigma / \sigma_0$")
         ax.set_ylabel(ylab)
         ax.set_xscale("log", base=2)
-        style_curve_axis(ax, grid_axis="both")
+        style_curve_axis(ax)
 
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(

@@ -738,7 +738,7 @@ def main():
     ax.set_xlabel(r"$p_3$ [U$^{-1}$]")
     ax.set_ylabel(r"$\sigma_G$ [(mg/dL/min)$^{1/2}$]")
     ax.set_title("(a) Parameter path")
-    style_curve_axis(ax, grid_axis="both")
+    style_curve_axis(ax)
 
     ax = axes2[1]
     ll_styles = [("WSC-KF", wsckf_ll_tr), ("CD-EKF", ekf_ll_tr)]
@@ -760,7 +760,7 @@ def main():
     ax.set_xlabel("MLE iteration")
     ax.set_ylabel("Train log-likelihood [nats]")
     ax.set_title("(b) Training objective")
-    style_curve_axis(ax, grid_axis="y")
+    style_curve_axis(ax)
     handles, labels = axes2[0].get_legend_handles_labels()
     fig2.legend(
         handles,
@@ -813,7 +813,7 @@ def main():
         )
     ax.set_xlabel("Time [h]")
     ax.set_ylabel("Glucose [mg/dL]")
-    style_curve_axis(ax, grid_axis="y")
+    style_curve_axis(ax)
     handles, labels = ax.get_legend_handles_labels()
     fig3.legend(
         handles,
@@ -867,7 +867,7 @@ def main():
         ax.set_xlabel(r"$p_3$ [U$^{-1}$]")
         ax.set_ylabel(r"$\sigma_G$ [(mg/dL/min)$^{1/2}$]")
         ax.set_title("(a) MLE parameters")
-        style_curve_axis(ax, grid_axis="both")
+        style_curve_axis(ax)
 
         ax = axes4[1]
         names = [c[0] for c in compare]
@@ -890,7 +890,7 @@ def main():
         ax.invert_yaxis()
         ax.set_xlabel("Held-out NLL [nats/observation]")
         ax.set_title(r"(b) Reference-EnKF score ($\pm 1$ SD)")
-        style_curve_axis(ax, grid_axis="x")
+        style_curve_axis(ax)
         handles, labels = axes4[0].get_legend_handles_labels()
         fig4.legend(
             handles,

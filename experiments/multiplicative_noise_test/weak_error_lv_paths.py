@@ -379,7 +379,7 @@ def main():
             fontsize=6.4,
             color=PALETTE["black"],
         )
-        style_curve_axis(ax, grid_axis="both")
+        style_curve_axis(ax)
 
     axes[1, 0].set_xlabel(r"Assimilation interval $\delta$")
     axes[1, 1].set_xlabel(r"Assimilation interval $\delta$")

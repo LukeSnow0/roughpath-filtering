@@ -639,7 +639,7 @@ def plot_one_delta(
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylab)
         ax.set_xscale("log")
-        style_curve_axis(ax, grid_axis="both")
+        style_curve_axis(ax)
         if n_panel > 1:
             ax.set_title(f"({chr(ord('a') + panel_idx)})")
 

@@ -173,7 +173,7 @@ def main():
     ax.set_xlabel("Mean wall time [ms]")
     ax.set_ylabel("Held-out CRPS [mg/dL]")
     ax.set_xscale("log")
-    style_curve_axis(ax, grid_axis="both")
+    style_curve_axis(ax)
     ax.text(
         0.02,
         0.98,

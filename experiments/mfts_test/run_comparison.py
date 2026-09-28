@@ -329,7 +329,7 @@ for i, ax in enumerate(axes.ravel()):
         est_h = r["est"][:, :4] * beta
         plot_method(ax, times_min, est_h[:, i], name)
     ax.set_ylabel(rf"$h_{i + 1}$ [cm]")
-    style_curve_axis(ax, grid_axis="y")
+    style_curve_axis(ax)
 axes[1, 0].set_xlabel("Time [min]")
 axes[1, 1].set_xlabel("Time [min]")
 handles, labels = axes[0, 0].get_legend_handles_labels()
@@ -375,7 +375,7 @@ for ax, idx, label in zip(axes, [4, 5], ["$F_3$", "$F_4$"]):
     for name in RESULTS:
         plot_method(ax, times_min, RESULTS[name]["est"][:, idx], name)
     ax.set_ylabel(rf"{label} [cm$^3$ s$^{{-1}}$]")
-    style_curve_axis(ax, grid_axis="y")
+    style_curve_axis(ax)
 axes[0].set_xlabel("Time [min]")
 axes[1].set_xlabel("Time [min]")
 handles, labels = axes[0].get_legend_handles_labels()
@@ -414,7 +414,7 @@ ax.set_xticks(xpos)
 ax.set_xticklabels(["Tank states", "Disturbance states"])
 ax.set_ylabel("MAPE [%]")
 ax.set_ylim(bottom=0.0)
-style_box_axis(ax, grid_axis="y")
+style_box_axis(ax)
 handles, labels = ax.get_legend_handles_labels()
 fig.legend(
     handles,
@@ -443,7 +443,7 @@ for name in RESULTS:
     )
 ax.set_xlabel("Time [min]")
 ax.set_ylabel("Cumulative log likelihood [nats]")
-style_curve_axis(ax, grid_axis="y")
+style_curve_axis(ax)
 handles, labels = ax.get_legend_handles_labels()
 fig.legend(
     handles,
@@ -478,7 +478,7 @@ ax.set_yticklabels(names)
 ax.set_xscale("log")
 ax.set_xlabel("Wall-clock time [s]")
 ax.invert_yaxis()
-style_curve_axis(ax, grid_axis="x")
+style_curve_axis(ax)
 for y, value in zip(ypos, runtime_values):
     ax.text(
         value * 1.08,

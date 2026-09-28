@@ -266,7 +266,7 @@ def _plot_pareto(
     ax.set_xscale("log")
     if y_hi is not None:
         ax.set_ylim(y_lo, y_hi)
-    style_curve_axis(ax, grid_axis="both")
+    style_curve_axis(ax)
     ax.legend(fontsize=6.0, loc="best", frameon=False, ncol=2)
     fig.subplots_adjust(left=0.16, right=0.98, bottom=0.16, top=0.97)
     path = os.path.join(OUTPUT_DIR, outfile)

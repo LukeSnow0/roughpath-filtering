@@ -1095,7 +1095,7 @@ def _style_pareto_axis(ax, ylabel: str) -> None:
     ax.set_xlabel("Wall-clock time [ms]")
     ax.set_ylabel(ylabel)
     ax.set_xscale("log")
-    style_curve_axis(ax, grid_axis="both")
+    style_curve_axis(ax)
     ax.margins(x=0.08, y=0.12)
 
 

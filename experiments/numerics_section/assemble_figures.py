@@ -1,6 +1,11 @@
 """Rebuild numerics_section figures from archived CSVs.
 
   .venv/bin/python experiments/numerics_section/assemble_figures.py
+
+Styling comes from ``mfts_test/plot_style.py`` (colors, markers, typography);
+this module only lays figures out. Every figure is authored at the manuscript's
+single-column width (``PAPER_COLUMN_WIDTH``); include it with
+``width=\\columnwidth`` so text prints at its nominal size.
 """
 
 from __future__ import annotations
@@ -27,11 +32,14 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.lines import Line2D
-from matplotlib.ticker import NullFormatter
+from matplotlib.ticker import FixedLocator, NullFormatter
 
 from mfts_test.plot_style import (
-    DOUBLE_COLUMN_WIDTH,
     METHOD_COLORS,
+    METHOD_MARKERS,
+    PAPER_COLUMN_WIDTH,
+    PAPER_TEXT_WIDTH,
+    PALETTE,
     save_publication_figure,
     style_curve_axis,
 )
@@ -40,13 +48,22 @@ DATA = os.path.join(HERE, "data")
 FIG = os.path.join(HERE, "figures")
 os.makedirs(FIG, exist_ok=True)
 
-WSC3, WSC5 = "#9B5DE5", "#7B2CBF"
-TME_C = "#CC79A7"
+WSC3 = METHOD_COLORS["WSC-KF-m3"]
+WSC5 = METHOD_COLORS["WSC-KF-m5"]
+TME_C = METHOD_COLORS["TME"]
 ENKF_C = METHOD_COLORS["CD-EnKF"]
-PF_C = "#C1121F"
+PF_C = METHOD_COLORS["PF"]
 CKF_C = METHOD_COLORS["CD-CKF"]
 EKF_C = METHOD_COLORS["CD-EKF"]
-SEUKF_C = "#00897B"
+SEUKF_C = METHOD_COLORS["SE-UKF"]
+REF_C = PALETTE["neutral_gray"]
+MARKER = {fam: METHOD_MARKERS[fam] for fam in (
+    "WSC-KF-m3", "WSC-KF-m5", "TME", "CD-EKF", "CD-CKF", "SE-UKF", "CD-EnKF", "PF",
+)}
+
+ANN_FS = 7.5  # direct labels next to points
+CURVE_LW = 1.8
+MARKER_SIZE = 5.0
 
 MOMENT_Y_LO = 1e-8
 MOMENT_Y_HI = 0.45
@@ -87,7 +104,14 @@ def _fit_slope(x, y, xmin, xmax):
     return float(np.polyfit(np.log(x[m]), np.log(y[m]), 1)[0])
 
 
-def _point(ax, x, y, *, color, marker, ms=6.0, z=5):
+def _decimal_ticks(axis, ticks, labels=None) -> None:
+    """Plain-number major ticks on a log axis (e.g. 0.1, 0.2, 0.5), unlabeled minors."""
+    axis.set_major_locator(FixedLocator(ticks))
+    axis.set_ticklabels(labels if labels is not None else [f"{t:g}" for t in ticks])
+    axis.set_minor_formatter(NullFormatter())
+
+
+def _point(ax, x, y, *, color, marker, ms=MARKER_SIZE + 0.5, z=5):
     ax.plot(
         x,
         y,
@@ -96,12 +120,12 @@ def _point(ax, x, y, *, color, marker, ms=6.0, z=5):
         color=color,
         markerfacecolor="white",
         markersize=ms,
-        markeredgewidth=1.0,
+        markeredgewidth=1.2,
         zorder=z,
     )
 
 
-def _ann(ax, x, y, text, *, color, xytext=(5, 5), ha="left", va="bottom", fs=6.2):
+def _ann(ax, x, y, text, *, color, xytext=(5, 5), ha="left", va="bottom", fs=ANN_FS):
     ax.annotate(
         text,
         (x, y),
@@ -115,60 +139,77 @@ def _ann(ax, x, y, text, *, color, xytext=(5, 5), ha="left", va="bottom", fs=6.2
     )
 
 
+# ---------------------------------------------------------------------------
+# One-step weak-error rate plots
+# ---------------------------------------------------------------------------
+
+
+def _rate_panel(ax, xs, curves, refs, *, fit_window, xticks, markevery=1,
+                markersize=MARKER_SIZE):
+    """Log-log error curves with dark-gray reference slopes.
+
+    ``curves``: ``(ys, color, fmt, lw[, markerfacecolor])``; returns the fitted
+    slope of each.
+    ``refs``: ``(slope, anchor_ys, linestyle)``; each reference line passes half a
+    decade-factor below ``anchor_ys`` at the start of the fit window.
+    """
+    slopes = []
+    for ys, color, fmt, lw, *mfc in curves:
+        ys = np.maximum(np.asarray(ys, dtype=float), 1e-16)
+        ax.loglog(xs, ys, fmt, color=color, markerfacecolor=mfc[0] if mfc else "white",
+                  markevery=markevery,
+                  markersize=markersize, markeredgewidth=1.1, lw=lw)
+        slopes.append(_fit_slope(xs, ys, *fit_window))
+    i0 = int(np.argmin(np.abs(np.log(xs / fit_window[0]))))
+    x_ref = np.array([xs[0], xs[-1]])
+    for slope, anchor, ls in refs:
+        y0 = 0.5 * float(anchor[i0])
+        ax.loglog(x_ref, y0 * (x_ref / xs[i0]) ** slope, ls, color=REF_C, lw=1.2, zorder=1)
+    _decimal_ticks(ax.xaxis, xticks)
+    style_curve_axis(ax)
+    return slopes
+
+
+def _rate_legend_handles(styles, labels):
+    handles = [
+        Line2D([0], [0], color=c, marker=fmt[0], ls=fmt[1:], lw=lw, markersize=MARKER_SIZE,
+               markerfacecolor="white", markeredgewidth=1.1, label=lab)
+        for (c, fmt, lw), lab in zip(styles, labels)
+    ]
+    return handles + [
+        Line2D([0], [0], color=REF_C, lw=1.2, ls="--", label=r"$\propto\tau^{2}$"),
+        Line2D([0], [0], color=REF_C, lw=1.2, ls=":", label=r"$\propto\tau^{3}$"),
+    ]
+
+
 def plot_levy_weak_error(rows: list[dict]) -> None:
-    """Local weak error of E[cos(ω x²)].
+    """Local weak error of E[cos(ω x²)] on the Lévy-area SDE.
 
     CD-CKF cubatures the state, then integrates with L at the mean. From a
     Dirac law that is one node at the origin, so x²≡0. WSC m=3 omits Lévy
-    area and predicts the same value. Neither is a one-step IT-1.5 of the
-    driving Brownian motion; m=5 is, of the mixed integrals.
+    area and predicts the same value, so it lies on top of CD-CKF.
     """
     rows = [r for r in rows if r["delta"] <= 0.55]
     taus = np.array([r["delta"] for r in rows])
-    fig, ax = plt.subplots(figsize=(0.52 * DOUBLE_COLUMN_WIDTH, 2.12))
-    series = [
-        ("ckf_err", CKF_C, "X-", r"CD-CKF"),
-        ("wsckf_err_m3", WSC3, "D--", r"WSC-KF $m$=3"),
-        ("wsckf_err_m5", WSC5, "s-", r"WSC-KF $m$=5"),
-    ]
-    plotted = {}
-    for key, color, fmt, lab in series:
-        ys = np.array([max(float(r[key]), 1e-16) for r in rows])
-        slope = _fit_slope(taus, ys, 0.10, 0.35)
-        label = rf"{lab} (fit={slope:.2f})"
-        ax.loglog(
-            taus,
-            ys,
-            fmt,
-            color=color,
-            label=label,
-            markerfacecolor="white",
-            markersize=5.6,
-            lw=1.45,
-        )
-        plotted[key] = ys
-
-    mid = min(4, len(taus) - 1)
-    for slope, key, lab, ls in (
-        (2.0, "ckf_err", r"$\propto\tau^{2}$", "--"),
-        (3.0, "wsckf_err_m5", r"$\propto\tau^{3}$", ":"),
-    ):
-        ys = plotted[key]
-        x0, y0 = float(taus[mid]), max(float(ys[mid]), 1e-16)
-        xx = np.array([taus[0], taus[-1]])
-        ax.loglog(xx, y0 * (xx / x0) ** slope, ls, color="0.45", lw=0.95, label=lab, zorder=1)
-
-    ax.set_xlabel(r"Forecast interval $\tau$")
-    ax.set_ylabel(
-        r"$|\widehat{\mathbb{E}}[\cos(\omega x^{2})]"
-        r"-[\cosh(\omega\tau)]^{-1/2}|$"
+    col = lambda k: np.array([float(r[k]) for r in rows])
+    styles = [(CKF_C, "X-", 3.0), (WSC3, "D--", CURVE_LW), (WSC5, "s-", CURVE_LW)]
+    fig, ax = plt.subplots(figsize=(PAPER_COLUMN_WIDTH, 2.45))
+    slopes = _rate_panel(
+        ax, taus,
+        [(col(k), *st) for k, st in zip(("ckf_err", "wsckf_err_m3", "wsckf_err_m5"), styles)],
+        [(2.0, col("ckf_err"), "--"), (3.0, col("wsckf_err_m5"), ":")],
+        fit_window=(0.10, 0.35), xticks=[0.1, 0.2, 0.3, 0.5],
     )
-    style_curve_axis(ax, grid_axis="both")
-    ax.tick_params(labelsize=7.6)
-    ax.xaxis.label.set_size(8.4)
-    ax.yaxis.label.set_size(8.4)
-    ax.legend(fontsize=6.8, loc="lower right", frameon=False, borderaxespad=0.15)
-    fig.subplots_adjust(left=0.22, right=0.97, bottom=0.20, top=0.97)
+    ax.set_xlabel(r"Forecast interval $\tau$")
+    ax.set_ylabel(r"Error in $\mathbb{E}[\cos(\omega x^{2}_{\tau})]$")
+    names = ["CD-CKF", r"WSC-KF $m$=3", r"WSC-KF $m$=5"]
+    fig.legend(
+        handles=_rate_legend_handles(
+            styles, [f"{n} (fit {s:.2f})" for n, s in zip(names, slopes)]
+        ),
+        loc="upper center", bbox_to_anchor=(0.55, 1.0), ncol=2, columnspacing=0.8,
+    )
+    fig.subplots_adjust(left=0.19, right=0.97, bottom=0.19, top=0.70)
     save_publication_figure(fig, os.path.join(FIG, "fig_levy_area_weak_error.png"))
     save_publication_figure(fig, os.path.join(FIG, "fig_levy_area_weak_error_local.png"))
     plt.close(fig)
@@ -177,61 +218,50 @@ def plot_levy_weak_error(rows: list[dict]) -> None:
 def plot_weak_error(rows: list[dict]) -> None:
     """Heston covariance weak error: CD-CKF vs WSC m=3 and m=5."""
     deltas = np.array([r["delta"] for r in rows])
-    fig, ax = plt.subplots(figsize=(0.52 * DOUBLE_COLUMN_WIDTH, 2.72))
-    series = [
-        ("wsckf_cov_err_m3", WSC3, "D-", r"WSC-KF $m$=3"),
-        ("wsckf_cov_err_m5", WSC5, "s-", r"WSC-KF $m$=5"),
-        ("ckf_cov_err", CKF_C, "s-", "CD-CKF"),
-    ]
-    plotted = {}
-    for key, color, fmt, lab in series:
-        ys = np.array([max(float(r[key]), 1e-16) for r in rows])
-        slope = _fit_slope(deltas, ys, 0.15, 0.50)
-        label = rf"{lab} (fit={slope:.2f})"
-        ax.loglog(
-            deltas,
-            ys,
-            fmt,
-            color=color,
-            label=label,
-            markerfacecolor="white",
-            markersize=5.4,
-            lw=1.45,
-        )
-        plotted[key] = ys
-
-    mid = min(6, len(deltas) - 1)
-    for slope, ys, lab, ls in (
-        (2.0, plotted["ckf_cov_err"], r"$\propto\Delta^{2}$", "--"),
-        (3.0, plotted["wsckf_cov_err_m5"], r"$\propto\Delta^{3}$", ":"),
-    ):
-        x0, y0 = float(deltas[mid]), max(float(ys[mid]), 1e-16)
-        xx = np.array([deltas[0], deltas[-1]])
-        ax.loglog(xx, y0 * (xx / x0) ** slope, ls, color="0.45", lw=0.95, label=lab, zorder=1)
-
+    col = lambda k: np.array([float(r[k]) for r in rows])
+    styles = [(CKF_C, "X-", CURVE_LW), (WSC3, "D--", CURVE_LW), (WSC5, "s-", CURVE_LW)]
+    keys = ("ckf_cov_err", "wsckf_cov_err_m3", "wsckf_cov_err_m5")
+    fig, ax = plt.subplots(figsize=(PAPER_COLUMN_WIDTH, 2.45))
+    slopes = _rate_panel(
+        ax, deltas,
+        [(col(k), *st) for k, st in zip(keys, styles)],
+        [(2.0, col("ckf_cov_err"), "--"), (3.0, col("wsckf_cov_err_m5"), ":")],
+        fit_window=(0.15, 0.50), xticks=[0.2, 0.3, 0.5],
+    )
     ax.set_xlabel(r"Forecast interval $\Delta$")
     ax.set_ylabel(r"$\|P_{\Delta}-\widehat{P}_{\Delta}\|_{\mathrm{F}}$")
-    style_curve_axis(ax, grid_axis="both")
-    ax.legend(fontsize=6.2, loc="upper left", frameon=False)
-    fig.subplots_adjust(left=0.18, right=0.97, bottom=0.16, top=0.96)
+    names = ["CD-CKF", r"WSC-KF $m$=3", r"WSC-KF $m$=5"]
+    handles = _rate_legend_handles(
+        styles, [f"{n} (fit {s:.2f})" for n, s in zip(names, slopes)]
+    )
+    for h, lab in zip(handles[-2:], (r"$\propto\Delta^{2}$", r"$\propto\Delta^{3}$")):
+        h.set_label(lab)
+    fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.55, 1.0), ncol=2,
+               columnspacing=0.8)
+    fig.subplots_adjust(left=0.19, right=0.97, bottom=0.19, top=0.70)
     save_publication_figure(fig, os.path.join(FIG, "fig_heston_weak_error.png"))
     plt.close(fig)
 
 
-def plot_levy_moment(ax, rows: list[dict], *, compact: bool = False) -> None:
+# ---------------------------------------------------------------------------
+# One-step moment / characteristic-function comparisons
+# ---------------------------------------------------------------------------
+
+
+def plot_levy_moment(ax, rows: list[dict]) -> None:
     """One-step |E[(x²)²]−Δ²/2| by method. Not a cost Pareto: TME and m=5 are both exact."""
     specs = [
-        ("CD-EKF", "EKF", "EKF" if not compact else "EKF", EKF_C, "s", False),
-        ("WSC-KF-m3", "m3-k1", r"$m$=3", WSC3, "D", False),
-        ("CD-EnKF", "EnKF-25", "EnKF\n25" if compact else "EnKF 25", ENKF_C, "o", False),
-        ("CD-EnKF", "EnKF-2000", "EnKF\n2000" if compact else "EnKF 2000", ENKF_C, "o", False),
-        ("TME", "TME-2", "TME-2" if not compact else "TME", TME_C, "P", True),
-        ("WSC-KF-m5", "m5-k1", r"$m$=5", WSC5, "s", True),
+        ("CD-EKF", "EKF", "EKF", EKF_C, False),
+        ("WSC-KF-m3", "m3-k1", r"$m$=3", WSC3, False),
+        ("CD-EnKF", "EnKF-25", "EnKF\n25", ENKF_C, False),
+        ("CD-EnKF", "EnKF-2000", "EnKF\n2000", ENKF_C, False),
+        ("TME", "TME-2", "TME-2", TME_C, True),
+        ("WSC-KF-m5", "m5-k1", r"$m$=5", WSC5, True),
     ]
     xs, labels = [], []
     pos = 0.0
     gap_done = False
-    for fam, lab, disp, color, marker, exact in specs:
+    for fam, lab, disp, color, exact in specs:
         r = _find(rows, fam, lab)
         if r is None:
             continue
@@ -247,34 +277,33 @@ def plot_levy_moment(ax, rows: list[dict], *, compact: bool = False) -> None:
             [x],
             [y],
             yerr=(yerr if yerr > 1e-18 else None),
-            fmt=marker,
+            fmt=MARKER[fam],
             linestyle="none",
             color=color,
             markerfacecolor=color if exact else "white",
             markeredgecolor=color,
-            markersize=7.2 if exact else 6.2,
-            markeredgewidth=1.05,
+            markersize=7.0,
+            markeredgewidth=1.2,
             ecolor=color,
-            elinewidth=0.7,
-            capsize=1.6,
+            elinewidth=0.9,
+            capsize=2.0,
             zorder=5,
         )
         if exact:
-            _ann(ax, x, y, "exact", color=color, xytext=(0, 9), ha="center", va="bottom", fs=6.0)
+            _ann(ax, x, y, "exact", color=color, xytext=(0, 9), ha="center", va="bottom")
         xs.append(x)
         labels.append(disp)
         pos += 1.0
 
     if len(xs) >= 6:
-        ax.axvline(0.5 * (xs[3] + xs[4]), color="0.82", lw=0.7, zorder=1)
+        ax.axvline(0.5 * (xs[3] + xs[4]), color=PALETTE["light_gray"], lw=0.8, zorder=1)
     ax.set_xticks(xs)
-    ax.set_xticklabels(labels, fontsize=5.8 if compact else 6.4)
+    ax.set_xticklabels(labels)
     ax.set_xlim(xs[0] - 0.7, xs[-1] + 0.7)
     ax.set_yscale("log")
     ax.set_ylim(3e-9, MOMENT_Y_HI)
-    ax.set_xlabel("")
-    ax.set_ylabel(r"$|\widehat{\mathbb{E}}[(x^{2})^{2}]-\Delta^{2}/2|$")
-    style_curve_axis(ax, grid_axis="y")
+    ax.set_ylabel(r"Error in $\mathbb{E}[(x^{2}_{\Delta})^{2}]$")
+    style_curve_axis(ax)
     ax.tick_params(axis="x", length=0)
 
 
@@ -282,7 +311,8 @@ CHAR_Y_LO = 4e-3
 CHAR_Y_HI = 0.55
 
 
-def _one_step_err_polyline(ax, rows, specs, *, color, marker, ls="-", mfc="white", lw=1.25, z=4):
+def _one_step_err_polyline(ax, rows, specs, *, color, marker, ls="-", mfc="white",
+                           lw=CURVE_LW, z=4):
     pts = []
     for fam, lab in specs:
         r = _find(rows, fam, lab)
@@ -305,11 +335,11 @@ def _one_step_err_polyline(ax, rows, specs, *, color, marker, ls="-", mfc="white
         color=color,
         markerfacecolor=mfc,
         markeredgecolor=color,
-        markersize=5.6,
-        markeredgewidth=1.0,
+        markersize=MARKER_SIZE + 0.5,
+        markeredgewidth=1.1,
         ecolor=color,
-        elinewidth=0.7,
-        capsize=1.6,
+        elinewidth=0.9,
+        capsize=2.0,
         lw=lw,
         zorder=z,
     )
@@ -321,30 +351,30 @@ def plot_levy_char(ax, rows: list[dict]) -> None:
         ax, rows,
         [("CD-EnKF", "EnKF-25"), ("CD-EnKF", "EnKF-50"), ("CD-EnKF", "EnKF-100"),
          ("CD-EnKF", "EnKF-500"), ("CD-EnKF", "EnKF-2000")],
-        color=ENKF_C, marker="o", ls="--", lw=1.15, z=3,
+        color=ENKF_C, marker=MARKER["CD-EnKF"], ls="--", lw=1.4, z=3,
     )
     _one_step_err_polyline(
         ax, rows,
         [("WSC-KF-m3", "m3-k2"), ("WSC-KF-m3", "m3-k3")],
-        color=WSC3, marker="D", mfc=WSC3, lw=1.7, z=6,
+        color=WSC3, marker=MARKER["WSC-KF-m3"], mfc=WSC3, z=6,
     )
     _one_step_err_polyline(
         ax, rows,
         [("WSC-KF-m5", "m5-k1"), ("WSC-KF-m5", "m5-k2")],
-        color=WSC5, marker="s", mfc=WSC5, lw=1.45, z=5,
+        color=WSC5, marker=MARKER["WSC-KF-m5"], mfc=WSC5, z=5,
     )
 
     labels = [
         ("CD-EKF", "EKF", "EKF", EKF_C, True, (0, 7), "center", "bottom"),
-        ("WSC-KF-m3", "m3-k1", r"$m$=3, $N_\tau$=1", WSC3, True, (5, 6), "left", "bottom"),
         ("TME", "TME-2", "TME-2", TME_C, True, (-6, 7), "right", "bottom"),
-        ("WSC-KF-m5", "m5-k1", r"$m$=5, $N_\tau$=1", WSC5, False, (6, -10), "left", "top"),
-        ("WSC-KF-m3", "m3-k3", r"$m$=3, $N_\tau$=3", WSC3, False, (-6, -10), "right", "top"),
-        ("WSC-KF-m5", "m5-k2", r"$m$=5, $N_\tau$=2", WSC5, False, (5, 6), "left", "bottom"),
-        ("CD-EnKF", "EnKF-25", "25", ENKF_C, False, (6, 5), "left", "bottom"),
-        ("CD-EnKF", "EnKF-2000", "2000", ENKF_C, False, (0, -11), "center", "top"),
+        ("WSC-KF-m3", "m3-k1", r"$N_\tau$=1", WSC3, True, (0, 7), "center", "bottom"),
+        ("WSC-KF-m3", "m3-k2", "2", WSC3, False, (-7, 0), "right", "center"),
+        ("WSC-KF-m3", "m3-k3", "3", WSC3, False, (0, -9), "center", "top"),
+        ("WSC-KF-m5", "m5-k1", r"$N_\tau$=1", WSC5, False, (-8, 0), "right", "center"),
+        ("WSC-KF-m5", "m5-k2", "2", WSC5, False, (0, 7), "center", "bottom"),
+        ("CD-EnKF", "EnKF-25", r"$n$=25", REF_C, False, (8, -3), "left", "top"),
+        ("CD-EnKF", "EnKF-2000", r"$n$=2000", REF_C, False, (0, -10), "center", "top"),
     ]
-    marker_of = {"CD-EKF": "s", "WSC-KF-m3": "D", "TME": "P", "WSC-KF-m5": "s", "CD-EnKF": "o"}
     for fam, lab, disp, color, draw, off, ha, va in labels:
         r = _find(rows, fam, lab)
         if r is None:
@@ -352,16 +382,23 @@ def plot_levy_char(ax, rows: list[dict]) -> None:
         x = 1e3 * r["time_s"]
         y = max(float(r["abs_err"]), CHAR_Y_LO)
         if draw:
-            _point(ax, x, y, color=color, marker=marker_of[fam], ms=6.0)
+            _point(ax, x, y, color=color, marker=MARKER[fam])
         _ann(ax, x, y, disp, color=color, xytext=off, ha=ha, va=va)
 
     ax.set_xlabel("One-step forecast wall-clock [ms]")
-    ax.set_ylabel(r"$|\widehat{\mathbb{E}}[\cos(\omega x^{2})]-[\cosh(\omega\Delta)]^{-1/2}|$")
+    ax.set_ylabel(r"Error in $\mathbb{E}[\cos(\omega x^{2}_{\Delta})]$")
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlim(0.006, 55)
     ax.set_ylim(CHAR_Y_LO, CHAR_Y_HI)
-    style_curve_axis(ax, grid_axis="both")
+    _decimal_ticks(ax.xaxis, [0.01, 0.1, 1, 10])
+    _decimal_ticks(ax.yaxis, [0.01, 0.1])
+    style_curve_axis(ax)
+
+
+# ---------------------------------------------------------------------------
+# Sequential filtering: predictive NLL vs wall-clock
+# ---------------------------------------------------------------------------
 
 
 def _filter_polyline(
@@ -374,10 +411,10 @@ def _filter_polyline(
     ls="-",
     mfc="white",
     mec=None,
-    lw=1.2,
-    ms=5.6,
+    lw=CURVE_LW,
+    ms=MARKER_SIZE + 0.5,
     z=4,
-    mew=1.0,
+    mew=1.1,
     alpha=1.0,
 ):
     pts = []
@@ -403,301 +440,235 @@ def _filter_polyline(
         markersize=ms,
         markeredgewidth=mew,
         ecolor=color,
-        elinewidth=0.7,
-        capsize=1.6,
+        elinewidth=0.9,
+        capsize=2.0,
         lw=lw,
         zorder=z,
         alpha=alpha,
     )
 
 
-# (family, label, annotation, color, marker, xytext, ha, va) for single filters.
+# Single Gaussian filters: (family, label, annotation, xytext, ha, va); color
+# and marker come from the family.
 LEVY_FILTER_SINGLES = [
-    ("CD-EKF", "EKF", None, EKF_C, "s", (0, 8), "center", "bottom"),
-    ("CD-CKF", "CKF", "EKF, CKF", CKF_C, "X", (8, 0), "left", "center"),
-    ("SE-UKF", "N8", "SE-UKF", SEUKF_C, "X", (6, 6), "left", "bottom"),
-    ("TME", "TME-2", "TME-2", TME_C, "P", (0, 8), "center", "bottom"),
-    ("WSC-KF-m3", "m3-k1", r"$m$=3, $N_\tau$=1", WSC3, "D", (0, 8), "center", "bottom"),
-    ("WSC-KF-m3", "m3-k3", r"$m$=3, $N_\tau$=3", WSC3, "D", (-6, -11), "right", "top"),
-    ("WSC-KF-m5", "m5-k2", r"$m$=5, $N_\tau$=2", WSC5, "s", (5, 6), "left", "bottom"),
-    ("CD-EnKF", "EnKF-5", "5", ENKF_C, "o", (-7, 8), "right", "bottom"),
-    ("CD-EnKF", "EnKF-100", "100", ENKF_C, "o", (4, 6), "left", "bottom"),
-    ("PF", "PF-5", "5", PF_C, "v", (6, -10), "left", "top"),
-    ("PF", "PF-500", "500", PF_C, "v", (5, -11), "left", "top"),
+    ("CD-EKF", "EKF", None, (0, 8), "center", "bottom"),
+    ("CD-CKF", "CKF", "EKF, CKF", (8, 0), "left", "center"),
+    ("SE-UKF", "N8", "SE-UKF", (6, 6), "left", "bottom"),
+    ("TME", "TME-2", "TME-2", (0, 8), "center", "bottom"),
 ]
 
+# Points on the WSC-KF and ensemble curves: (family, label, text, xytext, ha, va,
+# color). WSC-KF points carry their segment count; ensemble sizes are gray.
+LEVY_FILTER_LABELS = [
+    ("WSC-KF-m3", "m3-k1", r"$N_\tau$=1", (0, 8), "center", "bottom", WSC3),
+    ("WSC-KF-m3", "m3-k2", "2", (-6, -6), "right", "top", WSC3),
+    ("WSC-KF-m3", "m3-k3", "3", (0, -9), "center", "top", WSC3),
+    ("WSC-KF-m5", "m5-k1", r"$N_\tau$=1", (-8, 0), "right", "center", WSC5),
+    ("WSC-KF-m5", "m5-k2", "2", (0, 8), "center", "bottom", WSC5),
+    ("CD-EnKF", "EnKF-5", r"$n$=5", (8, 0), "left", "center", REF_C),
+    ("PF", "PF-500", r"$n$=500", (7, 2), "left", "center", REF_C),
+]
 
-def plot_filter_pareto(ax, rows: list[dict], *, singles, xlim, ylim, yscale="log") -> None:
+FAMILY_COLOR = {
+    "WSC-KF-m3": WSC3, "WSC-KF-m5": WSC5, "TME": TME_C, "CD-EKF": EKF_C,
+    "CD-CKF": CKF_C, "SE-UKF": SEUKF_C, "CD-EnKF": ENKF_C, "PF": PF_C,
+}
+
+
+def plot_filter_pareto(
+    ax, rows: list[dict], *, singles, labels, xlim, ylim, yscale="log"
+) -> None:
     """Sequential predictive NLL vs wall-clock. Type-II singles are drawn at their true NLL."""
-    _filter_polyline(
-        ax, rows,
-        [
-            ("CD-EnKF", "EnKF-5"),
-            ("CD-EnKF", "EnKF-10"),
-            ("CD-EnKF", "EnKF-25"),
-            ("CD-EnKF", "EnKF-50"),
-            ("CD-EnKF", "EnKF-100"),
-            ("CD-EnKF", "EnKF-500"),
-        ],
-        color=ENKF_C, marker="o", ls="--", mfc="white", lw=1.05, ms=5.2, z=3,
-    )
-    _filter_polyline(
-        ax, rows,
-        [
-            ("PF", "PF-5"),
-            ("PF", "PF-10"),
-            ("PF", "PF-25"),
-            ("PF", "PF-50"),
-            ("PF", "PF-100"),
-            ("PF", "PF-500"),
-        ],
-        color=PF_C, marker="v", ls="--", mfc="white", lw=1.05, ms=5.2, z=3,
-    )
-    _filter_polyline(
-        ax, rows,
-        [("WSC-KF-m5", "m5-k1"), ("WSC-KF-m5", "m5-k2")],
-        color=WSC5, marker="s", ls="-", mfc=WSC5, mec="white",
-        lw=1.45, ms=6.2, z=5, mew=0.7,
-    )
-    _filter_polyline(
-        ax, rows,
-        [("WSC-KF-m3", "m3-k1"), ("WSC-KF-m3", "m3-k2"), ("WSC-KF-m3", "m3-k3")],
-        color=WSC3, marker="D", ls="-", mfc=WSC3, mec="white",
-        lw=1.9, ms=6.8, z=6, mew=0.7,
-    )
+    ens = [5, 10, 25, 50, 100, 500]
+    _filter_polyline(ax, rows, [("CD-EnKF", f"EnKF-{n}") for n in ens],
+                     color=ENKF_C, marker=MARKER["CD-EnKF"], ls="--", lw=1.4, z=3)
+    _filter_polyline(ax, rows, [("PF", f"PF-{n}") for n in ens],
+                     color=PF_C, marker=MARKER["PF"], ls="--", lw=1.4, z=3)
+    _filter_polyline(ax, rows, [("WSC-KF-m5", "m5-k1"), ("WSC-KF-m5", "m5-k2")],
+                     color=WSC5, marker=MARKER["WSC-KF-m5"], mfc=WSC5, mec="white",
+                     ms=6.6, z=5, mew=0.8)
+    _filter_polyline(ax, rows, [("WSC-KF-m3", f"m3-k{k}") for k in (1, 2, 3)],
+                     color=WSC3, marker=MARKER["WSC-KF-m3"], mfc=WSC3, mec="white",
+                     ms=6.6, z=6, mew=0.8)
 
     drawn = {("WSC-KF-m3", "m3-k1"), ("WSC-KF-m3", "m3-k3"),
              ("WSC-KF-m5", "m5-k1"), ("WSC-KF-m5", "m5-k2")}
-    for fam, lab, disp, color, marker, xytext, ha, va in singles:
+    for fam, lab, disp, xytext, ha, va in singles:
         r = _find(rows, fam, lab)
         if r is None:
             continue
         x = 1e3 * r["time_s_mean"]
         y = r["pred_nll_per_obs_mean"]
         if (fam, lab) not in drawn:
-            _point(ax, x, y, color=color, marker=marker, ms=6.0)
+            _point(ax, x, y, color=FAMILY_COLOR[fam], marker=MARKER[fam])
         if disp is not None:
-            _ann(ax, x, y, disp, color=color, xytext=xytext, ha=ha, va=va)
+            _ann(ax, x, y, disp, color=FAMILY_COLOR[fam], xytext=xytext, ha=ha, va=va)
+    for fam, lab, text, xytext, ha, va, color in labels:
+        r = _find(rows, fam, lab)
+        if r is not None:
+            _ann(ax, 1e3 * r["time_s_mean"], r["pred_nll_per_obs_mean"], text,
+                 color=color, xytext=xytext, ha=ha, va=va)
 
-    ax.set_xlabel("Wall-clock / track [ms]")
+    ax.set_xlabel("Wall-clock per track [ms]")
     ax.set_ylabel("Predictive NLL [nats / obs.]")
     ax.set_xscale("log")
     ax.set_yscale(yscale)
     ax.set_xlim(*xlim)
     ax.set_ylim(*ylim)
-    style_curve_axis(ax, grid_axis="both")
+    _decimal_ticks(ax.xaxis, [t for t in (0.01, 0.1, 1, 10, 100) if xlim[0] <= t <= xlim[1]])
+    style_curve_axis(ax)
 
 
 def plot_levy_filter(ax, rows: list[dict]) -> None:
     """Sequential cosine NLL on the Lévy-area SDE."""
     plot_filter_pareto(
-        ax, rows, singles=LEVY_FILTER_SINGLES, xlim=(0.025, 36), ylim=(0.75, 12.0)
+        ax, rows, singles=LEVY_FILTER_SINGLES, labels=LEVY_FILTER_LABELS,
+        xlim=(0.025, 36), ylim=(0.75, 12.0),
     )
+    _decimal_ticks(ax.yaxis, [1, 2, 5, 10])
 
 
-def _levy_legend_filter():
+def _method_legend():
+    point = dict(markerfacecolor="white", markeredgewidth=1.2, markersize=6.0, lw=0)
+    line = dict(markerfacecolor="white", markeredgewidth=1.1, markersize=5.5)
+    solid = dict(markeredgecolor="white", markeredgewidth=0.8, markersize=6.6, lw=CURVE_LW)
     return [
-        Line2D(
-            [0], [0], color=WSC3, marker="D", markerfacecolor=WSC3,
-            markeredgecolor="white", markeredgewidth=0.7, lw=1.8,
-            label=r"WSC-KF $m$=3",
-        ),
-        Line2D(
-            [0], [0], color=WSC5, marker="s", markerfacecolor=WSC5,
-            markeredgecolor="white", markeredgewidth=0.7, lw=1.45,
-            label=r"WSC-KF $m$=5",
-        ),
-        Line2D([0], [0], color=TME_C, marker="P", markerfacecolor="white", lw=0, label="TME-2"),
-        Line2D([0], [0], color=EKF_C, marker="s", markerfacecolor="white", lw=0, label="CD-EKF"),
-        Line2D([0], [0], color=CKF_C, marker="X", markerfacecolor="white", lw=0, label="CD-CKF"),
-        Line2D([0], [0], color=SEUKF_C, marker="X", markerfacecolor="white", lw=0, label="SE-UKF"),
-        Line2D(
-            [0], [0], color=ENKF_C, marker="o", markerfacecolor="white",
-            lw=1.15, ls="--", label="CD-EnKF",
-        ),
-        Line2D(
-            [0], [0], color=PF_C, marker="v", markerfacecolor="white",
-            lw=1.15, ls="--", label="PF",
-        ),
+        Line2D([0], [0], color=WSC3, marker=MARKER["WSC-KF-m3"], markerfacecolor=WSC3,
+               label=r"WSC-KF $m$=3", **solid),
+        Line2D([0], [0], color=WSC5, marker=MARKER["WSC-KF-m5"], markerfacecolor=WSC5,
+               label=r"WSC-KF $m$=5", **solid),
+        Line2D([0], [0], color=ENKF_C, marker=MARKER["CD-EnKF"], ls="--", lw=1.4,
+               label="CD-EnKF", **line),
+        Line2D([0], [0], color=PF_C, marker=MARKER["PF"], ls="--", lw=1.4, label="PF", **line),
+        Line2D([0], [0], color=TME_C, marker=MARKER["TME"], label="TME-2", **point),
+        Line2D([0], [0], color=EKF_C, marker=MARKER["CD-EKF"], label="CD-EKF", **point),
+        Line2D([0], [0], color=CKF_C, marker=MARKER["CD-CKF"], label="CD-CKF", **point),
+        Line2D([0], [0], color=SEUKF_C, marker=MARKER["SE-UKF"], label="SE-UKF", **point),
     ]
 
 
-def _levy_legend():
-    return [
-        Line2D(
-            [0], [0], color=WSC3, marker="D", markerfacecolor=WSC3,
-            markeredgecolor="white", markeredgewidth=0.7, lw=1.8,
-            label=r"WSC-KF $m$=3",
-        ),
-        Line2D(
-            [0], [0], color=WSC5, marker="s", markerfacecolor=WSC5,
-            markeredgecolor="white", markeredgewidth=0.7, lw=1.45,
-            label=r"WSC-KF $m$=5",
-        ),
-        Line2D([0], [0], color=TME_C, marker="P", markerfacecolor="white", lw=0, label="TME-2"),
-        Line2D([0], [0], color=EKF_C, marker="s", markerfacecolor="white", lw=0, label="CD-EKF"),
-        Line2D([0], [0], color=CKF_C, marker="X", markerfacecolor="white", lw=0, label="CD-CKF"),
-        Line2D([0], [0], color=SEUKF_C, marker="X", markerfacecolor="white", lw=0, label="SE-UKF"),
-        Line2D(
-            [0], [0], color=ENKF_C, marker="o", markerfacecolor="white",
-            lw=1.15, ls="--", label="CD-EnKF",
-        ),
-        Line2D(
-            [0], [0], color=PF_C, marker="v", markerfacecolor="white",
-            lw=1.15, ls="--", label="PF",
-        ),
-    ]
+# Compact legend spacing for figures where vertical space is tight.
+TIGHT_LEGEND = dict(handlelength=1.5, handletextpad=0.35, labelspacing=0.25,
+                    columnspacing=0.7, borderaxespad=0.1)
+
+
+def _filter_figure(plot_fn, rows, outnames) -> None:
+    fig, ax = plt.subplots(figsize=(PAPER_COLUMN_WIDTH, 2.9))
+    plot_fn(ax, rows)
+    fig.legend(handles=_method_legend(), loc="lower center", bbox_to_anchor=(0.53, 0.0),
+               ncol=3, **TIGHT_LEGEND)
+    fig.subplots_adjust(left=0.16, right=0.97, bottom=0.315, top=0.985)
+    for name in outnames:
+        save_publication_figure(fig, os.path.join(FIG, name))
+    plt.close(fig)
 
 
 def plot_levy_area() -> None:
     filt = _load(os.path.join(DATA, "levy_area_filter_pareto.csv"))
+    _filter_figure(plot_levy_filter, filt,
+                   ("fig_levy_area_split.png", "fig_levy_area_filter.png"))
+
     mom = _load(os.path.join(DATA, "levy_area_moment_pareto.csv"))
-
-    fig, ax = plt.subplots(figsize=(0.62 * DOUBLE_COLUMN_WIDTH, 3.05))
-    plot_levy_filter(ax, filt)
-    fig.legend(
-        handles=_levy_legend_filter(),
-        loc="lower center",
-        bbox_to_anchor=(0.56, -0.02),
-        ncol=3,
-        fontsize=5.8,
-        frameon=False,
-        handletextpad=0.28,
-        columnspacing=0.9,
-    )
-    fig.subplots_adjust(left=0.14, right=0.98, bottom=0.24, top=0.97)
-    save_publication_figure(fig, os.path.join(FIG, "fig_levy_area_split.png"))
-    save_publication_figure(fig, os.path.join(FIG, "fig_levy_area_filter.png"))
-    plt.close(fig)
-
-    fig1, ax1 = plt.subplots(figsize=(0.62 * DOUBLE_COLUMN_WIDTH, 2.55))
+    fig1, ax1 = plt.subplots(figsize=(PAPER_COLUMN_WIDTH, 2.2))
     plot_levy_moment(ax1, mom)
-    fig1.subplots_adjust(left=0.18, right=0.98, bottom=0.16, top=0.96)
+    fig1.subplots_adjust(left=0.2, right=0.98, bottom=0.2, top=0.96)
     save_publication_figure(fig1, os.path.join(FIG, "fig_levy_area_moment.png"))
     plt.close(fig1)
 
     char = _load(os.path.join(DATA, "levy_area_char_pareto.csv"))
-    fig3, ax3 = plt.subplots(figsize=(0.62 * DOUBLE_COLUMN_WIDTH, 2.72))
+    fig3, ax3 = plt.subplots(figsize=(PAPER_COLUMN_WIDTH, 2.95))
     plot_levy_char(ax3, char)
-    ax3.legend(
-        handles=[h for h in _levy_legend() if h.get_label() in (
-            r"WSC-KF $m$=3", r"WSC-KF $m$=5", "TME-2", "CD-EKF", "CD-EnKF",
+    fig3.legend(
+        handles=[h for h in _method_legend() if h.get_label() in (
+            r"WSC-KF $m$=3", r"WSC-KF $m$=5", "CD-EnKF", "TME-2", "CD-EKF",
         )],
-        fontsize=6.0,
-        loc="upper right",
-        frameon=False,
+        loc="lower center", bbox_to_anchor=(0.53, 0.0), ncol=3, columnspacing=0.8,
     )
-    fig3.subplots_adjust(left=0.18, right=0.97, bottom=0.16, top=0.96)
+    fig3.subplots_adjust(left=0.18, right=0.97, bottom=0.31, top=0.97)
     save_publication_figure(fig3, os.path.join(FIG, "fig_levy_area_char.png"))
     plt.close(fig3)
 
 
+# ---------------------------------------------------------------------------
+# sin(x¹) area SDE
+# ---------------------------------------------------------------------------
+
 SIN_FIT_WINDOW = (0.02, 0.2)
 
 SIN_FILTER_SINGLES = [
-    ("CD-EKF", "EKF", "EKF", EKF_C, "s", (6, 0), "left", "center"),
-    ("CD-CKF", "CKF", "CKF", CKF_C, "X", (6, 0), "left", "center"),
-    ("SE-UKF", "N8", "SE-UKF", SEUKF_C, "X", (-5, 5), "right", "bottom"),
-    ("TME", "TME-2", "TME-2", TME_C, "P", (0, 8), "center", "bottom"),
-    ("WSC-KF-m3", "m3-k1", r"$m$=3, $N_\tau$=1", WSC3, "D", (0, -9), "center", "top"),
-    ("WSC-KF-m3", "m3-k3", r"$m$=3, $N_\tau$=3", WSC3, "D", (-2, 8), "left", "bottom"),
-    ("WSC-KF-m5", "m5-k1", r"$m$=5, $N_\tau$=1", WSC5, "s", (-6, -6), "right", "top"),
-    ("WSC-KF-m5", "m5-k2", r"$m$=5, $N_\tau$=2", WSC5, "s", (0, 7), "center", "bottom"),
-    ("CD-EnKF", "EnKF-5", "5", ENKF_C, "o", (-7, 4), "right", "bottom"),
-    ("CD-EnKF", "EnKF-500", "500", ENKF_C, "o", (4, 5), "left", "bottom"),
-    ("PF", "PF-5", "5", PF_C, "v", (6, -2), "left", "top"),
-    ("PF", "PF-500", "500", PF_C, "v", (6, -2), "left", "top"),
+    ("CD-EKF", "EKF", "EKF", (7, 0), "left", "center"),
+    ("CD-CKF", "CKF", "CKF", (7, 0), "left", "center"),
+    ("SE-UKF", "N8", "SE-UKF", (-6, 5), "right", "bottom"),
+    ("TME", "TME-2", "TME-2", (0, 8), "center", "bottom"),
+]
+
+SIN_FILTER_LABELS = [
+    ("WSC-KF-m3", "m3-k1", r"$N_\tau$=1", (0, -10), "center", "top", WSC3),
+    ("WSC-KF-m3", "m3-k2", "2", (0, -9), "center", "top", WSC3),
+    ("WSC-KF-m3", "m3-k3", "3", (0, 8), "center", "bottom", WSC3),
+    ("WSC-KF-m5", "m5-k1", r"$N_\tau$=1", (-8, 0), "right", "center", WSC5),
+    ("WSC-KF-m5", "m5-k2", "2", (0, 8), "center", "bottom", WSC5),
+    ("PF", "PF-5", r"$n$=5", (-8, 0), "right", "center", REF_C),
+    ("CD-EnKF", "EnKF-500", r"$n$=500", (7, -4), "left", "center", REF_C),
 ]
 
 
-def plot_sin_weak_error(rows: list[dict]) -> None:
-    """One-step weak error on dx² = sin(x¹) dW² from (1, 0), for two functionals.
+def _sin_weak_error_panels(axes, rows: list[dict], *, filled_wsc: bool = False):
+    """Draw the two sin weak-error panels on ``axes``; return (series, slopes).
 
-    From a point mass CD-EKF and CD-CKF coincide (one node, L at the mean). The
-    stochastic Taylor expansion does not terminate here, so m=3 and m=5 show
-    their generic orders 2 and 3.
+    From a point mass CD-EKF and CD-CKF coincide (one node, L at the mean); in
+    (b) WSC m=3 coincides with them too. The stochastic Taylor expansion does
+    not terminate here, so m=3 and m=5 show their generic orders 2 and 3.
+    ``filled_wsc`` draws WSC-KF with solid lines and filled markers, matching
+    the filter panels in the combined figure.
     """
     taus = np.array([r["delta"] for r in rows])
+    col = lambda k: np.array([float(r[k]) for r in rows])
+    wsc3 = (WSC3, "D-", CURVE_LW, WSC3) if filled_wsc else (WSC3, "D--", CURVE_LW)
+    wsc5 = (WSC5, "s-", CURVE_LW, WSC5) if filled_wsc else (WSC5, "s-", CURVE_LW)
     series = [
-        (("ckf_err", "ckf_err2"), CKF_C, "X-", "CD-EKF / CD-CKF"),
-        (("tme2_err", "tme2_err2"), TME_C, "P-.", "TME-2"),
-        (("wsckf_err_m3", "wsckf_err2_m3"), WSC3, "D--", r"WSC-KF $m$=3"),
-        (("wsckf_err_m5", "wsckf_err2_m5"), WSC5, "s-", r"WSC-KF $m$=5"),
+        (("ckf_err", "ckf_err2"), (CKF_C, "X-", 3.0), "CD-EKF, CD-CKF"),
+        (("tme2_err", "tme2_err2"), (TME_C, "P-.", CURVE_LW), "TME-2"),
+        (("wsckf_err_m3", "wsckf_err2_m3"), wsc3, r"WSC-KF $m$=3"),
+        (("wsckf_err_m5", "wsckf_err2_m5"), wsc5, r"WSC-KF $m$=5"),
     ]
-    panels = (
-        (r"$\mathbb{E}[\cos(\omega x^{2}_{\tau})]$", "(a)"),
-        (r"$\mathbb{E}[(x^{2}_{\tau})^{2}]$", "(b)"),
+    titles = (
+        r"(a) $\mathbb{E}[\cos(\omega x^{2}_{\tau})]$",
+        r"(b) $\mathbb{E}[(x^{2}_{\tau})^{2}]$",
     )
-    fig, axes = plt.subplots(1, 2, figsize=(DOUBLE_COLUMN_WIDTH, 2.55))
-    handles = []
-    for p, (ax, (title, tag)) in enumerate(zip(axes, panels)):
-        for keys, color, fmt, _lab in series:
-            ys = np.array([max(float(r[keys[p]]), 1e-16) for r in rows])
-            # CD-CKF is drawn wider so it stays visible where WSC m=3 coincides with it.
-            lw = 2.4 if keys[0] == "ckf_err" else 1.35
-            (line,) = ax.loglog(
-                taus, ys, fmt, color=color, markerfacecolor="white", markersize=4.6, lw=lw
-            )
-            if p == 0:
-                handles.append(line)
-        x_ref = np.array([taus[0], taus[-1]])
-        for slope, keys, ls in ((2.0, series[0][0], "--"), (3.0, series[3][0], ":")):
-            y0 = 0.35 * float(rows[0][keys[p]])
-            ax.loglog(x_ref, y0 * (x_ref / taus[0]) ** slope, ls, color="0.45", lw=0.95, zorder=1)
-        ax.set_title(title, fontweight="normal")
-        ax.set_xlabel(r"Forecast interval $\tau$")
-        ax.set_xticks([0.02, 0.05, 0.1, 0.2, 0.5])
-        ax.set_xticklabels(["0.02", "0.05", "0.1", "0.2", "0.5"])
-        ax.xaxis.set_minor_formatter(NullFormatter())
-        ax.text(0.5, -0.30, tag, transform=ax.transAxes, ha="center", va="top", fontsize=8.5)
-        style_curve_axis(ax, grid_axis="both")
+    slopes = []
+    for p, (ax, title) in enumerate(zip(axes, titles)):
+        slopes.append(_rate_panel(
+            ax, taus,
+            [(col(keys[p]), *style) for keys, style, _ in series],
+            [(2.0, col(series[0][0][p]), "--"), (3.0, col(series[3][0][p]), ":")],
+            fit_window=SIN_FIT_WINDOW, xticks=[0.02, 0.1, 0.5], markevery=2, markersize=4.2,
+        ))
+        ax.set_title(title, fontweight="normal", fontsize=9)
+        ax.set_xlabel(r"Interval $\tau$")
     axes[0].set_ylabel("One-step weak error")
+    return series, slopes
 
-    labels = []
-    for keys, _color, _fmt, lab in series:
-        fits = [
-            _fit_slope(taus, np.array([float(r[k]) for r in rows]), *SIN_FIT_WINDOW)
-            for k in keys
-        ]
-        labels.append(f"{lab} (slopes {fits[0]:.2f} / {fits[1]:.2f})")
-    ref = [
-        Line2D([0], [0], color="0.45", lw=0.95, ls="--", label=r"$\propto\tau^{2}$"),
-        Line2D([0], [0], color="0.45", lw=0.95, ls=":", label=r"$\propto\tau^{3}$"),
-    ]
-    fig.legend(
-        handles=handles + ref,
-        labels=labels + [h.get_label() for h in ref],
-        loc="upper center",
-        bbox_to_anchor=(0.5, 1.0),
-        ncol=3,
-        fontsize=6.8,
-        frameon=False,
-        columnspacing=1.2,
-    )
-    fig.subplots_adjust(left=0.08, right=0.99, bottom=0.25, top=0.74, wspace=0.22)
+
+def plot_sin_weak_error(rows: list[dict]) -> None:
+    """One-step weak error on dx² = sin(x¹) dW² from (1, 0), for two functionals."""
+    fig, axes = plt.subplots(1, 2, figsize=(PAPER_COLUMN_WIDTH, 2.6), sharey=True)
+    series, slopes = _sin_weak_error_panels(axes, rows)
+    for (_, _, lab), sa, sb in zip(series, slopes[0], slopes[1]):
+        print(f"  sin weak error, {lab}: fitted slopes {sa:.2f} (a) / {sb:.2f} (b)")
+    fig.legend(handles=_rate_legend_handles([s[1][:3] for s in series], [s[2] for s in series]),
+               loc="upper center", bbox_to_anchor=(0.55, 1.0), ncol=2, columnspacing=0.8)
+    fig.subplots_adjust(left=0.17, right=0.98, bottom=0.17, top=0.68, wspace=0.08)
     save_publication_figure(fig, os.path.join(FIG, "fig_sin_area_weak_error.png"))
     plt.close(fig)
 
 
-def plot_sin_filter(rows: list[dict]) -> None:
+def plot_sin_filter(ax, rows: list[dict]) -> None:
     """Sequential sine-observation NLL on dx² = sin(x¹) dW²."""
-    fig, ax = plt.subplots(figsize=(0.62 * DOUBLE_COLUMN_WIDTH, 3.05))
     plot_filter_pareto(
-        ax, rows, singles=SIN_FILTER_SINGLES, xlim=(0.01, 60), ylim=(0.9, 2.15), yscale="linear"
+        ax, rows, singles=SIN_FILTER_SINGLES, labels=SIN_FILTER_LABELS,
+        xlim=(0.01, 100), ylim=(0.9, 2.15), yscale="linear",
     )
-    fig.legend(
-        handles=_levy_legend_filter(),
-        loc="lower center",
-        bbox_to_anchor=(0.56, -0.02),
-        ncol=3,
-        fontsize=5.8,
-        frameon=False,
-        handletextpad=0.28,
-        columnspacing=0.9,
-    )
-    fig.subplots_adjust(left=0.14, right=0.98, bottom=0.24, top=0.97)
-    save_publication_figure(fig, os.path.join(FIG, "fig_sin_area_filter.png"))
-    plt.close(fig)
 
 
 def _sci(x: float) -> str:
@@ -744,9 +715,69 @@ def write_sin_one_step_table(moment: list[dict], char: list[dict]) -> None:
         f.write("\n".join(lines))
 
 
+SIN_K100_FILTER_SINGLES = [
+    ("CD-EKF", "EKF", "EKF", (7, 0), "left", "center"),
+    ("CD-CKF", "CKF", "CKF", (7, 0), "left", "center"),
+    ("SE-UKF", "N8", "SE-UKF", (0, 8), "center", "bottom"),
+    ("TME", "TME-2", "TME-2", (0, 8), "center", "bottom"),
+]
+
+SIN_K100_FILTER_LABELS = [
+    ("WSC-KF-m3", "m3-k1", r"$N_\tau$=1", (0, -10), "center", "top", WSC3),
+    ("WSC-KF-m3", "m3-k2", "2", (0, -9), "center", "top", WSC3),
+    ("WSC-KF-m3", "m3-k3", "3", (8.5, 1.5), "left", "center", WSC3),
+    ("WSC-KF-m5", "m5-k1", r"$N_\tau$=1", (-4, 7), "right", "bottom", WSC5),
+    ("WSC-KF-m5", "m5-k2", "2", (0, 4), "center", "bottom", WSC5),
+    ("PF", "PF-5", r"$n$=5", (8, 0), "left", "center", REF_C),
+    ("PF", "PF-500", r"$n$=500", (8, -3), "left", "center", REF_C),
+]
+
+
+def plot_sin_filter_k100(ax, rows: list[dict]) -> None:
+    """Sequential sine-observation NLL on dx² = sin(x¹) dW² with K = 100 observations."""
+    plot_filter_pareto(
+        ax, rows, singles=SIN_K100_FILTER_SINGLES, labels=SIN_K100_FILTER_LABELS,
+        xlim=(0.08, 1300), ylim=(0.85, 2.35), yscale="linear",
+    )
+
+
+def plot_sin_weak_error_and_filter(weak_rows: list[dict], filt_rows: list[dict]) -> None:
+    """Full width: (a, b) one-step weak error and (c) K = 100 filtering, one shared legend."""
+    fig = plt.figure(figsize=(PAPER_TEXT_WIDTH, 2.5))
+    grid = fig.add_gridspec(1, 4, width_ratios=[1.0, 1.0, 0.32, 1.9], wspace=0.08)
+    ax_a = fig.add_subplot(grid[0])
+    ax_b = fig.add_subplot(grid[1], sharey=ax_a)
+    ax_b.tick_params(labelleft=False)
+    ax_c = fig.add_subplot(grid[3])
+    _sin_weak_error_panels((ax_a, ax_b), weak_rows, filled_wsc=True)
+    plot_sin_filter_k100(ax_c, filt_rows)
+    ax_c.set_title(r"(c) Filtering, $K$ = 100", fontweight="normal", fontsize=9)
+    # Log NLL axis gives the crowded region near 1 more room than a linear one.
+    ax_c.set_yscale("log")
+    ax_c.set_ylim(0.86, 2.35)
+    _decimal_ticks(ax_c.yaxis, [1, 1.5, 2])
+    handles = _method_legend() + [
+        Line2D([0], [0], color=REF_C, lw=1.2, ls="--", label=r"$\propto\tau^{2}$"),
+        Line2D([0], [0], color=REF_C, lw=1.2, ls=":", label=r"$\propto\tau^{3}$"),
+    ]
+    fig.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, 0.0), ncol=5,
+               **TIGHT_LEGEND)
+    fig.subplots_adjust(left=0.085, right=0.99, bottom=0.3, top=0.915)
+    save_publication_figure(fig, os.path.join(FIG, "fig_sin_area_weak_error_filter.png"))
+    plt.close(fig)
+
+
 def plot_sin_area() -> None:
     plot_sin_weak_error(_load(os.path.join(DATA, "sin_area_weak_error.csv")))
-    plot_sin_filter(_load(os.path.join(DATA, "sin_area_filter_pareto.csv")))
+    _filter_figure(plot_sin_filter, _load(os.path.join(DATA, "sin_area_filter_pareto.csv")),
+                   ("fig_sin_area_filter.png",))
+    _filter_figure(plot_sin_filter_k100,
+                   _load(os.path.join(DATA, "sin_area_filter_pareto_K100.csv")),
+                   ("fig_sin_area_filter_K100.png",))
+    plot_sin_weak_error_and_filter(
+        _load(os.path.join(DATA, "sin_area_weak_error.csv")),
+        _load(os.path.join(DATA, "sin_area_filter_pareto_K100.csv")),
+    )
     write_sin_one_step_table(
         _load(os.path.join(DATA, "sin_area_moment_pareto.csv")),
         _load(os.path.join(DATA, "sin_area_char_pareto.csv")),
@@ -754,10 +785,8 @@ def plot_sin_area() -> None:
 
 
 def main() -> None:
-    levy_weak = _load(os.path.join(DATA, "levy_area_weak_error.csv"))
-    plot_levy_weak_error(levy_weak)
-    heston_weak = _load(os.path.join(DATA, "heston_weak_error.csv"))
-    plot_weak_error(heston_weak)
+    plot_levy_weak_error(_load(os.path.join(DATA, "levy_area_weak_error.csv")))
+    plot_weak_error(_load(os.path.join(DATA, "heston_weak_error.csv")))
     plot_levy_area()
     plot_sin_area()
     print(f"Wrote figures in {FIG}")
