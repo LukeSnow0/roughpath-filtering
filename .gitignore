@@ -179,8 +179,8 @@ dist/
 .venv
 
 # Optional local symlinks to a sibling cuthbert checkout (dev only)
-cuthbert/
-cuthbertlib/
+/cuthbert
+/cuthbertlib
 
 # Test output directories
 .output/
@@ -201,3 +201,6 @@ progress_watcher.log
 
 # AZT1D raw release (third-party; keep scripts under experiments/AZT1D/ tracked)
 experiments/AZT1D/AZT1D 2025/
+
+# Local Claude Code project instructions
+/CLAUDE.md
