@@ -1,4 +1,8 @@
-r"""Sequential filter Pareto on the Lévy-area SDE with cosine observations.
+r"""Sequential filter Pareto on an area SDE (``area_models.py``).
+
+Default ``--model levy_area``: the Lévy-area SDE with cosine observations.
+``--model sin_area``: dx² = sin(x¹) dW² from (1, 0), observed through
+\(y = \sin(ω x^2) + ε\), which breaks the x² → −x² symmetry of the cosine.
 
 State is the mixed iterated integral \(x^2=\int W^1\,dW^2\); observations are
 \(y=\cos(ω x^2)+ε\). Mixture predictive NLL of \(y\) is the proper score of the
@@ -11,6 +15,7 @@ Gaussian, not EKF linearization at 0).
 
   .venv/bin/python experiments/heston_test/levy_area_filter_pareto.py
   .venv/bin/python experiments/heston_test/levy_area_filter_pareto.py --quick
+  .venv/bin/python experiments/heston_test/levy_area_filter_pareto.py --model sin_area
 """
 
 from __future__ import annotations
@@ -44,12 +49,7 @@ from jax import jit
 jax.config.update("jax_enable_x64", True)
 
 from cd_dynamax_mirror.filters import UKFParams, _ekf_update, _ukf_sigmas, _ukf_weights
-from levy_area_model import (
-    LevyAreaParams,
-    init_estimate,
-    make_levy_area_dynamics,
-    simulate_levy_area,
-)
+from area_models import MODELS, model_from_cli
 from mfts_test.plot_style import (
     DOUBLE_COLUMN_WIDTH,
     METHOD_COLORS,
@@ -70,7 +70,8 @@ from predictive_nll_stepwise import (
 from tme import assemble_tme_jax, cached_eval_fn
 from wsckf.library import lv_path_count
 
-OUTPUT_DIR = os.path.join(HERE, "output", "levy_area")
+MODEL = model_from_cli()
+OUTPUT_DIR = os.path.join(HERE, "output", MODEL.name)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 SPATIAL_NODES = 4
@@ -153,12 +154,13 @@ def _mean_std(rows: list[dict], key: str) -> tuple[float, float]:
     return float(xs.mean()), float(xs.std(ddof=1))
 
 
-def _simulate_track(p: LevyAreaParams, *, n_obs: int, delta: float, seed: int):
+def _simulate_track(omega: float, meas_std: float, *, n_obs: int, delta: float, seed: int):
     horizon = n_obs * delta
     steps_per_obs = 64
     n_fine = n_obs * steps_per_obs
-    true_fine, ys_np, _ = simulate_levy_area(
-        horizon=horizon, n_fine=n_fine, p=p, seed=seed, obs_stride=steps_per_obs
+    true_fine, ys_np, _ = MODEL.simulate(
+        horizon=horizon, n_fine=n_fine, omega=omega, meas_std=meas_std,
+        seed=seed, obs_stride=steps_per_obs,
     )
     true_obs = np.asarray(true_fine, dtype=np.float64)[steps_per_obs::steps_per_obs][:n_obs]
     return true_obs, jnp.asarray(ys_np)
@@ -264,7 +266,7 @@ def _plot_pareto(
     ax.set_xscale("log")
     if y_hi is not None:
         ax.set_ylim(y_lo, y_hi)
-    style_curve_axis(ax, grid_axis="both")
+    style_curve_axis(ax)
     ax.legend(fontsize=6.0, loc="best", frameon=False, ncol=2)
     fig.subplots_adjust(left=0.16, right=0.98, bottom=0.16, top=0.97)
     path = os.path.join(OUTPUT_DIR, outfile)
@@ -274,7 +276,7 @@ def _plot_pareto(
 
 
 def run_benchmark(args) -> tuple[list[dict], list[dict]]:
-    p = LevyAreaParams(omega=float(args.omega), meas_std=float(args.meas_std))
+    omega, meas_std = float(args.omega), float(args.meas_std)
     seeds = _parse_ints(args.seeds)
     enkf_list = _parse_ints(args.enkf)
     pf_list = _parse_ints(args.pf)
@@ -288,11 +290,12 @@ def run_benchmark(args) -> tuple[list[dict], list[dict]]:
     dt = float(args.delta)
     dt0 = dt / float(args.inner_div)
     n_obs = int(args.n_obs)
-    drift, L_fn, Qc_fn, h_obs, R = make_levy_area_dynamics(p)
+    drift, L_fn, Qc_fn, h_obs, R = MODEL.make_dynamics(omega, meas_std)
     chol_R = jnp.linalg.cholesky(R)
 
     print(
-        f"Lévy-area filter Pareto: ω={p.omega:g}, meas_std={p.meas_std:g}, "
+        f"{MODEL.name} filter Pareto: y={MODEL.obs_label}(ω x²)+ε, x0={MODEL.x0}, "
+        f"ω={omega:g}, meas_std={meas_std:g}, "
         f"N={n_obs}, Δ={dt:g}, seeds={seeds}, WSC={[c.label for c in wsc_configs]}, "
         f"TME={tme_list}, SE-UKF={seukf_list}, EnKF={enkf_list}, PF={pf_list}",
         flush=True,
@@ -390,8 +393,8 @@ def run_benchmark(args) -> tuple[list[dict], list[dict]]:
 
     for seed_i, seed in enumerate(seeds, start=1):
         print(f"\n=== seed {seed}  [{seed_i}/{len(seeds)}] ===", flush=True)
-        true_obs, ys = _simulate_track(p, n_obs=n_obs, delta=dt, seed=seed)
-        m0_np, P0_np = init_estimate(p)
+        true_obs, ys = _simulate_track(omega, meas_std, n_obs=n_obs, delta=dt, seed=seed)
+        m0_np, P0_np = MODEL.init_estimate()
         m0 = jnp.asarray(m0_np)
         P0 = jnp.asarray(P0_np)
         chol_P0 = jnp.linalg.cholesky(P0)
@@ -438,8 +441,8 @@ def run_benchmark(args) -> tuple[list[dict], list[dict]]:
 
 
 def _write_csvs(raw_rows, summary):
-    raw_path = os.path.join(OUTPUT_DIR, "levy_area_filter_pareto_raw.csv")
-    sum_path = os.path.join(OUTPUT_DIR, "levy_area_filter_pareto.csv")
+    raw_path = os.path.join(OUTPUT_DIR, f"{MODEL.name}_filter_pareto_raw.csv")
+    sum_path = os.path.join(OUTPUT_DIR, f"{MODEL.name}_filter_pareto.csv")
     with open(raw_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(raw_rows[0].keys()))
         w.writeheader()
@@ -454,7 +457,7 @@ def _write_csvs(raw_rows, summary):
 
 
 def _read_raw_csv() -> list[dict]:
-    path = os.path.join(OUTPUT_DIR, "levy_area_filter_pareto_raw.csv")
+    path = os.path.join(OUTPUT_DIR, f"{MODEL.name}_filter_pareto_raw.csv")
     if not os.path.isfile(path):
         return []
     with open(path, newline="") as f:
@@ -483,7 +486,8 @@ def _merge_raw(existing: list[dict], new_rows: list[dict]) -> list[dict]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Lévy-area cosine-observation filter Pareto")
+    parser = argparse.ArgumentParser(description="Area-SDE filter Pareto (area_models.py)")
+    parser.add_argument("--model", choices=sorted(MODELS), default=MODEL.name)
     parser.add_argument("--seeds", type=str, default=",".join(str(i) for i in range(100, 120)))
     parser.add_argument("--n-obs", type=int, default=8, dest="n_obs")
     parser.add_argument("--delta", type=float, default=0.5)
@@ -532,7 +536,7 @@ def main() -> None:
         y_key="pred_nll_per_obs_mean",
         y_std_key="pred_nll_per_obs_std",
         ylabel="Predictive NLL [nats / obs.]",
-        outfile="levy_area_filter_pred_nll_pareto.png",
+        outfile=f"{MODEL.name}_filter_pred_nll_pareto.png",
         y_hi=3.2,
     )
     _plot_pareto(
@@ -540,7 +544,7 @@ def main() -> None:
         y_key="rmse_mean",
         y_std_key="rmse_std",
         ylabel=r"RMSE ($x^2$)",
-        outfile="levy_area_filter_rmse_pareto.png",
+        outfile=f"{MODEL.name}_filter_rmse_pareto.png",
     )
 
 

@@ -173,14 +173,21 @@ step propagates spatial cubature nodes along deterministic Wiener-space cubature
 paths; the update is a square-root sigma-point Kalman correction. In
 `build_filter`, `cubature_order` (*k*, default 2) is the number of
 macro-segments and `lyons_degree` (*m* ∈ {3, 5}, default 5) is the
-Lyons–Victoir degree. Wiener path construction defaults to
+Lyons–Victoir degree. The paths are piecewise linear, and the RK4 integration
+grid contains every path corner, so `integration_dt` is a maximum step size
+rather than an exact one. Wiener path construction defaults to
 ``multidim_paths="auto"``:
 
-- **`auto`** (default): for ``d>1`` with ``lyons_degree=5``, explicit multi-D
+- **`auto`** (default): for ``d=2`` with ``lyons_degree=5``, explicit multi-D
   Lyons–Victoir (``lv``) when it needs at most 512 paths, else ``recombined``;
-  for ``d>1`` with ``lyons_degree=3``, ``product``. 1D always uses the
-  classical 1D formulae (``3^k`` paths for m=5, ``2^k`` for m=3).
-- **`lv`** — Lyons–Victoir multi-D lift (Gauss–Hermite × Bernoulli Lévy area)
+  ``recombined`` for ``d≥3`` with ``lyons_degree=5``; ``product`` for ``d>1``
+  with ``lyons_degree=3``. 1D always uses the classical 1D formulae (``3^k``
+  paths for m=5, ``2^k`` for m=3).
+- **`lv`** — explicit Lyons–Victoir multi-D paths (Lyons & Victoir 2004,
+  Theorem 5.9): a fixed path with the required log-signature, scaled by each
+  Gauss–Hermite node and paired with its coordinate reversal
+  (``(2·3^d)^k`` paths). Degree 5 is available for ``d ≤ 2``; degree 3 is the
+  Stroud rule for any ``d``.
 - **`product`** — tensor product of 1D Lyons paths (no mixed area tensors)
 - **`recombined`** — recursive KLV expansion with high-order recombination
   (Snow & Krishnamurthy, 2025); path budget defaults via

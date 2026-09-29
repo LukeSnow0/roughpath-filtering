@@ -51,7 +51,6 @@ for p in (EXPERIMENTS_DIR, ROOT_DIR, HERE):
         sys.path.insert(0, p)
 
 from wsckf.library import ito_to_stratonovich_dynamics, precompute_cubature_paths, predict
-from lyons_victoir_paths import precompute_lv_paths
 from mfts_test.plot_style import (
     PALETTE,
     SINGLE_COLUMN_WIDTH,
@@ -127,11 +126,13 @@ def predict_moment(delta: float, builder: str, lyons_degree: int) -> tuple[float
             lyons_degree=lyons_degree,
         )
     elif builder == "lv":
-        ts, paths, weights = precompute_lv_paths(
+        ts, paths, weights = precompute_cubature_paths(
             horizon=float(delta),
             noise_dim=NOISE_DIM,
             integration_dt=integration_dt,
-            lyons_degree=lyons_degree,  # type: ignore[arg-type]
+            cubature_order=1,
+            multidim_method="lv",
+            lyons_degree=lyons_degree,
         )
     else:
         raise ValueError(builder)
@@ -243,7 +244,7 @@ def main():
 
     ax.set_xlabel(r"Assimilation interval $\delta$")
     ax.set_ylabel(r"$|\widehat{\mathbb{E}}[(x^{2})^2]-\delta^{2}/2|$")
-    style_curve_axis(ax, grid_axis="both")
+    style_curve_axis(ax)
     ax.legend(
         loc="upper center",
         bbox_to_anchor=(0.5, 1.34),

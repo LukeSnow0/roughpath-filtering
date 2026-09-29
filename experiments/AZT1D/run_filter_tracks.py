@@ -753,7 +753,7 @@ def main():
             ax.axvspan(t_zoom0, t_zoom1, color=PALETTE["orange"], alpha=0.12, zorder=0, label="zoom")
         ax.set_ylabel(r"$G$ [mg/dL]")
         ax.set_xlim(float(t_h[0]), float(t_h[-1]))
-        style_curve_axis(ax, grid_axis="y")
+        style_curve_axis(ax)
         _style_legend(ax)
         ax.set_title("(a) Full-record glucose", loc="left")
 
@@ -764,7 +764,7 @@ def main():
             ax.axvline(t_split, color=PALETTE["blue"], ls="--", lw=0.9, alpha=0.8, zorder=0)
         ax.set_ylabel(r"$G$ [mg/dL]")
         ax.set_xlim(t_zoom0, t_zoom1)
-        style_curve_axis(ax, grid_axis="y")
+        style_curve_axis(ax)
         _style_legend(ax)
         ax.set_title(r"(b) Held-out $G\pm\sqrt{P_{GG}}$", loc="left")
 
@@ -775,7 +775,7 @@ def main():
             ax.axvline(t_split, color=PALETTE["blue"], ls="--", lw=0.9, alpha=0.8, zorder=0)
         ax.set_ylabel(r"$X$ [1/min]")
         ax.set_xlim(t_zoom0, t_zoom1)
-        style_curve_axis(ax, grid_axis="y")
+        style_curve_axis(ax)
         _style_legend(ax)
         ax.set_title(r"(c) Held-out $X\pm\sqrt{P_{XX}}$", loc="left")
 
@@ -794,7 +794,7 @@ def main():
         ax.set_xlabel("Time [h]")
         ax.set_ylabel(r"$P_{GX}$")
         ax.set_xlim(t_zoom0, t_zoom1)
-        style_curve_axis(ax, grid_axis="y")
+        style_curve_axis(ax)
         _style_legend(ax)
         ax.set_title(r"(d) Held-out covariance $P_{GX}$", loc="left")
 
@@ -965,7 +965,7 @@ def main():
             ax.axvline(t_peak_disc, color=PALETTE["orange"], ls=":", lw=1.0, alpha=0.85, zorder=0)
     ax.set_ylabel("glucose [mg/dL]")
     ax.set_xlim(float(t_h[0]), float(t_h[-1]))
-    style_curve_axis(ax, grid_axis="y")
+    style_curve_axis(ax)
     ax.legend(
         loc="upper left",
         bbox_to_anchor=(1.02, 1.0),
@@ -992,7 +992,7 @@ def main():
     ax.set_ylabel("Glucose [mg/dL]")
     ax.set_xlim(t_zoom0, t_zoom1)
     ax.set_title("(b) Held-out window", loc="left")
-    style_curve_axis(ax, grid_axis="y")
+    style_curve_axis(ax)
 
     # y-limits from visible window (include ± scaled σ so bands aren't clipped)
     y_parts = [cgm[zoom]]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import os
 
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
@@ -9,6 +10,7 @@ os.environ.setdefault("JAX_PLATFORMS", "cpu")
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 jax.config.update("jax_enable_x64", True)
 
@@ -21,6 +23,7 @@ from wsckf.library import (
     product_path_count,
     select_multidim_paths,
 )
+from wsckf.library.cubature_paths import _cubature_knot_paths
 
 
 def _unit_paths(noise_dim, *, method, lyons_degree=5, k=1, n_steps=40):
@@ -46,6 +49,12 @@ def test_auto_selects_lv_for_deg5_multid():
     assert select_multidim_paths(2, 2, lyons_degree=5) == "lv"
     assert select_multidim_paths(2, 3, lyons_degree=5) == "recombined"
     assert select_multidim_paths(1, 2, lyons_degree=5) == "product"
+    assert select_multidim_paths(3, 1, lyons_degree=5) == "recombined"
+
+
+def test_lv_deg5_not_available_for_three_dims():
+    with pytest.raises(NotImplementedError):
+        _unit_paths(3, method="lv", lyons_degree=5)
 
 
 def test_precompute_lv_vs_product_support():
@@ -57,46 +66,119 @@ def test_precompute_lv_vs_product_support():
     np.testing.assert_allclose(np.sum(w_pr), 1.0, atol=1e-12)
 
 
-def test_lv_m5_matches_brownian_second_moment():
-    paths, w = _unit_paths(2, method="lv", lyons_degree=5, n_steps=80)
-    term = paths[:, -1, :]
-    mean = w @ term
-    cov = (term - mean).T @ ((term - mean) * w[:, None])
-    np.testing.assert_allclose(mean, 0.0, atol=1e-12)
-    np.testing.assert_allclose(cov, np.eye(2), atol=1e-10)
+def _signature(path, depth):
+    """Signature levels ``0..depth`` of a piecewise-linear path (Chen's identity)."""
+    dim = path.shape[1]
+    sig = [np.ones(())] + [np.zeros((dim,) * k) for k in range(1, depth + 1)]
+    for dx in np.diff(path, axis=0):
+        seg = [np.ones(())]
+        for k in range(1, depth + 1):
+            seg.append(np.multiply.outer(seg[-1], dx) / k)
+        sig = [
+            sum(np.multiply.outer(sig[i], seg[k - i]) for i in range(k + 1))
+            for k in range(depth + 1)
+        ]
+    return sig
 
 
-def _levy_area_12(omega):
-    a = 0.0
-    for k in range(omega.shape[0] - 1):
-        w0, w1 = omega[k], omega[k + 1]
-        dw = w1 - w0
-        mid = 0.5 * (w0 + w1)
-        a += 0.5 * (mid[0] * dw[1] - mid[1] * dw[0])
-    return a
+def _brownian_expected_signature(noise_dim, depth):
+    """``E[S(t, B)] = exp(e_0 + ½ Σ e_i ⊗ e_i)`` on ``[0, 1]``, letter 0 being time.
+
+    Lyons & Victoir (2004), Proposition 4.10.
+    """
+    dim = noise_dim + 1
+    gen = [np.zeros(())] + [np.zeros((dim,) * k) for k in range(1, depth + 1)]
+    gen[1][0] = 1.0
+    for i in range(1, dim):
+        gen[2][i, i] = 0.5
+    out = [np.ones(())] + [np.zeros((dim,) * k) for k in range(1, depth + 1)]
+    term = [t.copy() for t in out]
+    for n in range(1, depth + 1):
+        term = [
+            sum(np.multiply.outer(term[i], gen[k - i]) for i in range(k + 1)) / n
+            for k in range(depth + 1)
+        ]
+        out = [a + b for a, b in zip(out, term)]
+    return out
 
 
-def test_lv_m5_has_nonzero_levy_area_mean_zero():
-    paths, w = _unit_paths(2, method="lv", lyons_degree=5, n_steps=100)
-    areas = np.array([_levy_area_12(omega) for omega in paths])
-    assert np.max(np.abs(areas)) > 0.05
-    np.testing.assert_allclose(float(w @ areas), 0.0, atol=1e-12)
-    np.testing.assert_allclose(float(w @ areas**2), 0.25, atol=5e-3)
+@pytest.mark.parametrize("k", [1, 2])
+@pytest.mark.parametrize("noise_dim", [1, 2])
+@pytest.mark.parametrize("lyons_degree", [3, 5])
+def test_lv_paths_match_brownian_expected_signature(noise_dim, lyons_degree, k):
+    """Degree-m Wiener cubature matches E[S(t, B)] on every word of degree <= m.
 
-
-def test_lv_d2_axis_swap_symmetry():
-    """d=2 construction is equivariant: the two driving axes are interchangeable."""
-    paths, w = _unit_paths(2, method="lv", lyons_degree=5, n_steps=120)
-    dt = 1.0 / (paths.shape[1] - 1)
-    qvar = np.array(
-        [np.sum(0.5 * (p[:-1] ** 2 + p[1:] ** 2) * dt, axis=0) for p in paths]
+    The time letter counts twice towards the degree. Paths come from
+    ``precompute_cubature_paths`` with 10 integration steps per interval, a grid
+    that holds the path corners (j/3, j/4, macro-segment boundaries) only if it
+    is built around them, and are rescaled to unit time.
+    """
+    horizon = 0.1
+    ts, paths, weights = precompute_cubature_paths(
+        horizon=horizon,
+        noise_dim=noise_dim,
+        integration_dt=horizon / 10,
+        cubature_order=k,
+        multidim_method="lv",
+        lyons_degree=lyons_degree,
     )
-    eq = w @ qvar
-    np.testing.assert_allclose(eq[0], eq[1], rtol=1e-8, atol=1e-10)
-    areas = np.array([_levy_area_12(p) for p in paths])
-    areas_swap = np.array([_levy_area_12(p[:, ::-1]) for p in paths])
-    np.testing.assert_allclose(areas_swap, -areas, atol=1e-12)
-    np.testing.assert_allclose(float(w @ qvar[:, 0]), 0.5, atol=5e-2)
+    ts = np.asarray(ts) / horizon
+    paths = np.asarray(paths) / np.sqrt(horizon)
+    weights = np.asarray(weights)
+    time = np.broadcast_to(ts[None, :, None], (len(weights), len(ts), 1))
+    sigs = [_signature(p, lyons_degree) for p in np.concatenate([time, paths], axis=2)]
+    expected = _brownian_expected_signature(noise_dim, lyons_degree)
+    for level in range(1, lyons_degree + 1):
+        cubature = sum(w * s[level] for w, s in zip(weights, sigs))
+        for word in itertools.product(range(noise_dim + 1), repeat=level):
+            if level + word.count(0) <= lyons_degree:
+                assert cubature[word] == pytest.approx(
+                    expected[level][word], abs=1e-9
+                ), word
+
+
+@pytest.mark.parametrize("k", [1, 2, 3])
+@pytest.mark.parametrize(
+    "noise_dim, method, lyons_degree",
+    [
+        (1, "auto", 3),
+        (1, "auto", 5),
+        (2, "lv", 3),
+        (2, "lv", 5),
+        (2, "product", 5),
+        (2, "recombined", 5),
+    ],
+)
+def test_precompute_grid_contains_path_corners(noise_dim, method, lyons_degree, k):
+    """The integration grid holds every path corner, so RK4 sees the exact driver."""
+    horizon, integration_dt = 0.1, 0.01
+    ts, paths, _ = precompute_cubature_paths(
+        horizon=horizon,
+        noise_dim=noise_dim,
+        integration_dt=integration_dt,
+        cubature_order=k,
+        multidim_method=method,
+        lyons_degree=lyons_degree,
+    )
+    ts, paths = np.asarray(ts), np.asarray(paths)
+    assert ts[0] == 0.0
+    assert ts[-1] == pytest.approx(horizon, abs=1e-15)
+    assert np.max(np.diff(ts)) <= integration_dt * (1.0 + 1e-12)
+
+    knots, values, _ = _cubature_knot_paths(
+        noise_dim,
+        k=k,
+        gamma=0.6,
+        multidim_method=method,
+        lyons_degree=lyons_degree,
+        num_paths=None,
+        recombination_degree=3,
+    )
+    corner_idx = np.searchsorted(ts, knots * horizon)
+    np.testing.assert_array_equal(ts[corner_idx], knots * horizon)
+    np.testing.assert_allclose(
+        paths[:, corner_idx, :], np.sqrt(horizon) * values, rtol=0.0, atol=1e-14
+    )
 
 
 def test_oned_deg5_still_three_paths():
@@ -136,3 +218,40 @@ def test_lv_m5_matches_levy_area_sde_second_moment():
     m = np.asarray(m_pred)
     second = float(p[1, 1] + m[1] ** 2)
     np.testing.assert_allclose(second, 0.5 * delta**2, atol=1e-10)
+
+
+@pytest.mark.parametrize("steps_per_interval", [10, 128])
+def test_lv_m5_weak_order_on_nonnilpotent_sde(steps_per_interval):
+    """dx¹=dW¹, dx²=sin(x¹) dW² from (1, 0): LV m=5 has local weak error O(δ³).
+
+    Unlike dx²=x¹ dW², this SDE is not nilpotent, so every level of the expected
+    signature enters E[(x²_δ)²] = δ/2 − cos(2)(1 − e^{−2δ})/4, and paths that miss
+    level-4 words give O(δ²) instead. Itô and Stratonovich forms coincide here.
+    """
+
+    def drift(t, x):
+        del t
+        return jnp.zeros_like(x)
+
+    def diffusion(t, x):
+        del t
+        return jnp.array([[1.0, 0.0], [0.0, jnp.sin(x[0])]], dtype=x.dtype)
+
+    def second_moment_error(delta):
+        ts, paths, weights = precompute_cubature_paths(
+            horizon=delta,
+            noise_dim=2,
+            integration_dt=delta / steps_per_interval,
+            cubature_order=1,
+            multidim_method="lv",
+            lyons_degree=5,
+        )
+        m_pred, chol_pred, _, _ = predict(
+            jnp.array([1.0, 0.0]), jnp.zeros((2, 2)), ts, paths, weights, drift, diffusion
+        )
+        second = float((chol_pred @ chol_pred.T)[1, 1] + m_pred[1] ** 2)
+        exact = delta / 2 - np.cos(2.0) * (1.0 - np.exp(-2.0 * delta)) / 4
+        return abs(second - exact)
+
+    ratio = second_moment_error(0.1) / second_moment_error(0.05)
+    assert 6.5 < ratio < 9.5  # 2³ = 8

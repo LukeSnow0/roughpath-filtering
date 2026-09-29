@@ -10,16 +10,15 @@ JAX filtering kernels in wsckf.filtering.
 
 Multidimensional constructions:
 
-- ``"lv"``: explicit Lyons–Victoir *multi-D* formulae (Lyons & Victoir 2004).
-  Degree ``m=5`` is a degree-5 Gaussian cubature on ``N(0,I_d)`` times a
-  Bernoulli sign ``η=±1`` that realises the Lévy-area brackets
-  ``A_{ij}=(η/2) z_i z_j`` (``2·3^d`` paths per macro-segment). For ``d=2``
-  each path is the paper's planar construction: the 1D √22 path along the
-  increment, plus a triangular perpendicular excursion that produces the
-  area (equivariant under swapping driving axes). For ``d>2`` the same
-  area targets are realised by coordinate-plane bumps. Degree ``m=3`` is
-  the Stroud spherical rule (straight lines to ``±√d e_i``). This is **not**
-  the tensor product of 1D path shapes.
+- ``"lv"``: explicit Lyons–Victoir *multi-D* formulae (Lyons & Victoir 2004,
+  §5). Degree ``m=5`` is their Theorem 5.9: a fixed piecewise-linear path
+  ``ω^[d]`` whose log-signature matches (5.5) is scaled coordinate-wise by
+  each node ``z`` of a degree-5 Gaussian cubature on ``N(0,I_d)``, once as is
+  and once with its coordinates reversed, which flips the Lévy area
+  (``2·3^d`` paths per macro-segment). ``ω^[d]`` is tabulated for ``d ≤ 2``
+  only (Table 2 for ``d=2``); ``d ≥ 3`` raises ``NotImplementedError``.
+  Degree ``m=3`` is the Stroud spherical rule (straight lines to
+  ``±√d e_i``). This is **not** the tensor product of 1D path shapes.
 - ``"product"``: tensor product of Lyons–Victoir *1D* cubature paths. Degree
   ``m=5`` uses the three-path √22 formula (``(3^k)^d`` paths); ``m=3`` uses the
   two-path straight-line formula (``(2^k)^d``). Misses mixed Lévy-area tensors.
@@ -27,7 +26,7 @@ Multidimensional constructions:
   moment-matching (RMP) to a sparse measure.
 
 ``multidim_method="auto"`` (and ``build_filter(..., multidim_paths="auto")``)
-selects ``"lv"`` for ``lyons_degree=5`` and ``d>1`` when the LV support fits
+selects ``"lv"`` for ``lyons_degree=5`` and ``d=2`` when the LV support fits
 the path-count threshold, otherwise ``"recombined"``. 1D always uses the
 classical 1D formulae.
 
@@ -74,51 +73,160 @@ _RECOMBINE_BUDGET_CAP = 4096
 
 
 # ---------------------------------------------------------------------------
-# Lyons–Victoir 1D cubature paths (Proc. R. Soc. A 2004)
+# Lyons–Victoir degree-5 paths (Proc. R. Soc. A 2004, §5(c))
 #
-# The three-path formula with weights (1/6, 2/3, 1/6) and the √22 piecewise
-# linear drivers is the explicit **degree m = 5** construction.  The library
-# historically labelled it "degree-3" (confusing the branch count with m);
-# callers should treat it as m = 5.
+# Theorem 5.9: let ω^[d] : [0, 1] → R^d have log-signature projecting onto
+# (5.5), and let (z_k, λ_k) be a degree-5 cubature for N(0, I_d). Then the
+# paths (t, z_k^1 ω^1, ..., z_k^d ω^d) and their coordinate reversals
+# (t, z_k^1 ω^d, ..., z_k^d ω^1), each with weight λ_k / 2, define a degree-5
+# cubature on Wiener space. ω^[d] is piecewise linear with L equal pieces and
+# slope L·θ_ij on [(j-1)/L, j/L]; θ is from §5(c)(i) for d = 1 (the √22 path,
+# L = 3) and from Table 2 for d = 2 (L = 4).
+#
+# In 1D the Gaussian nodes are (-√3, 0, √3) with weights (1/6, 2/3, 1/6), so
+# the three paths are z·ω^[1]. The library historically labelled this formula
+# "degree-3" (confusing the branch count with m); it is m = 5.
 #
 # Degree m = 3 is the two-path straight-line formula ω±(t) = ±t on [0, 1]
 # with equal weights 1/2 (Gaussian cubature nodes ±1, lifted to paths).
 # ---------------------------------------------------------------------------
 
+_SQRT22 = np.sqrt(22.0)
+_LV_DEG5_THETA = {
+    1: np.array(
+        [[(4.0 - _SQRT22) / 6.0, (-2.0 + 2.0 * _SQRT22) / 6.0, (4.0 - _SQRT22) / 6.0]]
+    ),
+    2: np.array(
+        [
+            [0.048077867969717, 0.089335677121310, 1.177095041847874, -0.314508586938901],
+            [1.012368507495347, -1.619604763795000, 1.702104005103968, -0.094867748804311],
+        ]
+    ),
+}
 
-def _cubature_path_1(t: np.ndarray) -> np.ndarray:
-    left = -np.sqrt(3.0) * (0.5 * (4.0 - np.sqrt(22.0)) * t)
-    middle = -np.sqrt(3.0) * (
-        1.0 / 6.0 * (4.0 - np.sqrt(22.0)) + (-1.0 + np.sqrt(22.0)) * (t - 1.0 / 3.0)
-    )
-    right = -np.sqrt(3.0) * (
-        1.0 / 6.0 * (2.0 + np.sqrt(22.0)) + 0.5 * (4.0 - np.sqrt(22.0)) * (t - 2.0 / 3.0)
-    )
-    return np.where(t <= 1.0 / 3.0, left, np.where(t <= 2.0 / 3.0, middle, right))
-
-
-def _cubature_path_2(t: np.ndarray) -> np.ndarray:
-    left = np.sqrt(3.0) * (0.5 * (4.0 - np.sqrt(22.0)) * t)
-    middle = np.sqrt(3.0) * (
-        1.0 / 6.0 * (4.0 - np.sqrt(22.0)) + (-1.0 + np.sqrt(22.0)) * (t - 1.0 / 3.0)
-    )
-    right = np.sqrt(3.0) * (
-        1.0 / 6.0 * (2.0 + np.sqrt(22.0)) + 0.5 * (4.0 - np.sqrt(22.0)) * (t - 2.0 / 3.0)
-    )
-    return np.where(t <= 1.0 / 3.0, left, np.where(t <= 2.0 / 3.0, middle, right))
+# 3-point Gauss–Hermite rule: degree-5 cubature for N(0, 1).
+_GH3_NODES = np.array([-np.sqrt(3.0), 0.0, np.sqrt(3.0)])
+_GH3_WEIGHTS = np.array([1.0 / 6.0, 2.0 / 3.0, 1.0 / 6.0])
 
 
-def _cubature_path_3(t: np.ndarray) -> np.ndarray:
-    return np.zeros_like(t)
+def _lv_deg5_theta(d: int) -> np.ndarray:
+    """Coefficients ``θ`` of ``ω^[d]``; raises for dimensions LV (2004) does not tabulate."""
+    if d not in _LV_DEG5_THETA:
+        raise NotImplementedError(
+            f"Lyons–Victoir degree-5 paths are implemented for noise_dim in "
+            f"{sorted(_LV_DEG5_THETA)}, got {d}; use multidim_method='recombined'."
+        )
+    return _LV_DEG5_THETA[d]
 
+
+def _lv_unit_knots(d: int, lyons_degree: int) -> np.ndarray:
+    """Corner times ``j/L`` of the one-segment LV formula (straight lines for m = 3)."""
+    if int(lyons_degree) == 3:
+        return np.array([0.0, 1.0])
+    return np.linspace(0.0, 1.0, _lv_deg5_theta(d).shape[1] + 1)
+
+
+def _lv_deg5_path(d: int, t: np.ndarray) -> np.ndarray:
+    """Lyons–Victoir path ``ω^[d]`` sampled on ``t ⊂ [0, 1]``, shape ``(len(t), d)``."""
+    theta = _lv_deg5_theta(d)
+    values = np.concatenate([np.zeros((d, 1)), np.cumsum(theta, axis=1)], axis=1)
+    knots = _lv_unit_knots(d, 5)
+    return _sample_paths(t, knots, values.T[None])[0]
+
+
+def _lv_deg5_1d_branches(t: np.ndarray) -> np.ndarray:
+    """The three 1D degree-5 paths ``z·ω^[1](t)`` for ``z ∈ (-√3, 0, √3)``, shape ``(3, len(t))``."""
+    return _GH3_NODES[:, None] * _lv_deg5_path(1, t)[None, :, 0]
+
+
+# ---------------------------------------------------------------------------
+# Exact piecewise-linear path representation
+#
+# Every cubature path here is piecewise linear, and the RK4 integrator holds
+# ω̇ constant on each grid step, so a path is integrated exactly only if all
+# of its corners ("knots") are grid points. Paths are therefore built as their
+# values at the knots, and the integration grid is built around those knots.
+# ---------------------------------------------------------------------------
+
+
+def _macro_segment_bounds(k: int, gamma: float) -> np.ndarray:
+    """Macro-segment boundaries ``1 - (1 - i/k)^γ`` for ``i = 0, ..., k``."""
+    k = max(1, int(k))
+    return np.array([1.0 - (1.0 - i / k) ** gamma for i in range(k + 1)], dtype=np.float64)
+
+
+def _concatenate_macro_segments(
+    unit_values: np.ndarray, unit_weights: np.ndarray, k: int, gamma: float
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compose a one-segment cubature formula over ``k`` macro-segments, exactly.
+
+    ``unit_values`` holds the unit-time paths at their knots ``j/L``, shape
+    ``(P, L + 1, d)`` and starting at 0. Segment ``s`` of length ``Δ_s`` uses
+    the formula under Brownian scaling (``√Δ_s``), offset by the parent path's
+    value, giving ``P**k`` paths (parent-major) on ``k·L + 1`` knots.
+
+    Returns:
+        ``(knots, values, weights)`` with ``values`` of shape ``(P**k, k·L + 1, d)``.
+    """
+    unit_values = np.asarray(unit_values, dtype=np.float64)
+    unit_weights = np.asarray(unit_weights, dtype=np.float64)
+    n_unit, n_knots, d = unit_values.shape
+    unit_knots = np.linspace(0.0, 1.0, n_knots)
+    knots = [np.zeros(1)]
+    values = np.zeros((1, 1, d))
+    weights = np.ones(1)
+    bounds = _macro_segment_bounds(k, gamma)
+    for start, end in zip(bounds[:-1], bounds[1:]):
+        span = end - start
+        knots.append(start + span * unit_knots[1:])
+        head = np.broadcast_to(values[:, None], (values.shape[0], n_unit) + values.shape[1:])
+        tail = values[:, None, -1:, :] + np.sqrt(span) * unit_values[None, :, 1:, :]
+        values = np.concatenate([head, tail], axis=2).reshape(
+            -1, values.shape[1] + n_knots - 1, d
+        )
+        weights = (weights[:, None] * unit_weights[None, :]).reshape(-1)
+    return np.concatenate(knots), values, weights / weights.sum()
+
+
+def _sample_paths(t_unit: np.ndarray, knots: np.ndarray, values: np.ndarray) -> np.ndarray:
+    """Evaluate piecewise-linear paths given at ``knots`` on ``t_unit`` (both in ``[0, 1]``).
+
+    Exact at every ``t_unit`` point; the sampled polyline equals the path only if
+    ``t_unit`` contains every knot.
+    """
+    t = np.clip(np.asarray(t_unit, dtype=np.float64), knots[0], knots[-1])
+    i = np.clip(np.searchsorted(knots, t, side="right") - 1, 0, len(knots) - 2)
+    frac = ((t - knots[i]) / (knots[i + 1] - knots[i]))[None, :, None]
+    return values[:, i, :] * (1.0 - frac) + values[:, i + 1, :] * frac
+
+
+def _unit_time(ts: np.ndarray) -> np.ndarray:
+    """Map a grid on ``[ts[0], ts[-1]]`` to ``[0, 1]``."""
+    ts = np.asarray(ts, dtype=np.float64)
+    return (ts - ts[0]) / max(float(ts[-1] - ts[0]), 1e-15)
+
+
+def _integration_grid(knots: np.ndarray, horizon: float, integration_dt: float) -> np.ndarray:
+    """Unit-time integration grid containing every knot.
+
+    Each piece between consecutive knots is split into equal steps of physical
+    length at most ``integration_dt``, so every RK4 step lies on one linear piece
+    of every path. At least two steps in total.
+    """
+    pieces = np.diff(knots)
+    n_steps = np.maximum(1, np.ceil(pieces * horizon / integration_dt - 1e-9).astype(int))
+    if n_steps.sum() < 2:
+        n_steps[np.argmax(pieces)] += 1
+    grid = [knots[:1]] + [
+        np.linspace(a, b, n + 1)[1:] for a, b, n in zip(knots[:-1], knots[1:], n_steps)
+    ]
+    return np.concatenate(grid)
 
 
 def build_cubature_paths_1d(
     k: int = 3,
     gamma: float = 0.6,
-    steps_per_unit: int = 200,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    
     """Build Lyons–Victoir **degree m = 5** Wiener-space cubature paths on [0, 1].
 
     The base (k = 1) support has three paths with weights ``(1/6, 2/3, 1/6)``.
@@ -128,151 +236,41 @@ def build_cubature_paths_1d(
     Args:
         k: Number of macro segments.
         gamma: Macro-segment time-grid concentration exponent.
-        steps_per_unit: Native time-grid resolution.
 
     Returns:
-        Tuple (paths, weights, t_native) with paths of shape (3^k, T).
+        Tuple ``(paths, weights, knots)``: the paths' exact values at their
+        ``3k + 1`` corner times ``knots``, with ``paths`` of shape ``(3^k, 3k + 1)``.
     """
-
-    t_d = np.array(
-        [1.0 - (1.0 - i / k) ** gamma for i in range(k + 1)], dtype=np.float64
-    )
-    p = np.zeros((3, 0), dtype=np.float64)
-    w = np.zeros(3, dtype=np.float64)
-    t_native = np.zeros(0, dtype=np.float64)
-    dtt = 0
-
-    for segment in range(k):
-        dt = t_d[segment + 1] - t_d[segment]
-        dtn = max(2, int(np.ceil(dt * steps_per_unit)))
-        if segment == 0:
-            x_loc = np.linspace(0.0, dt, dtn)
-            p = np.stack(
-                [
-                    np.sqrt(dt) * _cubature_path_1(x_loc / dt),
-                    _cubature_path_3(x_loc),
-                    np.sqrt(dt) * _cubature_path_2(x_loc / dt),
-                ],
-                axis=0,
-            )
-            w[:] = np.array([1.0 / 6.0, 2.0 / 3.0, 1.0 / 6.0], dtype=np.float64)
-            t_native = np.linspace(0.0, dt, dtn)
-            dtt = dtn
-        else:
-            x_loc = np.linspace(dt / dtn, dt, dtn)
-            q = p
-            p = np.empty((q.shape[0] * 3, q.shape[1] + dtn), dtype=np.float64)
-            w_old = w
-            w = np.empty(q.shape[0] * 3, dtype=np.float64)
-
-            for n in range(p.shape[0]):
-                parent = n // 3
-                if n % 3 == 0:
-                    p[n, : q.shape[1]] = q[parent]
-                else:
-                    p[n, : q.shape[1]] = p[n - 1, : q.shape[1]]
-
-                x0 = p[n, dtt - 1]
-                if n % 3 == 0:
-                    p[n, dtt:] = x0 + np.sqrt(dt) * _cubature_path_1(x_loc / dt)
-                    w[n] = w_old[parent] * (1.0 / 6.0)
-                elif (n - 1) % 3 == 0:
-                    p[n, dtt:] = x0 + _cubature_path_3(x_loc)
-                    w[n] = w_old[parent] * (2.0 / 3.0)
-                else:
-                    p[n, dtt:] = x0 + np.sqrt(dt) * _cubature_path_2(x_loc / dt)
-                    w[n] = w_old[parent] * (1.0 / 6.0)
-
-            t_native = np.concatenate(
-                [t_native, t_native[-1] + np.linspace(dt / dtn, dt, dtn)]
-            )
-            dtt += dtn
-
-    return p, w, t_native
+    unit = _lv_deg5_1d_branches(_lv_unit_knots(1, 5))[:, :, None]
+    knots, values, weights = _concatenate_macro_segments(unit, _GH3_WEIGHTS, k, gamma)
+    return values[:, :, 0], weights, knots
 
 
 def build_cubature_paths_1d_m3(
     k: int = 3,
     gamma: float = 0.6,
-    steps_per_unit: int = 200,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Build Lyons–Victoir **degree m = 3** Wiener-space cubature paths on [0, 1].
 
     Base (k = 1) support: two straight-line paths ``ω±(t) = ±t`` with weights
     ``1/2`` (Gaussian nodes ±1 lifted to paths). Composing ``k`` macro segments
     yields ``2^k`` paths that remain degree-3 cubature on each scaled timeframe.
+
+    Returns:
+        Tuple ``(paths, weights, knots)`` as for :func:`build_cubature_paths_1d`,
+        with ``k + 1`` knots.
     """
-    t_d = np.array(
-        [1.0 - (1.0 - i / k) ** gamma for i in range(k + 1)], dtype=np.float64
-    )
-    p = np.zeros((2, 0), dtype=np.float64)
-    w = np.zeros(2, dtype=np.float64)
-    t_native = np.zeros(0, dtype=np.float64)
-    dtt = 0
-
-    for segment in range(k):
-        dt = t_d[segment + 1] - t_d[segment]
-        dtn = max(2, int(np.ceil(dt * steps_per_unit)))
-        if segment == 0:
-            x_loc = np.linspace(0.0, dt, dtn)
-            # ω±(s) = ±s on [0, 1] scaled to segment length dt → ±sqrt(dt)*(x/dt)*sqrt(dt)
-            # wait: on [0,1], ω±(t)=±t has ω(1)=±1. For time dt, ω_dt(t)=√dt · ω(t/dt)
-            # so ω_dt(t) = ±√dt · (t/dt) = ± t/√dt ... terminal = ±√dt. Correct for Var=dt.
-            s = x_loc / dt  # in [0, 1]
-            p = np.stack(
-                [
-                    np.sqrt(dt) * s,
-                    -np.sqrt(dt) * s,
-                ],
-                axis=0,
-            )
-            w[:] = np.array([0.5, 0.5], dtype=np.float64)
-            t_native = np.linspace(0.0, dt, dtn)
-            dtt = dtn
-        else:
-            x_loc = np.linspace(dt / dtn, dt, dtn)
-            s = x_loc / dt
-            q = p
-            p = np.empty((q.shape[0] * 2, q.shape[1] + dtn), dtype=np.float64)
-            w_old = w
-            w = np.empty(q.shape[0] * 2, dtype=np.float64)
-
-            for n in range(p.shape[0]):
-                parent = n // 2
-                if n % 2 == 0:
-                    p[n, : q.shape[1]] = q[parent]
-                else:
-                    p[n, : q.shape[1]] = p[n - 1, : q.shape[1]]
-
-                x0 = p[n, dtt - 1]
-                sign = 1.0 if n % 2 == 0 else -1.0
-                p[n, dtt:] = x0 + sign * np.sqrt(dt) * s
-                w[n] = w_old[parent] * 0.5
-
-            t_native = np.concatenate(
-                [t_native, t_native[-1] + np.linspace(dt / dtn, dt, dtn)]
-            )
-            dtt += dtn
-
-    return p, w, t_native
-
-
-def _resample_paths_1d(
-        paths: np.ndarray, t_native: np.ndarray, t_target: np.ndarray
-) -> np.ndarray:
-    t_target = np.asarray(t_target, dtype = np.float64)
-    out = np.zeros((paths.shape[0], len(t_target)), dtype=np.float64)
-    for i in range(paths.shape[0]):
-        out[i] = np.interp(t_target, t_native, paths[i])
-    return out
+    unit = np.array([[[0.0], [1.0]], [[0.0], [-1.0]]])
+    knots, values, weights = _concatenate_macro_segments(unit, np.array([0.5, 0.5]), k, gamma)
+    return values[:, :, 0], weights, knots
 
 
 # ---------------------------------------------------------------------------
-# Lyons–Victoir explicit multi-D formulae (Proc. R. Soc. A 2004)
+# Lyons–Victoir explicit multi-D formulae (Proc. R. Soc. A 2004, §5)
 #
-# Not the tensor product of 1D path shapes. Degree m=5 realises the Lévy-area
-# brackets via a Bernoulli sign on top of a degree-5 Gaussian cubature;
-# degree m=3 is the Stroud spherical rule (straight lines).
+# Not the tensor product of 1D path shapes. Degree m=5 is Theorem 5.9 applied
+# to ω^[d] (see the degree-5 path section above) with the product Gauss–Hermite
+# rule; degree m=3 is the Stroud spherical rule (straight lines, Prop. 5.3).
 # ---------------------------------------------------------------------------
 
 
@@ -290,128 +288,22 @@ def _gaussian_cubature_degree3(d: int) -> Tuple[np.ndarray, np.ndarray]:
 def _gaussian_cubature_degree5(d: int) -> Tuple[np.ndarray, np.ndarray]:
     """Degree-5 cubature for ``N(0, I_d)``: product 3-point Gauss–Hermite."""
     d = int(d)
-    gh_nodes = np.array([-np.sqrt(3.0), 0.0, np.sqrt(3.0)], dtype=np.float64)
-    gh_w = np.array([1.0 / 6.0, 2.0 / 3.0, 1.0 / 6.0], dtype=np.float64)
-    nodes = np.array(list(product(gh_nodes, repeat=d)), dtype=np.float64)
-    idx = list(product(range(3), repeat=d))
+    nodes = np.array(list(product(_GH3_NODES, repeat=d)), dtype=np.float64)
     weights = np.array(
-        [float(np.prod([gh_w[j] for j in js])) for js in idx],
+        [float(np.prod(ws)) for ws in product(_GH3_WEIGHTS, repeat=d)],
         dtype=np.float64,
     )
     return nodes, weights
-
-
-def _oned_m5_sqrt22(t: np.ndarray, terminal: float) -> np.ndarray:
-    """Unit-time Lyons–Victoir 1D degree-5 driver ending at ``terminal``."""
-    if abs(terminal) < 1e-15:
-        return np.zeros_like(t)
-    left = 0.5 * (4.0 - np.sqrt(22.0)) * t
-    middle = (
-        1.0 / 6.0 * (4.0 - np.sqrt(22.0)) + (-1.0 + np.sqrt(22.0)) * (t - 1.0 / 3.0)
-    )
-    right = (
-        1.0 / 6.0 * (2.0 + np.sqrt(22.0))
-        + 0.5 * (4.0 - np.sqrt(22.0)) * (t - 2.0 / 3.0)
-    )
-    base = np.where(t <= 1.0 / 3.0, left, np.where(t <= 2.0 / 3.0, middle, right))
-    return terminal * base
-
-
-def _levy_area_pl(omega: np.ndarray) -> np.ndarray:
-    """Lévy area matrix of a piecewise-linear path (trapezoid / PL formula)."""
-    n, d = omega.shape
-    a = np.zeros((d, d), dtype=np.float64)
-    for k in range(n - 1):
-        w0, w1 = omega[k], omega[k + 1]
-        dw = w1 - w0
-        mid = 0.5 * (w0 + w1)
-        a += np.outer(mid, dw) - np.outer(dw, mid)
-    return 0.5 * a
-
-
-def _perp_triangle_excursion(t: np.ndarray) -> np.ndarray:
-    """Unit-height triangular bump on the three √22 thirds: rise, hold, fall.
-
-    This is the planar d=2 Lévy-area excursion (Lyons–Victoir 2004,
-    construction of the path for d=2): a linear detour orthogonal to the
-    increment, supported on the same breakpoints as the 1D √22 path.
-    """
-    t = np.asarray(t, dtype=np.float64)
-    g = np.empty_like(t)
-    left = t <= 1.0 / 3.0
-    mid = (t > 1.0 / 3.0) & (t <= 2.0 / 3.0)
-    g[left] = 3.0 * t[left]
-    g[mid] = 1.0
-    g[~left & ~mid] = 3.0 * (1.0 - t[~left & ~mid])
-    return g
-
-
-def _lv_d2_unit_path(z: np.ndarray, eta: float, t: np.ndarray) -> np.ndarray:
-    """Unit-time LV d=2 path for Gaussian node ``z`` and Bernoulli sign ``η``.
-
-    Along the increment: the classical 1D √22 path (so the time–space
-    brackets ``[[ε0, ε_u], ε_u]`` match the 1D formula). Orthogonal to it:
-    a triangular excursion scaled so the Lévy area is ``(η/2) z1 z2``.
-    The construction is equivariant under orthogonal transformations of
-    the driving plane (in particular under swapping the two axes).
-    """
-    t = np.asarray(t, dtype=np.float64)
-    z = np.asarray(z, dtype=np.float64).reshape(2)
-    rho = float(np.linalg.norm(z))
-    if rho < 1e-15:
-        return np.zeros((t.shape[0], 2), dtype=np.float64)
-    u = z / rho
-    n = np.array([-u[1], u[0]], dtype=np.float64)
-    omega = _oned_m5_sqrt22(t, rho)[:, None] * u[None, :]
-    a_tgt = 0.5 * float(eta) * float(z[0] * z[1])
-    if abs(a_tgt) < 1e-15:
-        return omega
-    g = _perp_triangle_excursion(t)
-    trial = omega + g[:, None] * n[None, :]
-    sens = _levy_area_pl(trial)[0, 1] - _levy_area_pl(omega)[0, 1]
-    if abs(sens) < 1e-15:
-        return omega
-    return omega + (a_tgt / sens) * g[:, None] * n[None, :]
-
-
-def _add_area_bumps(
-    omega: np.ndarray,
-    area_targets: dict[tuple[int, int], float],
-    t: np.ndarray,
-    n_correct: int = 3,
-) -> np.ndarray:
-    """Pairwise planar bumps for ``d>2`` (d=2 uses :func:`_lv_d2_unit_path`)."""
-    g = _perp_triangle_excursion(t)
-    omega = omega.copy()
-    eps = 1e-7
-    for _ in range(n_correct):
-        a_now = _levy_area_pl(omega)
-        for (i, j), a_tgt in area_targets.items():
-            da = a_tgt - a_now[i, j]
-            if abs(da) < 1e-14:
-                continue
-            dz = omega[-1, j] - omega[0, j]
-            di = omega[-1, i] - omega[0, i]
-            # Perpendicular in the (i, j)-plane, matching the d=2 construction.
-            rho_ij = float(np.hypot(di, dz))
-            if rho_ij < 1e-15:
-                continue
-            n_i, n_j = -dz / rho_ij, di / rho_ij
-            trial = omega.copy()
-            trial[:, i] = trial[:, i] + eps * g * n_i
-            trial[:, j] = trial[:, j] + eps * g * n_j
-            sens = (_levy_area_pl(trial)[i, j] - a_now[i, j]) / eps
-            if abs(sens) < 1e-12:
-                continue
-            omega[:, i] = omega[:, i] + (da / sens) * g * n_i
-            omega[:, j] = omega[:, j] + (da / sens) * g * n_j
-    return omega
 
 
 def _unit_lv_paths(
     noise_dim: int, lyons_degree: int, t_unit: np.ndarray
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Unit-time LV multi-D paths on ``t_unit ⊂ [0, 1]``.
+
+    Degree 5 is Theorem 5.9 of Lyons & Victoir (2004): for each Gauss–Hermite
+    node ``z`` the paths ``z ∘ ω^[d]`` and ``z ∘ reverse(ω^[d])``, each with
+    half the node weight. It is available for ``d ∈ {1, 2}``.
 
     Returns ``(paths, weights)`` with ``paths`` of shape ``(P, len(t_unit), d)``
     and ``E[ω(1)ω(1)^T] = I`` (no Brownian ``√T`` scaling).
@@ -424,30 +316,14 @@ def _unit_lv_paths(
         paths = np.stack([t_unit[:, None] * z[None, :] for z in nodes], axis=0)
         weights = gauss_w.copy()
     elif lyons_degree == 5:
+        omega = _lv_deg5_path(d, t_unit)
         nodes, gauss_w = _gaussian_cubature_degree5(d)
         path_list = []
         weight_list = []
         for z, lw in zip(nodes, gauss_w):
-            for eta in (+1.0, -1.0):
-                if d == 2:
-                    omega = _lv_d2_unit_path(z, eta, t_unit)
-                else:
-                    primary = np.stack(
-                        [_oned_m5_sqrt22(t_unit, float(z[i])) for i in range(d)],
-                        axis=1,
-                    )
-                    areas = {
-                        (i, j): 0.5 * eta * z[i] * z[j]
-                        for i in range(d)
-                        for j in range(i + 1, d)
-                    }
-                    omega = (
-                        primary
-                        if not areas
-                        else _add_area_bumps(primary, areas, t_unit)
-                    )
-                path_list.append(omega)
-                weight_list.append(0.5 * lw)
+            # Theorem 5.9: ω_k and its coordinate reversal ω_{n+k}.
+            path_list += [omega * z, omega[:, ::-1] * z]
+            weight_list += [0.5 * lw, 0.5 * lw]
         paths = np.stack(path_list, axis=0)
         weights = np.asarray(weight_list, dtype=np.float64)
     else:
@@ -459,7 +335,8 @@ def _unit_lv_paths(
 def lv_path_count(noise_dim: int, k: int = 1, lyons_degree: int = 5) -> int:
     """Number of paths in the explicit multi-D Lyons–Victoir construction.
 
-    ``m=5``: ``(2 · 3^d)^k`` (Gauss–Hermite × Bernoulli, composed ``k`` times).
+    ``m=5``: ``(2 · 3^d)^k`` (Gauss–Hermite nodes × {path, coordinate reversal},
+    composed ``k`` times); the construction itself exists for ``d ≤ 2``.
     ``m=3``: ``(2d)^k`` (Stroud spherical rule).
     """
     d = max(1, int(noise_dim))
@@ -474,91 +351,59 @@ def lv_path_count(noise_dim: int, k: int = 1, lyons_degree: int = 5) -> int:
     return int(base**k)
 
 
+def _lv_knot_paths(
+    noise_dim: int, lyons_degree: int, k: int, gamma: float
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Knot representation of the explicit multi-D LV paths (unit time)."""
+    unit_knots = _lv_unit_knots(int(noise_dim), lyons_degree)
+    unit_paths, unit_w = _unit_lv_paths(noise_dim, lyons_degree, unit_knots)
+    return _concatenate_macro_segments(unit_paths, unit_w, k, gamma)
+
+
 def build_lyons_victoir_multid_paths(
     ts: np.ndarray,
     noise_dim: int,
     lyons_degree: int = 5,
     k: int = 1,
     gamma: float = 0.6,
-    steps_per_unit: int = 200,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Explicit multi-D Lyons–Victoir cubature, sampled on ``ts``.
 
     Returns *unit-time* path values (``E[ω(1)ω(1)^T] = I``). Callers that
     pass a horizon-``T`` grid must scale by ``√T`` (as
-    :func:`precompute_cubature_paths` does).
+    :func:`precompute_cubature_paths` does). The samples reproduce the paths
+    exactly only if ``ts`` contains their corners, as the grid built by
+    :func:`precompute_cubature_paths` does.
 
     Args:
         ts: Time grid, typically ``[0, T]``. Values are interpolated in
             normalised time ``t/T``.
-        noise_dim: Brownian dimension ``d > 1`` (1D uses the classical
-            1D formulae instead).
+        noise_dim: Brownian dimension ``d`` (``d ∈ {1, 2}`` for degree 5).
+            :func:`build_cubature_driver` routes ``d = 1`` to the 1D builders.
         lyons_degree: ``3`` or ``5``.
         k: Number of macro-segments; the one-step formula is composed
             ``k`` times on a ``gamma``-concentrated partition of ``[0, 1]``.
         gamma: Macro-segment concentration exponent.
-        steps_per_unit: Native resolution when ``k > 1``.
     """
-    ts = np.asarray(ts, dtype=np.float64)
-    d = int(noise_dim)
-    k = max(1, int(k))
-    lyons_degree = int(lyons_degree)
-    t_span = float(ts[-1] - ts[0])
-    t_target = (ts - ts[0]) / max(t_span, 1e-15)
+    knots, values, weights = _lv_knot_paths(noise_dim, int(lyons_degree), k, gamma)
+    return _sample_paths(_unit_time(ts), knots, values), weights
 
-    if k == 1:
-        return _unit_lv_paths(d, lyons_degree, t_target)
 
-    t_d = np.array(
-        [1.0 - (1.0 - i / k) ** gamma for i in range(k + 1)], dtype=np.float64
-    )
-    t_ref = np.linspace(0.0, 1.0, max(32, int(steps_per_unit)))
-    unit_paths, unit_w = _unit_lv_paths(d, lyons_degree, t_ref)
-    n_unit = unit_paths.shape[0]
-
-    cur_paths: Optional[np.ndarray] = None
-    cur_w: Optional[np.ndarray] = None
-    t_native = np.zeros(0, dtype=np.float64)
-
-    for segment in range(k):
-        dt = t_d[segment + 1] - t_d[segment]
-        dtn = max(2, int(np.ceil(dt * steps_per_unit)))
-        if segment == 0:
-            x_loc = np.linspace(0.0, dt, dtn)
-            t_native = np.linspace(0.0, dt, dtn)
-        else:
-            x_loc = np.linspace(dt / dtn, dt, dtn)
-            t_native = np.concatenate([t_native, t_native[-1] + x_loc])
-        s_unit = x_loc / max(dt, 1e-15)
-        child = np.empty((n_unit, dtn, d), dtype=np.float64)
-        for p in range(n_unit):
-            for j in range(d):
-                child[p, :, j] = np.interp(s_unit, t_ref, unit_paths[p, :, j])
-        child *= np.sqrt(dt)
-
-        if cur_paths is None:
-            cur_paths = child
-            cur_w = unit_w.copy()
-            continue
-
-        m_par, t_prev, _ = cur_paths.shape
-        x0 = cur_paths[:, -1, :]
-        tail = x0[:, None, None, :] + child[None, :, :, :]
-        head = np.broadcast_to(
-            cur_paths[:, None, :, :], (m_par, n_unit, t_prev, d)
-        ).copy()
-        cur_paths = np.concatenate([head, tail], axis=2).reshape(
-            m_par * n_unit, t_prev + dtn, d
-        )
-        cur_w = (cur_w[:, None] * unit_w[None, :]).reshape(-1)
-
-    assert cur_paths is not None and cur_w is not None
-    cur_w = cur_w / cur_w.sum()
-    out = np.zeros((cur_paths.shape[0], len(t_target), d), dtype=np.float64)
-    for i in range(cur_paths.shape[0]):
-        for j in range(d):
-            out[i, :, j] = np.interp(t_target, t_native, cur_paths[i, :, j])
-    return out, cur_w
+def _product_knot_paths(
+    noise_dim: int, k: int, gamma: float, lyons_degree: int
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Knot representation of the tensor product of 1D Lyons–Victoir paths."""
+    if int(lyons_degree) == 5:
+        paths_1d, weights_1d, knots = build_cubature_paths_1d(k=k, gamma=gamma)
+    elif int(lyons_degree) == 3:
+        paths_1d, weights_1d, knots = build_cubature_paths_1d_m3(k=k, gamma=gamma)
+    else:
+        raise ValueError("lyons_degree must be 3 or 5 (Lyons–Victoir explicit formulae)")
+    p1 = paths_1d.shape[0]
+    # Row = flat path index; coordinate 0 is the fastest-varying digit.
+    digits = (np.arange(p1**noise_dim)[:, None] // p1 ** np.arange(noise_dim)[None, :]) % p1
+    values = np.transpose(paths_1d[digits], (0, 2, 1))
+    return knots, values, np.prod(weights_1d[digits], axis=1)
 
 
 def build_product_lyons_paths(
@@ -568,39 +413,13 @@ def build_product_lyons_paths(
     gamma: float = 0.6,
     lyons_degree: int = 5,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Tensor product of 1D Lyons–Victoir paths.
+    """Tensor product of 1D Lyons–Victoir paths, sampled on ``ts``.
 
     ``lyons_degree=5`` (default): ``P = (3^k)^d`` from the explicit m=5 formula.
     ``lyons_degree=3``: ``P = (2^k)^d`` from the explicit m=3 straight-line formula.
     """
-    lyons_degree = int(lyons_degree)
-    if lyons_degree == 5:
-        paths_1d, weights_1d, t_native = build_cubature_paths_1d(k=k, gamma=gamma)
-    elif lyons_degree == 3:
-        paths_1d, weights_1d, t_native = build_cubature_paths_1d_m3(k=k, gamma=gamma)
-    else:
-        raise ValueError("lyons_degree must be 3 or 5 (Lyons–Victoir explicit formulae)")
-    ts = np.asarray(ts, dtype=np.float64)
-    t_target = (ts - ts[0]) / max(ts[-1] - ts[0], 1e-15)
-    paths_1d = _resample_paths_1d(paths_1d, t_native, t_target)
-    p1 = paths_1d.shape[0]
-    t_len = len(ts)
-
-    num_paths = p1**noise_dim
-    path_values = np.zeros((num_paths, t_len, noise_dim), dtype=np.float64)
-    weights = np.zeros(num_paths, dtype=np.float64)
-
-    for flat in range(num_paths):
-        w = 1.0
-        rem = flat
-        for d in range(noise_dim):
-            j = rem % p1
-            rem //= p1
-            path_values[flat, :, d] = paths_1d[j]
-            w *= weights_1d[j]
-        weights[flat] = w
-
-    return path_values, weights
+    knots, values, weights = _product_knot_paths(noise_dim, k, gamma, lyons_degree)
+    return _sample_paths(_unit_time(ts), knots, values), weights
 
 
 # ---------------------------------------------------------------------------
@@ -625,15 +444,19 @@ def select_multidim_paths(
 ) -> MultidimMethod:
     """Choose ``lv`` / ``product`` vs ``recombined`` from dimension and order.
 
-    For ``lyons_degree=5`` and ``d>1``, prefers explicit multi-D LV when
-    ``lv_path_count`` is below ``product_path_threshold``. Degree ``m=3``
-    still uses the 1D-product (hypercube) formula.
+    For ``lyons_degree=5`` and ``d>1``, prefers explicit multi-D LV when it is
+    implemented for ``d`` (``d = 2``) and ``lv_path_count`` is within
+    ``product_path_threshold``. Degree ``m=3`` still uses the 1D-product
+    (hypercube) formula.
     """
     d = max(1, int(noise_dim))
     k = max(1, int(k))
     lyons_degree = int(lyons_degree)
     if d > 1 and lyons_degree == 5:
-        if lv_path_count(d, k, lyons_degree=5) <= product_path_threshold:
+        if (
+            d in _LV_DEG5_THETA
+            and lv_path_count(d, k, lyons_degree=5) <= product_path_threshold
+        ):
             return "lv"
         return "recombined"
     if product_path_count(d, k, lyons_degree=lyons_degree) <= product_path_threshold:
@@ -720,47 +543,30 @@ def default_num_paths(
 
 
 def _segment_branch_shapes(
-    k: int, gamma: float, steps_per_unit: int = 200
+    k: int, gamma: float
 ) -> Tuple[np.ndarray, List[int], List[np.ndarray], np.ndarray]:
-    """Per-macro-segment 1D degree-3 Lyons cubature branch shapes on ``[0, 1]``.
+    """Per-macro-segment 1D degree-5 Lyons branch shapes at the segment's knots.
 
-    Returns ``(t_native, seg_lengths, branch_shapes, branch_w)`` where
+    Returns ``(knots, seg_lengths, branch_shapes, branch_w)`` where
     ``branch_shapes[s]`` has shape ``(3, seg_lengths[s])`` and holds the
     within-segment path increment (to be added to that segment's start value)
-    for each of the 3 cubature branches. ``branch_w`` are the branch weights
-    ``[1/6, 2/3, 1/6]``. The native grid mirrors :func:`build_cubature_paths_1d`
-    so the resulting paths share its time discretisation.
+    for each of the 3 cubature branches, at the segment's knots (the first
+    segment includes ``t = 0``). ``branch_w`` are the branch weights
+    ``[1/6, 2/3, 1/6]``.
     """
-    t_d = np.array(
-        [1.0 - (1.0 - i / k) ** gamma for i in range(k + 1)], dtype=np.float64
-    )
-    t_native = np.zeros(0, dtype=np.float64)
+    unit_knots = _lv_unit_knots(1, 5)
+    unit = _lv_deg5_1d_branches(unit_knots)
+    bounds = _macro_segment_bounds(k, gamma)
+    knots: List[np.ndarray] = []
     seg_lengths: List[int] = []
     branch_shapes: List[np.ndarray] = []
-    for segment in range(k):
-        dt = t_d[segment + 1] - t_d[segment]
-        dtn = max(2, int(np.ceil(dt * steps_per_unit)))
-        if segment == 0:
-            x_loc = np.linspace(0.0, dt, dtn)
-            t_native = np.linspace(0.0, dt, dtn)
-        else:
-            x_loc = np.linspace(dt / dtn, dt, dtn)
-            t_native = np.concatenate(
-                [t_native, t_native[-1] + np.linspace(dt / dtn, dt, dtn)]
-            )
-        shapes = np.stack(
-            [
-                np.sqrt(dt) * _cubature_path_1(x_loc / dt),
-                _cubature_path_3(x_loc),
-                np.sqrt(dt) * _cubature_path_2(x_loc / dt),
-            ],
-            axis=0,
-        )
-        seg_lengths.append(dtn)
-        branch_shapes.append(shapes)
-
-    branch_w = np.array([1.0 / 6.0, 2.0 / 3.0, 1.0 / 6.0], dtype=np.float64)
-    return t_native, seg_lengths, branch_shapes, branch_w
+    for s, (start, end) in enumerate(zip(bounds[:-1], bounds[1:])):
+        first = 0 if s == 0 else 1
+        span = end - start
+        knots.append(start + span * unit_knots[first:])
+        branch_shapes.append(np.sqrt(span) * unit[:, first:])
+        seg_lengths.append(len(unit_knots) - first)
+    return np.concatenate(knots), seg_lengths, branch_shapes, _GH3_WEIGHTS.copy()
 
 
 def _monomial_exponents(dim: int, degree: int) -> List[Tuple[int, ...]]:
@@ -892,8 +698,20 @@ def build_recombined_cubature_paths(
         construction targets low-to-moderate ``noise_dim``. 
     """
     del candidate_paths, candidate_factor, seed  # deterministic; no candidate pool
+    knots, values, weights = _recombined_knot_paths(
+        noise_dim, k, gamma, recombined_num_paths, degree
+    )
+    return _sample_paths(_unit_time(ts), knots, values), weights
 
-    ts = np.asarray(ts, dtype=np.float64)
+
+def _recombined_knot_paths(
+    noise_dim: int,
+    k: int,
+    gamma: float,
+    recombined_num_paths: Optional[int],
+    degree: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Knot representation of :func:`build_recombined_cubature_paths` (unit time)."""
     d = max(1, int(noise_dim))
     k = max(1, int(k))
 
@@ -904,7 +722,7 @@ def build_recombined_cubature_paths(
         n_mom_full = len(_monomial_exponents(k * d, max(1, int(degree))))
         n_out = max(n_out, min(n_mom_full, _RECOMBINE_BUDGET_CAP))
 
-    t_native, seg_lengths, branch_shapes, branch_w = _segment_branch_shapes(k, gamma)
+    knots, seg_lengths, branch_shapes, branch_w = _segment_branch_shapes(k, gamma)
 
     # Largest moment degree whose full monomial system still fits the budget.
     degree_eff = max(1, int(degree))
@@ -952,18 +770,54 @@ def build_recombined_cubature_paths(
         cur_incs = new_incs[idx]
         cur_w = lam
 
-    # Resample from the native [0, 1] grid onto the requested integration grid.
-    t_target = (ts - ts[0]) / max(ts[-1] - ts[0], 1e-15) * t_native[-1]
-    out = np.zeros((cur_paths.shape[0], len(ts), d), dtype=np.float64)
-    for i in range(cur_paths.shape[0]):
-        for j in range(d):
-            out[i, :, j] = np.interp(t_target, t_native, cur_paths[i, :, j])
-    return out, cur_w
+    return knots, cur_paths, cur_w
 
 
-    # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Driver and precompute entry point
 # ---------------------------------------------------------------------------
+
+
+def _cubature_knot_paths(
+    noise_dim: int,
+    *,
+    k: int,
+    gamma: float,
+    multidim_method: MultidimMethodInput,
+    lyons_degree: int,
+    num_paths: Optional[int],
+    recombination_degree: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Knot representation ``(knots, values, weights)`` of the selected construction.
+
+    ``values`` has shape ``(P, len(knots), noise_dim)`` and holds the unit-time
+    paths' exact values at their corner times ``knots ⊂ [0, 1]``.
+    """
+    lyons_degree = int(lyons_degree)
+    if lyons_degree not in (3, 5):
+        raise ValueError("lyons_degree must be 3 or 5")
+
+    if noise_dim == 1:
+        builder = build_cubature_paths_1d if lyons_degree == 5 else build_cubature_paths_1d_m3
+        paths, weights, knots = builder(k=k, gamma=gamma)
+        return knots, paths[:, :, np.newaxis], weights
+
+    # Explicit m=3 product is the 1D-tensor hypercube rule unless the caller
+    # asked for LV (Stroud) or recombination.
+    if lyons_degree == 3 and multidim_method == "auto":
+        multidim_method = "product"
+    else:
+        multidim_method = resolve_multidim_method(
+            multidim_method, noise_dim, k, lyons_degree=lyons_degree
+        )
+
+    if multidim_method == "lv":
+        return _lv_knot_paths(noise_dim, lyons_degree, k, gamma)
+    if multidim_method == "product":
+        return _product_knot_paths(noise_dim, k, gamma, lyons_degree)
+    if multidim_method == "recombined":
+        return _recombined_knot_paths(noise_dim, k, gamma, num_paths, recombination_degree)
+    raise ValueError(f"Unknown multidim_method {multidim_method!r}")
 
 
 def build_cubature_driver(
@@ -991,64 +845,25 @@ def build_cubature_driver(
         recombination_degree: Target moment degree for recombination (only for
             ``"recombined"``; not the Lyons–Victoir degree ``m``).
         lyons_degree: Explicit Lyons–Victoir degree ``m ∈ {3, 5}``. Default
-            ``5`` is the three-path 1D construction, or the multi-D LV lift
-            (Gaussian cubature × Bernoulli Lévy area) when ``d>1``.
+            ``5`` is the three-path 1D construction, or the multi-D LV
+            construction (Theorem 5.9, ``d = 2`` only) for ``"lv"``.
 
     Returns:
         Tuple ``(path_values, weights)`` with ``path_values`` of shape
         ``(P, len(ts), noise_dim)`` and ``weights`` of shape ``(P,)``.
         Path values are unit-time (``E[ω(1)ω(1)^T] = I``).
     """
-    ts = np.asarray(ts, dtype=np.float64)
-    lyons_degree = int(lyons_degree)
-    if lyons_degree not in (3, 5):
-        raise ValueError("lyons_degree must be 3 or 5")
-
-    if noise_dim == 1:
-        if lyons_degree == 5:
-            paths_native, weights, t_native = build_cubature_paths_1d(k=k, gamma=gamma)
-        else:
-            paths_native, weights, t_native = build_cubature_paths_1d_m3(k=k, gamma=gamma)
-        t_target = (ts - ts[0]) / max(ts[-1] - ts[0], 1e-15)
-        paths = _resample_paths_1d(paths_native, t_native, t_target)
-        return paths[:, :, np.newaxis], weights
-
-    # Explicit m=3 product is the 1D-tensor hypercube rule unless the caller
-    # asked for LV (Stroud) or recombination.
-    if lyons_degree == 3 and multidim_method == "auto":
-        multidim_method = "product"
-    else:
-        multidim_method = resolve_multidim_method(
-            multidim_method, noise_dim, k, lyons_degree=lyons_degree
-        )
-
-    if multidim_method == "lv":
-        return build_lyons_victoir_multid_paths(
-            ts - ts[0],
-            noise_dim,
-            lyons_degree=lyons_degree,
-            k=k,
-            gamma=gamma,
-        )
-
-    if multidim_method == "product":
-        return build_product_lyons_paths(
-            ts - ts[0], noise_dim, k=k, gamma=gamma, lyons_degree=lyons_degree
-        )
-
-    if multidim_method == "recombined":
-        return build_recombined_cubature_paths(
-            ts,
-            noise_dim,
-            k=k,
-            gamma=gamma,
-            recombined_num_paths=num_paths,
-            candidate_factor=candidate_factor,
-            degree=recombination_degree,
-            seed=seed,
-        )
-
-    raise ValueError(f"Unknown multidim_method {multidim_method!r}")
+    del seed, candidate_factor  # recombination is deterministic
+    knots, values, weights = _cubature_knot_paths(
+        noise_dim,
+        k=k,
+        gamma=gamma,
+        multidim_method=multidim_method,
+        lyons_degree=lyons_degree,
+        num_paths=num_paths,
+        recombination_degree=recombination_degree,
+    )
+    return _sample_paths(_unit_time(ts), knots, values), weights
 
 
 
@@ -1065,48 +880,51 @@ def precompute_cubature_paths(
     recombination_degree: int = 3,
     lyons_degree: int = 5,
 ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-        """Precompute the integration grid, cubature paths, and weights as JAX arrays.
+    """Precompute the integration grid, cubature paths, and weights as JAX arrays.
 
-        Computed once at filter-build time (host-side NumPy) and closed over by the
-        JAX kernels, so they enter the traced computation as static constants.
+    Computed once at filter-build time (host-side NumPy) and closed over by the
+    JAX kernels, so they enter the traced computation as static constants.
 
-        Args:
-            horizon: Length of one assimilation interval (relative time ``[0, horizon]``).
-            noise_dim: Brownian dimension.
-            integration_dt: Inner integration step size.
-            cubature_order: Cubature order ``k``.
-            cubature_gamma: Macro-segment time-grid concentration exponent.
-            num_paths: Number of paths (method-dependent meaning).
-            multidim_method: ``"lv"`` | ``"product"`` | ``"recombined"`` | ``"auto"``.
-            candidate_factor: Candidate-pool scaling for recombination.
-            recombination_degree: Target moment degree for recombination.
-            lyons_degree: Explicit Lyons–Victoir degree ``m ∈ {3, 5}`` (default 5).
+    Every cubature path is piecewise linear and the RK4 integrator holds ``ω̇``
+    constant on each step, so the grid is built around the paths' corners: each
+    linear piece is split into equal steps of at most ``integration_dt``. The
+    integrated driver then equals the cubature path exactly.
 
-        Returns:
-            Tuple ``(ts, path_values, path_weights)`` as ``float64`` JAX arrays, with
-            ``ts`` of shape ``(num_steps + 1,)`` (relative times starting at 0).
-        """
-        horizon = max(float(horizon), 1e-15)
-        num_steps = max(2, int(np.ceil(horizon / integration_dt)))
-        ts = np.linspace(0.0, horizon, num_steps + 1)
-        path_values, path_weights = build_cubature_driver(
-            ts,
-            noise_dim,
-            num_paths=num_paths,
-            k=cubature_order,
-            gamma=cubature_gamma,
-            seed=seed,
-            multidim_method=multidim_method,
-            candidate_factor=candidate_factor,
-            recombination_degree=recombination_degree,
-            lyons_degree=lyons_degree,
-        )
-        # Paths are constructed as unit-time Wiener cubature (E[ω(1)ω(1)^T] = I)
-        # and resampled onto [0, horizon] in normalized time. Brownian scaling
-        # ω_horizon(t) = √horizon · ω_1(t/horizon) restores E[ω(T)ω(T)^T] = T I.
-        path_values = path_values * np.sqrt(horizon)
-        return (
-            jnp.asarray(ts, dtype=jnp.float64),
-            jnp.asarray(path_values, dtype=jnp.float64),
-            jnp.asarray(path_weights, dtype=jnp.float64),
-        )
+    Args:
+        horizon: Length of one assimilation interval (relative time ``[0, horizon]``).
+        noise_dim: Brownian dimension.
+        integration_dt: Maximum inner integration step size.
+        cubature_order: Cubature order ``k``.
+        cubature_gamma: Macro-segment time-grid concentration exponent.
+        num_paths: Number of paths (method-dependent meaning).
+        multidim_method: ``"lv"`` | ``"product"`` | ``"recombined"`` | ``"auto"``.
+        seed: Unused; the constructions are deterministic.
+        candidate_factor: Unused; retained for API compatibility.
+        recombination_degree: Target moment degree for recombination.
+        lyons_degree: Explicit Lyons–Victoir degree ``m ∈ {3, 5}`` (default 5).
+
+    Returns:
+        Tuple ``(ts, path_values, path_weights)`` as ``float64`` JAX arrays.
+        ``ts`` is a piecewise-uniform grid on ``[0, horizon]`` that contains
+        every path corner.
+    """
+    del seed, candidate_factor  # recombination is deterministic
+    horizon = max(float(horizon), 1e-15)
+    knots, values, path_weights = _cubature_knot_paths(
+        noise_dim,
+        k=cubature_order,
+        gamma=cubature_gamma,
+        multidim_method=multidim_method,
+        lyons_degree=lyons_degree,
+        num_paths=num_paths,
+        recombination_degree=recombination_degree,
+    )
+    grid = _integration_grid(knots, horizon, integration_dt)
+    # Paths are unit-time Wiener cubature (E[ω(1)ω(1)^T] = I); Brownian scaling
+    # ω_horizon(t) = √horizon · ω_1(t/horizon) restores E[ω(T)ω(T)^T] = T I.
+    path_values = _sample_paths(grid, knots, values) * np.sqrt(horizon)
+    return (
+        jnp.asarray(grid * horizon, dtype=jnp.float64),
+        jnp.asarray(path_values, dtype=jnp.float64),
+        jnp.asarray(path_weights, dtype=jnp.float64),
+    )

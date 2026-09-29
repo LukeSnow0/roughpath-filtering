@@ -5,40 +5,16 @@ from experiments.mfts_test.plot_style import (
     MM_PER_INCH,
     PALETTE,
     SINGLE_COLUMN_WIDTH,
+    add_subfigure_label,
     save_publication_figure,
     style_box_axis,
     style_curve_axis,
 )
+from experiments.mfts_test.plot_style import METHOD_COLORS as _METHOD_COLORS
+from experiments.mfts_test.plot_style import METHOD_MARKERS as _METHOD_MARKERS
 
-METHOD_COLORS = {
-    "WSC-KF": PALETTE["warm_red"],
-    "WSC-KF-product": PALETTE["warm_red"],
-    "EKF": PALETTE["blue"],
-    "CD-EKF": PALETTE["blue"],
-    "UKF": PALETTE["teal_green"],
-    "CD-UKF": PALETTE["teal_green"],
-    "CKF": PALETTE["cyan_blue"],
-    "CD-CKF": PALETTE["cyan_blue"],
-    "EnKF": PALETTE["orange"],
-    "CD-EnKF": PALETTE["orange"],
-    "PF": PALETTE["purple"],
-    "CGM": PALETTE["neutral_gray"],
-}
-
-METHOD_MARKERS = {
-    "WSC-KF": "o",
-    "WSC-KF-product": "*",
-    "EKF": "s",
-    "CD-EKF": "s",
-    "UKF": "D",
-    "CD-UKF": "D",
-    "CKF": "X",
-    "CD-CKF": "X",
-    "EnKF": "^",
-    "CD-EnKF": "^",
-    "PF": "v",
-    "CGM": ".",
-}
+METHOD_COLORS = {**_METHOD_COLORS, "CGM": PALETTE["neutral_gray"]}
+METHOD_MARKERS = {**_METHOD_MARKERS, "CGM": "."}
 
 __all__ = [
     "DOUBLE_COLUMN_WIDTH",
@@ -47,6 +23,7 @@ __all__ = [
     "MM_PER_INCH",
     "PALETTE",
     "SINGLE_COLUMN_WIDTH",
+    "add_subfigure_label",
     "save_publication_figure",
     "style_box_axis",
     "style_curve_axis",

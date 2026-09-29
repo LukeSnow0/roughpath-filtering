@@ -484,7 +484,7 @@ def main():
     ax.set_ylabel("Median wall time [s]")
     ax.set_yscale("log")
     ax.set_title("Per evaluation")
-    style_box_axis(ax, grid_axis="y")
+    style_box_axis(ax)
     for b, t in zip(bars, times):
         if np.isfinite(t) and t > 0:
             ax.text(
@@ -523,7 +523,7 @@ def main():
     ax.set_ylabel("Wall time [s]")
     ax.set_yscale("log")
     ax.set_title(f"Adam MLE ({_args.mle_iters} iterations)")
-    style_box_axis(ax, grid_axis="y")
+    style_box_axis(ax)
     for b, t in zip(bars, mle_times):
         if np.isfinite(t) and t > 0:
             ax.text(
@@ -766,7 +766,7 @@ def main():
     ax.set_xlabel(r"$\tau_v$ [h]")
     ax.set_ylabel(r"$\sigma_v$ [km/h]")
     ax.set_title("Adam path (train likelihood)")
-    style_curve_axis(ax, grid_axis="both")
+    style_curve_axis(ax)
 
     ax = axes2[1]
     it = np.arange(_args.mle_iters)
@@ -781,7 +781,7 @@ def main():
     ax.set_ylabel("parameter value")
     ax.set_yscale("log")
     ax.set_title("Per-parameter traces")
-    style_curve_axis(ax, grid_axis="both")
+    style_curve_axis(ax)
     fig2.legend(
         *axes2[1].get_legend_handles_labels(),
         loc="lower center",
@@ -922,7 +922,7 @@ def main():
         )
         ax_b.set_ylabel("Held-out NLL [nats/observation]")
         ax_b.set_title("(b) Reference score")
-        style_box_axis(ax_b, grid_axis="y")
+        style_box_axis(ax_b)
         best = float(np.nanmin(vals))
         best_name = names[int(np.nanargmin(vals))]
         for x, v, e in zip(xpos, vals, errs):
@@ -990,7 +990,7 @@ def main():
             [rf"$\hat\theta_{{\mathrm{{{n}}}}}$" for n in names]
         )
         ax.set_ylabel("Held-out NLL [nats/observation]")
-        style_box_axis(ax, grid_axis="y")
+        style_box_axis(ax)
         for x, v in zip(xpos, vals):
             ax.text(x, v, f"{v:.3f}", ha="center", va="bottom", fontsize=9)
         fig_h.subplots_adjust(left=0.21, right=0.98, bottom=0.24, top=0.97)

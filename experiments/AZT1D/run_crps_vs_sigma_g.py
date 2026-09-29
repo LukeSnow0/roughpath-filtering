@@ -359,7 +359,7 @@ def main():
     ax.set_xlabel(r"Process-noise scale $\sigma_G / \hat\sigma_G$")
     ax.set_ylabel("Held-out CRPS [mg/dL]")
     ax.set_yscale("log")
-    style_curve_axis(ax, grid_axis="both")
+    style_curve_axis(ax)
     fig.legend(
         *ax.get_legend_handles_labels(),
         loc="lower center",

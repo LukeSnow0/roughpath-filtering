@@ -5,6 +5,11 @@ Score |Ê[cos(ω x²)] − E[cos(ω x²)]| from a point mass. The exact value is
 leaves x²≡0; degree-5 cubature quadratures the path, not the full law.
 
   .venv/bin/python experiments/heston_test/levy_area_char_pareto.py
+  .venv/bin/python experiments/heston_test/levy_area_char_pareto.py --model sin_area
+
+``--model sin_area`` runs the same comparison on dx² = sin(x¹) dW² from (1, 0)
+(``area_models.py``), where nothing is exact and every level of the expected
+signature contributes.
 """
 
 from __future__ import annotations
@@ -41,18 +46,20 @@ from cd_dynamax_mirror.filters import (
     _ukf_sigmas,
     _ukf_weights,
 )
-from levy_area_model import exact_char, gaussian_char, ito_L, ito_drift, qc_fn
+from area_models import model_from_cli
 from tme import tme_mean_cov
 from wsckf.library import ito_to_stratonovich_dynamics, precompute_cubature_paths, predict
 
-OUTPUT_DIR = os.path.join(HERE, "output", "levy_area")
+MODEL = model_from_cli()
+ito_drift, ito_L, qc_fn = MODEL.ito_drift, MODEL.ito_L, MODEL.qc_fn
+OUTPUT_DIR = os.path.join(HERE, "output", MODEL.name)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 DELTA = 0.5
 OMEGA = 3.0
 INNER = 64
-TRUE_CHAR = exact_char(DELTA, OMEGA)
-X0 = jnp.zeros(2, dtype=jnp.float64)
+TRUE_CHAR = MODEL.exact_char(DELTA, OMEGA)
+X0 = jnp.asarray(MODEL.x0, dtype=jnp.float64)
 P0 = jnp.zeros((2, 2), dtype=jnp.float64)
 CKF = UKFParams(alpha=1.0, beta=0.0, kappa=0.0)
 STRAT_DRIFT, STRAT_L = ito_to_stratonovich_dynamics(ito_drift, ito_L)
@@ -146,7 +153,7 @@ def ukf_predict(params: UKFParams):
 
 def tme_predict(order: int):
     def fn():
-        return tme_mean_cov(np.zeros(2), DELTA, int(order), ito_drift, ito_L)
+        return tme_mean_cov(np.asarray(MODEL.x0), DELTA, int(order), ito_drift, ito_L)
 
     (m, P), wall = _time_call(lambda: jax.block_until_ready(fn()))
     return _ecos_mean_cov(m, P), wall
@@ -184,7 +191,7 @@ def seukf_predict(n_modes: int):
 
     @jit
     def _run():
-        m_aug = jnp.zeros(n_aug, dtype=jnp.float64)
+        m_aug = jnp.zeros(n_aug, dtype=jnp.float64).at[:n_x].set(X0)
         P_aug = jnp.eye(n_aug, dtype=jnp.float64).at[:n_x, :n_x].set(0.0)
         sigmas = _ukf_sigmas(m_aug, P_aug, n_aug, lamb)
         X0s = sigmas[:, :n_x]
@@ -228,9 +235,9 @@ def _row(*, family, label, budget, ecos, wall, err_std=0.0, n_seeds=1):
 
 
 def main() -> None:
-    gphi = gaussian_char(DELTA, OMEGA)
+    gphi = MODEL.gaussian_char(DELTA, OMEGA)
     print(
-        f"Lévy-area char Pareto  δ={DELTA:g}  ω={OMEGA:g}  inner={INNER}\n"
+        f"{MODEL.name} char Pareto  x0={MODEL.x0}  δ={DELTA:g}  ω={OMEGA:g}  inner={INNER}\n"
         f"  exact E[cos]={TRUE_CHAR:.8f}  Gaussian-φ={gphi:.8f}\n"
     )
     rows = []
@@ -300,7 +307,7 @@ def main() -> None:
             f"t={1e3 * wall:7.3f}ms  seeds={n_seed}"
         )
 
-    path = os.path.join(OUTPUT_DIR, "levy_area_char_pareto.csv")
+    path = os.path.join(OUTPUT_DIR, f"{MODEL.name}_char_pareto.csv")
     with open(path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         w.writeheader()

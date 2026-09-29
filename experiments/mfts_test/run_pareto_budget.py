@@ -71,7 +71,7 @@ from experiments.cd_dynamax_mirror.filters import (
 )
 from cuthbert import filter as run_filter
 from wsckf import build_filter
-from wsckf.library import product_path_count
+from wsckf.library import default_num_paths, precompute_cubature_paths, product_path_count
 
 from mfts_model import (
     MFTSParams,
@@ -92,14 +92,6 @@ from plot_style import (
 
 OUTPUT_DIR = os.path.join(HERE, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-# Optional true multi-D LV (exact counts: m3→4, m5→18 for d=2).
-sys.path.insert(0, os.path.join(EXPERIMENTS_DIR, "multiplicative_noise_test"))
-try:
-    from lyons_victoir_paths import precompute_lv_paths  # type: ignore
-except ImportError:  # pragma: no cover
-    precompute_lv_paths = None
-
 
 def _parse_ints(s: str) -> list[int]:
     out: list[int] = []
@@ -159,15 +151,11 @@ def default_product_ladder(noise_dim: int = 2, max_paths: int = 100) -> list[WSC
 
 
 def lv_configs(noise_dim: int = 2) -> list[WSCKFConfig]:
-    if precompute_lv_paths is None:
-        raise SystemExit("--include-lv requires lyons_victoir_paths in multiplicative_noise_test")
-    # Counts from Stroud / GH×Bernoulli (see lyons_victoir_paths.describe).
-    counts = {3: 2 * noise_dim, 5: (3**noise_dim) * 2}
     return [
         WSCKFConfig(
             family="WSC-KF-LV",
             label=f"LV-m{m}",
-            n_paths=counts[m],
+            n_paths=default_num_paths(noise_dim, 1, "lv", lyons_degree=m),
             k=1,
             lyons_degree=m,
             method="lv",
@@ -643,12 +631,13 @@ def score(
 def build_wsckf(cfg: WSCKFConfig, m0, chol_P0, chol_R, ys):
     wiener_paths = None
     if cfg.method == "lv":
-        assert precompute_lv_paths is not None
-        wiener_paths = precompute_lv_paths(
+        wiener_paths = precompute_cubature_paths(
             horizon=dt,
             noise_dim=2,
-            lyons_degree=cfg.lyons_degree,
             integration_dt=dt0,
+            cubature_order=1,
+            multidim_method="lv",
+            lyons_degree=cfg.lyons_degree,
         )
         # Verify exact count.
         n_actual = int(np.asarray(wiener_paths[2]).shape[0])
@@ -1106,7 +1095,7 @@ def _style_pareto_axis(ax, ylabel: str) -> None:
     ax.set_xlabel("Wall-clock time [ms]")
     ax.set_ylabel(ylabel)
     ax.set_xscale("log")
-    style_curve_axis(ax, grid_axis="both")
+    style_curve_axis(ax)
     ax.margins(x=0.08, y=0.12)
 
 

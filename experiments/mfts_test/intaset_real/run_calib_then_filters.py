@@ -671,7 +671,7 @@ for ax, metric, std_metric, ylab, title in (
     ) > 0.0:
         ax.set_yscale("log")
         ax.set_title(f"{title} (log scale)")
-    style_curve_axis(ax, grid_axis="y")
+    style_curve_axis(ax)
 handles, labels = axes[0].get_legend_handles_labels()
 fig.legend(
     handles,

@@ -330,7 +330,7 @@ for panel_idx, (ax, metric, title) in enumerate(
     ax.set_ylabel("MAPE [%]")
     ax.set_title(title)
     ax.set_xscale("log")
-    style_curve_axis(ax, grid_axis="both")
+    style_curve_axis(ax)
     ax.margins(y=0.14)
 if all_xs:
     axes[0].set_xlim(min(all_xs) / 1.25, max(all_xs) * 1.35)

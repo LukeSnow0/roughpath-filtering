@@ -4,6 +4,11 @@ Score |Ê[(x²)²] − δ²/2| from a point mass. Degree-5 LV cubature and TME-2
 are exact for this quadratic; EnKF is Monte Carlo; EKF/SE-UKF miss the area.
 
   .venv/bin/python experiments/heston_test/levy_area_moment_pareto.py
+  .venv/bin/python experiments/heston_test/levy_area_moment_pareto.py --model sin_area
+
+``--model sin_area`` runs the same comparison on dx² = sin(x¹) dW² from (1, 0)
+(``area_models.py``), where nothing is exact and every level of the expected
+signature contributes.
 """
 
 from __future__ import annotations
@@ -39,17 +44,19 @@ from cd_dynamax_mirror.filters import (
     _ukf_sigmas,
     _ukf_weights,
 )
-from levy_area_model import exact_second_moment, ito_L, ito_drift, qc_fn
+from area_models import model_from_cli
 from tme import tme_mean_cov
 from wsckf.library import ito_to_stratonovich_dynamics, precompute_cubature_paths, predict
 
-OUTPUT_DIR = os.path.join(HERE, "output", "levy_area")
+MODEL = model_from_cli()
+ito_drift, ito_L, qc_fn = MODEL.ito_drift, MODEL.ito_L, MODEL.qc_fn
+OUTPUT_DIR = os.path.join(HERE, "output", MODEL.name)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 DELTA = 0.5
 INNER = 64
-TRUE_SECOND = exact_second_moment(DELTA)
-X0 = jnp.zeros(2, dtype=jnp.float64)
+TRUE_SECOND = MODEL.exact_second_moment(DELTA)
+X0 = jnp.asarray(MODEL.x0, dtype=jnp.float64)
 P0 = jnp.zeros((2, 2), dtype=jnp.float64)
 CKF = UKFParams(alpha=1.0, beta=0.0, kappa=0.0)
 STRAT_DRIFT, STRAT_L = ito_to_stratonovich_dynamics(ito_drift, ito_L)
@@ -138,7 +145,7 @@ def ukf_predict(params: UKFParams):
 
 def tme_predict(order: int):
     def fn():
-        return tme_mean_cov(np.zeros(2), DELTA, int(order), ito_drift, ito_L)
+        return tme_mean_cov(np.asarray(MODEL.x0), DELTA, int(order), ito_drift, ito_L)
 
     (m, P), wall = _time_call(lambda: jax.block_until_ready(fn()))
     return _second_mean_cov(m, P), wall
@@ -176,7 +183,7 @@ def seukf_predict(n_modes: int):
 
     @jit
     def _run():
-        m_aug = jnp.zeros(n_aug, dtype=jnp.float64)
+        m_aug = jnp.zeros(n_aug, dtype=jnp.float64).at[:n_x].set(X0)
         P_aug = jnp.eye(n_aug, dtype=jnp.float64).at[:n_x, :n_x].set(0.0)
         sigmas = _ukf_sigmas(m_aug, P_aug, n_aug, lamb)
         X0s = sigmas[:, :n_x]
@@ -220,7 +227,7 @@ def _row(*, family, label, budget, second, wall, err_std=0.0, n_seeds=1):
 
 def main() -> None:
     print(
-        f"Lévy-area second-moment Pareto  δ={DELTA:g}  "
+        f"{MODEL.name} second-moment Pareto  x0={MODEL.x0}  δ={DELTA:g}  "
         f"true E[(x²)²]={TRUE_SECOND:.8f}  inner={INNER}\n"
     )
     rows = []
@@ -290,7 +297,7 @@ def main() -> None:
             f"t={1e3 * wall:7.3f}ms  seeds={n_seed}"
         )
 
-    path = os.path.join(OUTPUT_DIR, "levy_area_moment_pareto.csv")
+    path = os.path.join(OUTPUT_DIR, f"{MODEL.name}_moment_pareto.csv")
     with open(path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         w.writeheader()

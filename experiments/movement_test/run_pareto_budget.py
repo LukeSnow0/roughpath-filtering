@@ -641,7 +641,7 @@ for metric, ylabel, ax in metrics:
     ax.set_xscale("log")
     ax.set_xlabel("Wall-clock time [ms]")
     ax.set_ylabel(ylabel)
-    style_curve_axis(ax, grid_axis="both")
+    style_curve_axis(ax)
 
 fig.legend(
     *axes[0].get_legend_handles_labels(),

@@ -720,7 +720,7 @@ def main():
     ax.set_xlabel("Adam iteration")
     ax.set_ylabel("Train log likelihood [nats]")
     ax.set_title("Objective")
-    style_curve_axis(ax, grid_axis="y")
+    style_curve_axis(ax)
 
     ax = axes[1]
     for name in methods:
@@ -746,7 +746,7 @@ def main():
     ax.set_xlabel("Adam iteration")
     ax.set_ylabel(r"$k_{\mathrm{pump}}$ [cm$^3$ s$^{-1}$]")
     ax.set_title("Pump gain")
-    style_curve_axis(ax, grid_axis="y")
+    style_curve_axis(ax)
     handles, labels = axes[1].get_legend_handles_labels()
     fig.legend(
         handles,
@@ -782,7 +782,7 @@ def main():
     ax.set_xticklabels(["Open loop", *methods])
     ax.set_ylabel("NLL [nats/observation]")
     ax.set_title("Reference-EnKF NLL")
-    style_box_axis(ax, grid_axis="y")
+    style_box_axis(ax)
     fig.subplots_adjust(left=0.18, right=0.985, bottom=0.2, top=0.86)
     held_path = os.path.join(OUTPUT_DIR, "intaset_mle_heldout.png")
     save_publication_figure(fig, held_path)
@@ -824,7 +824,7 @@ def main():
     ax.set_xlabel("Wall-clock time [s]")
     ax.set_title("One evaluation")
     ax.invert_yaxis()
-    style_box_axis(ax, grid_axis="x")
+    style_box_axis(ax)
     for b, t in zip(bars, times):
         if np.isfinite(t) and t > 0:
             ax.text(
@@ -854,7 +854,7 @@ def main():
     ax.set_xlabel("Wall-clock time [s]")
     ax.set_title("MLE total")
     ax.invert_yaxis()
-    style_box_axis(ax, grid_axis="x")
+    style_box_axis(ax)
     for b, t in zip(bars, mle_t):
         if np.isfinite(t) and t > 0:
             ax.text(

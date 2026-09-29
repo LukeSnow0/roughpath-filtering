@@ -495,7 +495,7 @@ def _plot_metric_pareto(
                 zorder=1,
             )
 
-    style_curve_axis(ax, grid_axis="both")
+    style_curve_axis(ax)
     fig.legend(
         *ax.get_legend_handles_labels(),
         loc="lower center",

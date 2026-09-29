@@ -7,9 +7,9 @@ Isolates the Wiener-cubature rate on a model where path shape / Lévy area matte
 * 2D independent GBM: diagonal ``μ, σ`` (noise fields commute; drift×diffusion
   brackets still make the √22 time-warping visible)
 
-Compares explicit LV degrees ``m ∈ {3, 5}`` from
-``experiments/multiplicative_noise_test/lyons_victoir_paths.py`` (does not modify
-the repo product/recombined builders). Theory: weak error ``O(δ^{(m+1)/2})``.
+Compares explicit LV degrees ``m ∈ {3, 5}`` (``multidim_method="lv"`` in
+``wsckf.library``; 1D uses the classical formulae). Theory: weak error
+``O(δ^{(m+1)/2})``.
 
 Run:
   uv run --extra experiments python experiments/multiplicative_noise_test/weak_error_lv_paths.py
@@ -44,9 +44,8 @@ for p in (EXPERIMENTS_DIR, ROOT_DIR, HERE):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from wsckf.library import predict
+from wsckf.library import default_num_paths, precompute_cubature_paths, predict
 from wsckf.library.conversions import ito_to_stratonovich_dynamics
-from lyons_victoir_paths import describe, precompute_lv_paths
 from mfts_test.plot_style import (
     DOUBLE_COLUMN_WIDTH,
     PALETTE,
@@ -118,10 +117,12 @@ STRAT_DRIFT_2D, STRAT_DIFF_2D = ito_to_stratonovich_dynamics(ITO_2D, DIFF_2D)
 
 
 def lv_predict(delta, noise_dim, lyons_degree, mean0, strat_drift, strat_diff):
-    ts, paths, weights = precompute_lv_paths(
+    ts, paths, weights = precompute_cubature_paths(
         horizon=float(delta),
         noise_dim=noise_dim,
         integration_dt=float(delta) / INNER_STEPS,
+        cubature_order=1,
+        multidim_method="lv",
         lyons_degree=lyons_degree,
     )
     mean = jnp.asarray(mean0, dtype=jnp.float64)
@@ -190,8 +191,9 @@ def main():
     degrees = (3, 5)
     floor = 1e-15
 
-    print(describe(1))
-    print(describe(2))
+    for d in (1, 2):
+        counts = ", ".join(f"m={m}: {default_num_paths(d, 1, 'lv', lyons_degree=m)}" for m in degrees)
+        print(f"LV paths (d={d}): {counts}")
     print(f"GBM multiplicative | deltas={len(deltas)} | INNER_STEPS={INNER_STEPS}")
     print("-" * 72)
 
@@ -377,7 +379,7 @@ def main():
             fontsize=6.4,
             color=PALETTE["black"],
         )
-        style_curve_axis(ax, grid_axis="both")
+        style_curve_axis(ax)
 
     axes[1, 0].set_xlabel(r"Assimilation interval $\delta$")
     axes[1, 1].set_xlabel(r"Assimilation interval $\delta$")

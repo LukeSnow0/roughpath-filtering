@@ -302,7 +302,7 @@ def main():
             )
         ax.set_title(f"Tank {i + 1}")
         ax.set_ylabel(rf"$h_{i + 1}$ [cm]")
-        style_curve_axis(ax, grid_axis="y")
+        style_curve_axis(ax)
         if i >= 2:
             ax.set_xlabel("Time [min]")
     handles, labels = axes[0, 0].get_legend_handles_labels()

@@ -333,7 +333,7 @@ def run_memory_scaling() -> list[dict]:
     axes[0].set_ylabel("Peak RSS [MiB]")
     axes[0].set_xscale("log")
     axes[0].set_title("Peak memory")
-    style_curve_axis(axes[0], grid_axis="both")
+    style_curve_axis(axes[0])
 
     for method, (color, marker, label) in style.items():
         axes[1].plot(
@@ -347,7 +347,7 @@ def run_memory_scaling() -> list[dict]:
     axes[1].set_ylabel(r"$\Delta$RSS [MiB]")
     axes[1].set_xscale("log")
     axes[1].set_title("Memory growth")
-    style_curve_axis(axes[1], grid_axis="both")
+    style_curve_axis(axes[1])
 
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(
@@ -820,7 +820,7 @@ else:
             fontsize=6.5,
             color=PALETTE["neutral_gray"],
         )
-    style_curve_axis(ax, grid_axis="both")
+    style_curve_axis(ax)
     ax.legend(
         loc="upper center",
         bbox_to_anchor=(0.5, -0.24),
@@ -1050,7 +1050,7 @@ else:
     axes[0].set_ylabel(r"Rate, $\lambda$ [s$^{-1}$]")
 
     axes[0].set_title("Rate estimate")
-    style_curve_axis(axes[0], grid_axis="both")
+    style_curve_axis(axes[0])
 
 
 
@@ -1059,7 +1059,7 @@ else:
     axes[1].set_ylabel("Log-likelihood [nats]")
 
     axes[1].set_title("Objective")
-    style_curve_axis(axes[1], grid_axis="both")
+    style_curve_axis(axes[1])
 
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(
@@ -1265,7 +1265,7 @@ if not SKIP_ADJOINT_SCALING:
         ax.set_ylabel("Gradient time [s]")
         ax.set_yscale("log")
         ax.set_title("Gradient cost")
-        style_curve_axis(ax, grid_axis="both")
+        style_curve_axis(ax)
         ax.legend(
             loc="upper center",
             bbox_to_anchor=(0.5, -0.24),

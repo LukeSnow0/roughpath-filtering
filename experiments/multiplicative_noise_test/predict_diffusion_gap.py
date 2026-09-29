@@ -280,7 +280,7 @@ def main():
     axv.set_xlabel(r"Assimilation interval $\delta$")
     axv.set_ylabel("Relative variance error")
     axv.set_title("(a) Variance")
-    style_curve_axis(axv, grid_axis="both")
+    style_curve_axis(axv)
 
     for label in mean_err:
         axm.loglog(
@@ -298,7 +298,7 @@ def main():
     axm.set_xlabel(r"Assimilation interval $\delta$")
     axm.set_ylabel("Relative mean error")
     axm.set_title("(b) Mean")
-    style_curve_axis(axm, grid_axis="both")
+    style_curve_axis(axm)
 
     handles, labels = axv.get_legend_handles_labels()
     fig.legend(

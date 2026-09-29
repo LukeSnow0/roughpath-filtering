@@ -73,7 +73,12 @@ from experiments.cd_dynamax_mirror.filters import (
 )
 from cuthbert import filter as run_filter
 from wsckf import build_filter
-from wsckf.library import default_recombined_num_paths, product_path_count
+from wsckf.library import (
+    default_num_paths,
+    default_recombined_num_paths,
+    precompute_cubature_paths,
+    product_path_count,
+)
 
 from intaset_io import default_mc_windows
 from intaset_model import (
@@ -95,13 +100,6 @@ from experiments.mfts_test.plot_style import (
 
 OUTPUT_DIR = os.path.join(HERE, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-sys.path.insert(0, os.path.join(EXPERIMENTS_DIR, "multiplicative_noise_test"))
-try:
-    from lyons_victoir_paths import precompute_lv_paths  # type: ignore
-except ImportError:  # pragma: no cover
-    precompute_lv_paths = None
-
 
 def _parse_ints(s: str) -> list[int]:
     out: list[int] = []
@@ -150,14 +148,11 @@ def default_product_ladder(noise_dim: int = 2, max_paths: int = 100) -> list[WSC
 
 
 def lv_configs(noise_dim: int = 2) -> list[WSCKFConfig]:
-    if precompute_lv_paths is None:
-        raise SystemExit("--include-lv requires lyons_victoir_paths")
-    counts = {3: 2 * noise_dim, 5: (3**noise_dim) * 2}
     return [
         WSCKFConfig(
             family="WSC-KF-LV",
             label=f"LV-m{m}",
-            n_paths=counts[m],
+            n_paths=default_num_paths(noise_dim, 1, "lv", lyons_degree=m),
             k=1,
             lyons_degree=m,
             method="lv",
@@ -578,12 +573,13 @@ def score(
 def build_wsckf(cfg: WSCKFConfig, drift, L, obs_fn, m0, chol_P0, chol_R, ys, dt, dt0):
     wiener_paths = None
     if cfg.method == "lv":
-        assert precompute_lv_paths is not None
-        wiener_paths = precompute_lv_paths(
+        wiener_paths = precompute_cubature_paths(
             horizon=dt,
             noise_dim=2,
-            lyons_degree=cfg.lyons_degree,
             integration_dt=dt0,
+            cubature_order=1,
+            multidim_method="lv",
+            lyons_degree=cfg.lyons_degree,
         )
         n_actual = int(np.asarray(wiener_paths[2]).shape[0])
         if n_actual != cfg.n_paths:
@@ -1066,7 +1062,7 @@ def _plot_pareto_metric(metric: str, ylabel: str, title: str, out_name: str):
     if all_x_lows:
         ax.set_xlim(min(all_x_lows) / 1.12, max(all_x_highs) * 1.12)
     ax.set_title(title)
-    style_curve_axis(ax, grid_axis="both")
+    style_curve_axis(ax)
     ax.legend(
         loc="lower center",
         bbox_to_anchor=(0.5, 0.01),

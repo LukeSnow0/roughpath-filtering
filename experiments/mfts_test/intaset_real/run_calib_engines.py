@@ -761,7 +761,7 @@ def main():
     ax.set_xlabel("Adam iteration")
     ax.set_ylabel("Training log likelihood [nats]")
     ax.set_title("(a) Self objective")
-    style_curve_axis(ax, grid_axis="y")
+    style_curve_axis(ax)
 
     ax = axes[1]
     for name in names:
@@ -786,7 +786,7 @@ def main():
     ax.set_xlabel("Adam iteration")
     ax.set_ylabel(r"$\sigma_y$ [cm]")
     ax.set_title("(b) Sensor noise")
-    style_curve_axis(ax, grid_axis="y")
+    style_curve_axis(ax)
     fig.legend(
         [*method_handles, warm_handle],
         [*names, "Warm start"],
@@ -831,7 +831,7 @@ def main():
     ax.set_xticklabels(labels)
     ax.set_ylabel("NLL [nats/observation]")
     ax.set_title("(a) Reference-EnKF NLL")
-    style_box_axis(ax, grid_axis="y")
+    style_box_axis(ax)
 
     ax = axes[1]
     selfs = [
@@ -858,7 +858,7 @@ def main():
         fontsize=6.4,
         color=PALETTE["neutral_gray"],
     )
-    style_box_axis(ax, grid_axis="y")
+    style_box_axis(ax)
     fig.subplots_adjust(left=0.09, right=0.995, top=0.94, bottom=0.19, wspace=0.29)
     held_path = os.path.join(OUTPUT_DIR, "calib_engines_heldout.png")
     save_publication_figure(fig, held_path)
@@ -898,7 +898,7 @@ def main():
     ax.set_yticklabels(names)
     ax.set_title("(a) Per evaluation")
     ax.invert_yaxis()
-    style_box_axis(ax, grid_axis="x")
+    style_box_axis(ax)
 
     ax = axes[1]
     mle_t = [walls[n] for n in names]
@@ -914,7 +914,7 @@ def main():
     ax.set_yticklabels(names)
     ax.set_title("(b) Full optimization")
     ax.invert_yaxis()
-    style_box_axis(ax, grid_axis="x")
+    style_box_axis(ax)
     handles, legend_labels = axes[0].get_legend_handles_labels()
     fig.legend(
         handles,
