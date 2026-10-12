@@ -201,7 +201,7 @@ def plot_levy_weak_error(rows: list[dict]) -> None:
         fit_window=(0.10, 0.35), xticks=[0.1, 0.2, 0.3, 0.5],
     )
     ax.set_xlabel(r"Forecast interval $\tau$")
-    ax.set_ylabel(r"Error in $\mathbb{E}[\cos(\omega x^{2}_{\tau})]$")
+    ax.set_ylabel(r"Error in $\mathbb{E}[\cos(3x^{(2)}_{\tau})]$")
     names = ["CD-CKF", r"WSC-KF $m$=3", r"WSC-KF $m$=5"]
     fig.legend(
         handles=_rate_legend_handles(
@@ -302,7 +302,7 @@ def plot_levy_moment(ax, rows: list[dict]) -> None:
     ax.set_xlim(xs[0] - 0.7, xs[-1] + 0.7)
     ax.set_yscale("log")
     ax.set_ylim(3e-9, MOMENT_Y_HI)
-    ax.set_ylabel(r"Error in $\mathbb{E}[(x^{2}_{\Delta})^{2}]$")
+    ax.set_ylabel(r"Error in $\mathbb{E}[(x^{(2)}_{\Delta})^{2}]$")
     style_curve_axis(ax)
     ax.tick_params(axis="x", length=0)
 
@@ -386,7 +386,7 @@ def plot_levy_char(ax, rows: list[dict]) -> None:
         _ann(ax, x, y, disp, color=color, xytext=off, ha=ha, va=va)
 
     ax.set_xlabel("One-step forecast wall-clock [ms]")
-    ax.set_ylabel(r"Error in $\mathbb{E}[\cos(\omega x^{2}_{\Delta})]$")
+    ax.set_ylabel(r"Error in $\mathbb{E}[\cos(3x^{(2)}_{\Delta})]$")
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlim(0.006, 55)
@@ -633,8 +633,8 @@ def _sin_weak_error_panels(axes, rows: list[dict], *, filled_wsc: bool = False):
         (("wsckf_err_m5", "wsckf_err2_m5"), wsc5, r"WSC-KF $m$=5"),
     ]
     titles = (
-        r"(a) $\mathbb{E}[\cos(\omega x^{2}_{\tau})]$",
-        r"(b) $\mathbb{E}[(x^{2}_{\tau})^{2}]$",
+        r"(a) $\mathbb{E}[\cos(3x^{(2)}_{\tau})]$",
+        r"(b) $\mathbb{E}[(x^{(2)}_{\tau})^{2}]$",
     )
     slopes = []
     for p, (ax, title) in enumerate(zip(axes, titles)):
@@ -703,7 +703,7 @@ def write_sin_one_step_table(moment: list[dict], char: list[dict]) -> None:
     lines = [
         r"\begin{tabular}{lrrr}",
         r"\toprule",
-        r"Method & Paths & $|\Delta\mathbb{E}[(x^2)^2]|$ & $|\Delta\mathbb{E}[\cos(\omega x^2)]|$ \\",
+        r"Method & Paths & $|\Delta\mathbb{E}[(x^{(2)})^2]|$ & $|\Delta\mathbb{E}[\cos(3x^{(2)})]|$ \\",
         r"\midrule",
     ]
     for fam, lab, name in entries:
